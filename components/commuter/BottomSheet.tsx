@@ -69,7 +69,7 @@ export function BottomSheet({
           style={styles.findRideButton}
           onPress={onFindRide} // 👈 Add the onPress handler
         >
-          <Text style={styles.findRideButtonText}>Find a Ride</Text>
+          <Text style={styles.findRideButtonText}>Find Route</Text>
         </TouchableOpacity>
         <View style={styles.nearbyContainer}>
           <Text style={[styles.nearbyTitle, { color: textColor }]}>
@@ -188,14 +188,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#ccc",
     borderRadius: 3,
     alignSelf: "center",
-    marginTop: 10,
+    marginTop: 20,
     marginBottom: 15,
   },
   bottomSheetTitle: {
     fontSize: 22,
     fontWeight: "bold",
     color: "#333",
-    marginBottom: 20,
+    marginBottom: 10,
   },
   inputContainer: {
     flexDirection: "row",

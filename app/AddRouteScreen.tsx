@@ -1,5 +1,3 @@
-// components/AddRouteScreen.tsx
-
 import { supabase } from "@/lib/supabase"; // Adjust path as needed
 import { Ionicons } from "@expo/vector-icons";
 import polyline from "@mapbox/polyline"; // For decoding Google's encoded polylines
@@ -17,7 +15,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import MapView, { LatLng, Marker, Polyline } from "react-native-maps";
+import MapView, {
+  LatLng,
+  Marker,
+  Polyline as RNPolyline,
+} from "react-native-maps";
 
 // Replace with your actual Google Maps API Key
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
@@ -29,6 +31,14 @@ interface GeocodedLocation {
   name: string; // The formatted address
 }
 
+// Type for a single route from the Directions API
+interface RouteInfo {
+  path: LatLng[];
+  summary: string;
+  distance: string;
+  duration: string;
+}
+
 export default function AddRouteScreen() {
   const [routeName, setRouteName] = useState("");
   const [originAddress, setOriginAddress] = useState("");
@@ -37,7 +47,10 @@ export default function AddRouteScreen() {
   const [destinationCoords, setDestinationCoords] = useState<LatLng | null>(
     null
   );
-  const [routePolyline, setRoutePolyline] = useState<LatLng[]>([]);
+  const [routePolylines, setRoutePolylines] = useState<RouteInfo[]>([]);
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState<number | null>(
+    null
+  );
   const [loading, setLoading] = useState(false);
   const [mapRegion, setMapRegion] = useState<any>(null);
 
@@ -81,23 +94,31 @@ export default function AddRouteScreen() {
     }
   };
 
-  // --- Step 2: Fetching Directions between Coordinates ---
+  // --- Step 2: Fetching Directions between Coordinates (with alternatives) ---
   const fetchDirections = async (
     origin: LatLng,
     destination: LatLng
-  ): Promise<LatLng[] | null> => {
+  ): Promise<RouteInfo[] | null> => {
     try {
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`
+        `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=driving&alternatives=true&key=${GOOGLE_MAPS_API_KEY}`
       );
       const data = await response.json();
 
       if (data.status === "OK" && data.routes.length > 0) {
-        const points = data.routes[0].overview_polyline.points;
-        const decodedPath = polyline
-          .decode(points)
-          .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
-        return decodedPath;
+        const allRoutes: RouteInfo[] = data.routes.map((route: any) => {
+          const points = route.overview_polyline.points;
+          const decodedPath = polyline
+            .decode(points)
+            .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+          return {
+            path: decodedPath,
+            summary: route.summary || "No summary available",
+            distance: route.legs[0]?.distance?.text || "N/A",
+            duration: route.legs[0]?.duration?.text || "N/A",
+          };
+        });
+        return allRoutes;
       } else {
         console.error("Directions API error:", data.status, data.error_message);
         Alert.alert(
@@ -128,7 +149,8 @@ export default function AddRouteScreen() {
     }
 
     setLoading(true);
-    setRoutePolyline([]); // Clear previous route
+    setRoutePolylines([]); // Clear previous routes
+    setSelectedRouteIndex(null);
     setOriginCoords(null);
     setDestinationCoords(null);
 
@@ -144,13 +166,14 @@ export default function AddRouteScreen() {
       setDestinationCoords(destLoc);
 
       // 3. Fetch Directions
-      const path = await fetchDirections(originLoc, destLoc);
-      if (!path) return;
-      setRoutePolyline(path);
+      const routes = await fetchDirections(originLoc, destLoc);
+      if (!routes || routes.length === 0) return;
+      setRoutePolylines(routes);
+      setSelectedRouteIndex(0); // Select the first route by default
 
       // 4. Fit map to show the entire route
-      if (mapRef.current && path.length > 0) {
-        const allCoords = [...path, originLoc, destLoc];
+      if (mapRef.current && routes[0].path.length > 0) {
+        const allCoords = [...routes[0].path, originLoc, destLoc];
         mapRef.current.fitToCoordinates(allCoords, {
           edgePadding: { top: 100, right: 50, bottom: 100, left: 50 },
           animated: true,
@@ -163,15 +186,20 @@ export default function AddRouteScreen() {
 
   // --- Step 3: Saving the Route to Supabase ---
   const saveRoute = async () => {
-    if (routePolyline.length === 0) {
-      Alert.alert("Error", "Please preview a route first before saving.");
+    if (selectedRouteIndex === null || !routePolylines[selectedRouteIndex]) {
+      Alert.alert(
+        "Error",
+        "Please preview and select a route first before saving."
+      );
       return;
     }
 
+    const selectedRoute = routePolylines[selectedRouteIndex];
+
     setLoading(true);
     try {
-      // 1. Create the GeoJSON coordinates array
-      const geoJsonCoordinates = routePolyline.map((coord) => [
+      // 1. Create the GeoJSON coordinates array from the selected route
+      const geoJsonCoordinates = selectedRoute.path.map((coord) => [
         coord.longitude,
         coord.latitude,
       ]);
@@ -189,7 +217,6 @@ export default function AddRouteScreen() {
       });
 
       if (error) {
-        // This will now give much clearer, function-related errors if something is wrong
         console.error("Error saving route via RPC:", error);
         Alert.alert("Save Error", error.message || "Failed to save route.");
         return;
@@ -254,17 +281,34 @@ export default function AddRouteScreen() {
             onPress={previewRoute}
             disabled={loading}
           >
-            {loading && routePolyline.length === 0 ? (
+            {loading && routePolylines.length === 0 ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.buttonText}>Preview Route</Text>
             )}
           </TouchableOpacity>
 
-          {routePolyline.length > 0 && (
-            <Text style={styles.previewText}>
-              Route preview is available on the map.
-            </Text>
+          {routePolylines.length > 0 && (
+            <View style={styles.routeOptionsContainer}>
+              <Text style={styles.previewText}>Select a route:</Text>
+              {routePolylines.map((route, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.routeOption,
+                    selectedRouteIndex === index && styles.selectedRouteOption,
+                  ]}
+                  onPress={() => setSelectedRouteIndex(index)}
+                >
+                  <Text style={styles.routeOptionText}>
+                    Via {route.summary}
+                  </Text>
+                  <Text style={styles.routeDetailText}>
+                    {route.duration} ({route.distance})
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
 
           <View style={styles.mapContainer}>
@@ -293,26 +337,30 @@ export default function AddRouteScreen() {
                   pinColor="red"
                 />
               )}
-              {routePolyline.length > 0 && (
-                <Polyline
-                  coordinates={routePolyline}
-                  strokeColor="#007AFF"
-                  strokeWidth={5}
+              {routePolylines.map((route, index) => (
+                <RNPolyline
+                  key={index}
+                  coordinates={route.path}
+                  strokeColor={
+                    selectedRouteIndex === index ? "#007AFF" : "#aab5c2"
+                  }
+                  strokeWidth={selectedRouteIndex === index ? 6 : 4}
+                  zIndex={selectedRouteIndex === index ? 1 : 0}
                 />
-              )}
+              ))}
             </MapView>
           </View>
 
-          {routePolyline.length > 0 && (
+          {routePolylines.length > 0 && (
             <TouchableOpacity
               style={[styles.button, styles.saveButton]}
               onPress={saveRoute}
               disabled={loading}
             >
-              {loading ? (
+              {loading && selectedRouteIndex !== null ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.buttonText}>Save Route to Database</Text>
+                <Text style={styles.buttonText}>Save Selected Route</Text>
               )}
             </TouchableOpacity>
           )}
@@ -386,8 +434,10 @@ const styles = StyleSheet.create({
   previewText: {
     textAlign: "center",
     marginTop: 15,
-    fontSize: 14,
-    color: "#555",
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 10,
   },
   mapContainer: {
     height: 300,
@@ -399,5 +449,31 @@ const styles = StyleSheet.create({
   },
   map: {
     ...StyleSheet.absoluteFillObject,
+  },
+  routeOptionsContainer: {
+    marginTop: 20,
+  },
+  routeOption: {
+    backgroundColor: "#fff",
+    padding: 15,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    marginBottom: 10,
+  },
+  selectedRouteOption: {
+    borderColor: "#007AFF",
+    borderWidth: 2,
+    backgroundColor: "#e6f2ff",
+  },
+  routeOptionText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+  },
+  routeDetailText: {
+    fontSize: 14,
+    color: "#666",
+    marginTop: 4,
   },
 });

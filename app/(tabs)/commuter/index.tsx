@@ -1,6 +1,6 @@
-import { mapDarkStyle } from "@/assets/data/mapDarkStyle";
 import { BottomSheet } from "@/components/commuter/BottomSheet";
 import { UserMarker3D } from "@/components/model/UserMarker3D";
+import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
@@ -60,7 +60,7 @@ interface Place {
 // --- Constants ---
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.6;
-const BOTTOM_SHEET_MIN_HEIGHT = SCREEN_HEIGHT * 0.2;
+const BOTTOM_SHEET_MIN_HEIGHT = SCREEN_HEIGHT * 0.35;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
 
 export function CommuterHomeScreen() {
@@ -82,6 +82,7 @@ export function CommuterHomeScreen() {
   const [dropoffLocation, setDropoffLocation] = useState("");
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [isPinDroppingMode, setIsPinDroppingMode] = useState(false);
+  const [isPinDropLoading, setIsPinDropLoading] = useState(false);
   const [droppedPinLocation, setDroppedPinLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -277,9 +278,12 @@ export function CommuterHomeScreen() {
 
   // --- UI Handlers ---
   const handleSetDestinationOnMap = () => {
+    setIsPinDropLoading(true);
     setIsPinDroppingMode(true);
-    // FIX: Animate to SCREEN_HEIGHT to hide the sheet completely off the bottom of the screen.
     translateY.value = withSpring(SCREEN_HEIGHT, { damping: 15 });
+    setTimeout(() => {
+      setIsPinDropLoading(false);
+    }, 600); // Adjust duration to match animation
   };
 
   const handleConfirmDestination = async () => {
@@ -357,7 +361,7 @@ export function CommuterHomeScreen() {
       translateY.value = Math.min(translateY.value, -BOTTOM_SHEET_MIN_HEIGHT);
     })
     .onEnd(() => {
-      if (translateY.value > -SCREEN_HEIGHT / 3) {
+      if (translateY.value > -SCREEN_HEIGHT / 2) {
         translateY.value = withSpring(-BOTTOM_SHEET_MIN_HEIGHT, {
           damping: 15,
         });
@@ -452,6 +456,15 @@ export function CommuterHomeScreen() {
             </View>
           </View>
         </Modal>
+
+        {isPinDropLoading && (
+          <View style={styles.loadingOverlay}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={styles.loadingText}>
+              Preparing map for pin drop...
+            </Text>
+          </View>
+        )}
         <View style={styles.topContainer}>
           {/* ... Search Bar and Predictions ... */}
           <View style={[styles.searchContainer, { backgroundColor }]}>
@@ -514,14 +527,14 @@ export function CommuterHomeScreen() {
             )
           )}
         </View>
-        <View>
+        {/* <View>
           <TouchableOpacity
             style={styles.findRideButton}
             onPress={() => router.push("/AddRouteScreen")}
           >
             <Text style={styles.findRideButtonText}>Add Route</Text>
           </TouchableOpacity>
-        </View>
+        </View> */}
 
         {/* FIX: Pin Dropping UI Overlays moved here */}
         {isPinDroppingMode && (
@@ -583,7 +596,7 @@ const styles = StyleSheet.create({
   },
   topContainer: {
     position: "absolute",
-    top: 60,
+    top: 40,
     left: 10,
     right: 10,
     zIndex: 1,
@@ -591,7 +604,7 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: 8,
+    borderRadius: 20,
     paddingHorizontal: 15,
     paddingVertical: 10,
     shadowColor: "#000",
@@ -659,7 +672,7 @@ const styles = StyleSheet.create({
   },
   trackButton: {
     position: "absolute",
-    bottom: SCREEN_HEIGHT * 0.25, // Position above the collapsed bottom sheet
+    bottom: SCREEN_HEIGHT * 0.72, // Position above the collapsed bottom sheet
     right: 20,
     backgroundColor: "#007AFF",
     padding: 12,
@@ -773,6 +786,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     marginBottom: 25,
+    marginTop: 100,
   },
   findRideButtonText: {
     color: "#fff",
