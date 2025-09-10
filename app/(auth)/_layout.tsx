@@ -12,6 +12,7 @@ export default function AuthLayout() {
       {/* The screen components no longer need individual options */}
       <Stack.Screen name="login" />
       <Stack.Screen name="signup" />
+      <Stack.Screen name="verify-email" />
     </Stack>
   );
 }

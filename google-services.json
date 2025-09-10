@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "255714930220",
+    "project_id": "miniway-23410",
+    "storage_bucket": "miniway-23410.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:255714930220:android:276d1fc0d990906a9aeb89",
+        "android_client_info": {
+          "package_name": "com.arvinjoy.miniway"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC1XCQUyjnfORyz-uug0j3Crc294WmEHyI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

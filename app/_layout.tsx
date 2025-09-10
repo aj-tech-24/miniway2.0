@@ -1,3 +1,6 @@
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { ThemeProvider, useAppTheme } from "@/contexts/ThemeContext";
+
 import {
   DarkTheme,
   DefaultTheme,
@@ -11,12 +14,9 @@ import { ImageBackground, StyleSheet } from "react-native";
 import "react-native-reanimated";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import { ThemeProvider, useAppTheme } from "@/contexts/ThemeContext";
-
 function RootLayoutNav() {
   const { theme } = useAppTheme(); // <-- Use your context
-  const { session, isLoading } = useAuth();
+  const { session, isLoading, role } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -28,21 +28,16 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (isLoading) return;
-
     const inAuthGroup = segments[0] === "(auth)";
-
-    // --- The logic now checks for the presence of a session ---
     if (!session && !inAuthGroup) {
-      // If the user is not signed in and not in the auth group,
-      // redirect them to the login screen.
       router.replace("/login");
     } else if (session && inAuthGroup) {
-      console.log("User is signed in, redirecting to main app...");
-      // If the user is signed in and in the auth group (e.g., login page),
-      // redirect them to the main app.
-      router.replace("/(tabs)/commuter");
+      const r = role || session?.user?.user_metadata?.role || "commuter";
+      if (r === "driver") router.replace("/(driver)");
+      else if (r === "conductor") router.replace("/(conductor)");
+      else router.replace("/(commuter)");
     }
-  }, [session, segments, isLoading, router]); // Dependency array updated to 'session'
+  }, [session, role, segments, isLoading, router]);
 
   if (isLoading) {
     return (
@@ -61,7 +56,9 @@ function RootLayoutNav() {
       value={theme === "dark" ? DarkTheme : DefaultTheme} // <-- Use app theme!
     >
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="(commuter)" />
+        <Stack.Screen name="(driver)" />
+        <Stack.Screen name="(conductor)" />
         <Stack.Screen name="(auth)" />
       </Stack>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />

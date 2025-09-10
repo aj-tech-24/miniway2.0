@@ -20,6 +20,7 @@ export default {
       },
       edgeToEdgeEnabled: true,
       package: "com.arvinjoy.miniway",
+      googleServicesFile: "./google-services.json",
       config: {
         googleMaps: {
           apiKey: process.env.EXPO_PUBLIC_GOOGLEMAPS_API,
@@ -45,6 +46,13 @@ export default {
     ],
     experiments: {
       typedRoutes: true,
+    },
+
+    // 👇 ADD THIS BLOCK 👇
+    extra: {
+      eas: {
+        projectId: "e4033fd1-a39b-48c3-a4ba-a0faa1fe693a",
+      },
     },
   },
 };
