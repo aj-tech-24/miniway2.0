@@ -1,6 +1,5 @@
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { ThemeProvider, useAppTheme } from "@/contexts/ThemeContext";
-
 import {
   DarkTheme,
   DefaultTheme,
@@ -9,10 +8,37 @@ import {
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
+
+import * as Notifications from "expo-notifications";
 import React, { useEffect } from "react";
-import { ImageBackground, StyleSheet } from "react-native";
+import { ImageBackground, Platform, StyleSheet } from "react-native";
 import "react-native-reanimated";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+
+import registerNNPushToken from "native-notify";
+
+registerNNPushToken(32035, "C3YxvEGRY2D8OydDIV4Wvf"); // ← register device for broadcast
+
+Notifications.addNotificationReceivedListener((n) => {
+  console.log("RX notification content:", n.request?.content);
+});
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
+if (Platform.OS === "android") {
+  Notifications.setNotificationChannelAsync("default", {
+    name: "default",
+    importance: Notifications.AndroidImportance.MAX,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    showBadge: true,
+    enableVibrate: true,
+  });
+}
 
 function RootLayoutNav() {
   const { theme } = useAppTheme(); // <-- Use your context

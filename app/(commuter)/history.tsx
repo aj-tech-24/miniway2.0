@@ -22,11 +22,8 @@ type HistoryItem = {
   start_location_name: string | null;
   end_location_name: string | null;
   travel_date: string;
-  routes:
-    | {
-        name: string;
-      }[]
-    | null; // Changed to an array
+  route_name: string | null;
+  status?: string; // 'completed' | 'cancelled' | other
 };
 
 export function TravelHistoryScreen() {
@@ -36,29 +33,41 @@ export function TravelHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
+  const primaryColor = useThemeColor({}, "tint");
+  const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
+  const separatorColor = useThemeColor({}, "separatorColor");
   const { theme } = useAppTheme();
-  // Function to fetch travel history from the database
+
   const fetchHistory = async () => {
     if (!session?.user) return;
 
     try {
-      // Call the new SQL function directly
-      const { data, error } = await supabase.rpc("get_user_travel_history");
+      // Read directly from the table you're inserting into
+      const { data, error } = await supabase
+        .from("travel_history_commuter") // or "travel_history" if you used that name
+        .select(
+          "id, start_location_name, end_location_name, travel_date, route_name, status"
+        )
+        .eq("user_id", session.user.id)
+        .order("travel_date", { ascending: false });
 
       if (error) {
         throw error;
       }
 
-      // The data from an RPC call needs to be mapped slightly differently
-      const formattedHistory = data.map((item: any) => ({
-        id: item.id,
-        start_location_name: item.start_location_name,
-        end_location_name: item.end_location_name,
-        travel_date: item.travel_date,
-        // The route object is now flat
-        routes: item.route_name ? [{ name: item.route_name }] : null,
-      }));
-      setHistory(formattedHistory);
+      setHistory(
+        (data ?? []).map((item: any) => ({
+          id: item.id,
+          start_location_name: item.start_location_name,
+          end_location_name: item.end_location_name,
+          travel_date: item.travel_date,
+          route_name: item.route_name ?? null,
+          status: (item.status ?? "completed") as
+            | "completed"
+            | "cancelled"
+            | string,
+        }))
+      );
     } catch (error) {
       console.error("Error fetching travel history:", error);
     } finally {
@@ -76,28 +85,80 @@ export function TravelHistoryScreen() {
   }, [session]);
 
   // Render a single history card
+  // Render a single history card
   const renderHistoryCard = ({ item }: { item: HistoryItem }) => {
-    // --- FIX 2: Access the first element of the 'routes' array ---
-    // Use optional chaining (?.) for safety in case routes is null or empty
-    const routeName = item.routes?.[0]?.name || "Unknown Route";
+    const routeName = item.route_name || "Unknown Route";
+
+    const getStatusStyle = (status?: string) => {
+      const s = (status || "").toLowerCase();
+      if (s === "completed") {
+        return {
+          container: [
+            styles.statusPill,
+            { backgroundColor: "rgba(40,167,69,0.12)" },
+          ],
+          text: [styles.statusText, { color: "#28a745" }],
+          label: "Completed",
+        };
+      }
+      if (s === "cancelled") {
+        return {
+          container: [
+            styles.statusPill,
+            { backgroundColor: "rgba(220,53,69,0.12)" },
+          ],
+          text: [styles.statusText, { color: "#dc3545" }],
+          label: "Cancelled",
+        };
+      }
+      return {
+        container: [
+          styles.statusPill,
+          { backgroundColor: "rgba(0,122,255,0.12)" },
+        ],
+        text: [styles.statusText, { color: "#007AFF" }],
+        label: s ? s.charAt(0).toUpperCase() + s.slice(1) : "Completed",
+      };
+    };
+    const statusStyle = getStatusStyle(item.status);
 
     return (
-      <View style={[styles.card, { backgroundColor }]}>
-        <View style={styles.cardHeader}>
-          <Ionicons name="location-outline" size={24} color="#007AFF" />
-          <Text style={styles.cardTitle}>{routeName}</Text>
+      <View
+        style={[styles.card, { backgroundColor, borderColor: separatorColor }]}
+      >
+        <View
+          style={[styles.cardHeader, { borderBottomColor: separatorColor }]}
+        >
+          <Ionicons name="location-outline" size={24} color={primaryColor} />
+          <Text style={[styles.cardTitle, { color: textColor }]}>
+            {routeName}
+          </Text>
+          <View style={{ flex: 1 }} />
+          <View style={statusStyle.container}>
+            <Text style={statusStyle.text}>{statusStyle.label}</Text>
+          </View>
         </View>
         <View style={styles.cardBody}>
-          <Text style={styles.locationText}>
-            From: {item.start_location_name || "N/A"}
+          <Text style={[styles.locationText, { color: textColor }]}>
+            From:{" "}
+            <Text style={{ color: placeholderTextColor }}>
+              {item.start_location_name || "N/A"}
+            </Text>
           </Text>
-          <Text style={styles.locationText}>
-            To: {item.end_location_name || "N/A"}
+          <Text style={[styles.locationText, { color: textColor }]}>
+            To:{" "}
+            <Text style={{ color: placeholderTextColor }}>
+              {item.end_location_name || "N/A"}
+            </Text>
           </Text>
         </View>
         <View style={styles.cardFooter}>
-          <Ionicons name="calendar-outline" size={16} color="#8e8e93" />
-          <Text style={styles.dateText}>
+          <Ionicons
+            name="calendar-outline"
+            size={16}
+            color={placeholderTextColor}
+          />
+          <Text style={[styles.dateText, { color: placeholderTextColor }]}>
             {new Date(item.travel_date).toLocaleString()}
           </Text>
         </View>
@@ -127,7 +188,11 @@ export function TravelHistoryScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
         contentContainerStyle={{ paddingHorizontal: 20 }}
-        ListHeaderComponent={<Text style={styles.title}>Travel History</Text>}
+        ListHeaderComponent={
+          <Text style={[styles.title, { color: textColor }]}>
+            Travel History
+          </Text>
+        }
         ListEmptyComponent={
           <View style={styles.centered}>
             <Ionicons name="trail-sign-outline" size={60} color="#d1d1d6" />
@@ -151,6 +216,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginTop: "40%",
+  },
+  button: {
+    flex: 1,
+    paddingVertical: 15,
+    borderRadius: 24,
+    alignItems: "center",
+    marginHorizontal: 4,
+  },
+  editButton: { backgroundColor: "#007AFF" },
+  signOutButton: { backgroundColor: "#dc3545" },
+  saveButton: { backgroundColor: "#28a745" },
+  cancelButton: { backgroundColor: "#6c757d" },
+  buttonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
   },
   title: {
     fontSize: 32,
@@ -195,6 +276,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#8e8e93",
     marginLeft: 8,
+  },
+  statusPill: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   emptyText: {
     fontSize: 20,

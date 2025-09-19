@@ -17,6 +17,7 @@ import {
   Dimensions,
   FlatList,
   Keyboard,
+  Linking,
   Modal,
   StyleSheet,
   Text,
@@ -337,17 +338,61 @@ export function CommuterHomeScreen() {
     Keyboard.dismiss();
   };
 
-  const trackUserLocation = () => {
-    if (userLocation) {
+  const trackUserLocation = async () => {
+    try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        // Try to prompt enabling location services on Android
+        try {
+          // @ts-ignore - only available on Android
+          await Location.enableNetworkProviderAsync?.();
+        } catch (_) {}
+
+        Alert.alert(
+          "Enable Location Services",
+          "Location services are turned off. Please enable them in Settings.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Open Settings",
+              onPress: () => Linking.openSettings?.(),
+            },
+          ]
+        );
+        return;
+      }
+
+      let { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== "granted") {
+        const req = await Location.requestForegroundPermissionsAsync();
+        status = req.status;
+      }
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Required",
+          "We need your permission to access your location. You can enable it in Settings.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings?.() },
+          ]
+        );
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      setUserLocation(location);
       mapRef.current?.animateToRegion(
         {
-          latitude: userLocation.coords.latitude,
-          longitude: userLocation.coords.longitude,
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
           latitudeDelta: 0.02,
           longitudeDelta: 0.02,
         },
         1000
       );
+    } catch (error) {
+      console.error("Failed to track user location:", error);
+      Alert.alert("Error", "Unable to get your location. Please try again.");
     }
   };
 

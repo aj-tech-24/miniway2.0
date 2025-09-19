@@ -53,6 +53,8 @@ export default {
       eas: {
         projectId: "e4033fd1-a39b-48c3-a4ba-a0faa1fe693a",
       },
+      nativeNotifyAppId: 32035,
+      nativeNotifyAppToken: "C3YxvEGRY2D8OydDIV4Wvf",
     },
   },
 };

@@ -1,5 +1,9 @@
+import { useAppTheme } from "@/contexts/ThemeContext";
+import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -26,6 +30,13 @@ export function RouteScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  const { theme } = useAppTheme();
+  const backgroundColor = useThemeColor({}, "background");
+  const textColor = useThemeColor({}, "text");
+  const primaryColor = useThemeColor({}, "tint");
+  const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
+  const separatorColor = useThemeColor({}, "separatorColor");
 
   const fetchRoutes = async () => {
     try {
@@ -64,24 +75,44 @@ export function RouteScreen() {
 
   // A redesigned, more informative route card component
   const renderRouteCard = ({ item }: { item: Route }) => (
-    <TouchableOpacity style={styles.card}>
-      <View style={styles.cardHeader}>
-        <Ionicons name="bus-outline" size={24} color="#007AFF" />
-        <Text style={styles.cardTitle}>{item.name}</Text>
+    <TouchableOpacity
+      style={[styles.card, { backgroundColor, borderColor: separatorColor }]}
+      onPress={() =>
+        router.push({
+          pathname: "/route-details",
+          params: { routeId: item.id },
+        })
+      }
+    >
+      <View style={[styles.cardHeader, { borderBottomColor: separatorColor }]}>
+        <Ionicons name="bus-outline" size={24} color={primaryColor} />
+        <Text style={[styles.cardTitle, { color: textColor }]}>
+          {item.name}
+        </Text>
       </View>
       <View style={styles.cardBody}>
         <View style={styles.addressLine}>
-          <Text style={styles.addressLabel}>FROM:</Text>
-          <Text style={styles.addressText}>{item.start_address || "N/A"}</Text>
+          <Text style={[styles.addressLabel, { color: placeholderTextColor }]}>
+            FROM:
+          </Text>
+          <Text style={[styles.addressText, { color: textColor }]}>
+            {item.start_address || "N/A"}
+          </Text>
         </View>
         <View style={styles.addressLine}>
-          <Text style={styles.addressLabel}>TO:</Text>
-          <Text style={styles.addressText}>{item.end_address || "N/A"}</Text>
+          <Text style={[styles.addressLabel, { color: placeholderTextColor }]}>
+            TO:
+          </Text>
+          <Text style={[styles.addressText, { color: textColor }]}>
+            {item.end_address || "N/A"}
+          </Text>
         </View>
       </View>
-      <View style={styles.cardFooter}>
-        <Text style={styles.footerText}>View Details</Text>
-        <Ionicons name="arrow-forward" size={16} color="#007AFF" />
+      <View style={[styles.cardFooter, { borderTopColor: separatorColor }]}>
+        <Text style={[styles.footerText, { color: primaryColor }]}>
+          View Details
+        </Text>
+        <Ionicons name="arrow-forward" size={16} color={primaryColor} />
       </View>
     </TouchableOpacity>
   );
@@ -95,7 +126,11 @@ export function RouteScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor }]}
+      edges={["top", "left", "right"]}
+    >
+      <StatusBar style={theme === "dark" ? "light" : "dark"} />
       <FlatList
         data={filteredRoutes}
         renderItem={renderRouteCard}
@@ -106,13 +141,20 @@ export function RouteScreen() {
         contentContainerStyle={{ paddingHorizontal: 20 }}
         ListHeaderComponent={
           <>
-            <Text style={styles.title}>Explore Routes</Text>
-            <View style={styles.searchContainer}>
-              <Ionicons name="search" size={20} color="#8e8e93" />
+            <Text style={[styles.title, { color: textColor }]}>
+              Explore Routes
+            </Text>
+            <View
+              style={[
+                styles.searchContainer,
+                { borderColor: separatorColor, backgroundColor },
+              ]}
+            >
+              <Ionicons name="search" size={20} color={placeholderTextColor} />
               <TextInput
-                style={styles.searchInput}
+                style={[styles.searchInput, { color: textColor }]}
                 placeholder="Search by route name..."
-                placeholderTextColor="#8e8e93"
+                placeholderTextColor={placeholderTextColor}
                 value={searchQuery}
                 onChangeText={setSearchQuery}
               />
@@ -121,7 +163,9 @@ export function RouteScreen() {
         }
         ListEmptyComponent={
           <View style={styles.centered}>
-            <Text style={styles.emptyText}>No routes match your search.</Text>
+            <Text style={[styles.emptyText, { color: placeholderTextColor }]}>
+              No routes match your search.
+            </Text>
           </View>
         }
       />

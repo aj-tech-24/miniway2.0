@@ -1,4 +1,5 @@
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
@@ -19,6 +20,20 @@ type BusLocation = LatLng;
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
 
+const haversineMeters = (a: LatLng, b: LatLng) => {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLon = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLon = Math.sin(dLon / 2);
+  const h =
+    sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
 const calculateBearing = (start: LatLng, end: LatLng) => {
   const toRadians = (deg: number) => deg * (Math.PI / 180);
   const toDegrees = (rad: number) => rad * (180 / Math.PI);
@@ -38,9 +53,11 @@ const calculateBearing = (start: LatLng, end: LatLng) => {
 
 export default function TripScreen() {
   const { theme } = useAppTheme();
+  const { session } = useAuth();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
   const previousLocationRef = useRef<BusLocation | null>(null);
+  const tripFinalizedRef = useRef(false);
 
   const busId = params.busId as string;
   const busPlateNumber = params.busPlateNumber as string;
@@ -62,8 +79,66 @@ export default function TripScreen() {
   const [loading, setLoading] = useState(true);
   const [eta, setEta] = useState<string | null>("Calculating...");
 
+  // NEW: Trip status flow: 'waiting' until conductor scans, then 'picked_up'
+
+  const [tripStatus, setTripStatus] = useState<"waiting" | "picked_up">(
+    "waiting"
+  );
+  const [saving, setSaving] = useState(false);
+
+  // transient overlay after successful scan
+  const [showScanSuccess, setShowScanSuccess] = useState(false);
+  const prevStatusRef = useRef<"waiting" | "picked_up">("waiting");
+
+  // added: resolved location names
+  const [pickupName, setPickupName] = useState<string | null>(null);
+  const [destinationName, setDestinationName] = useState<string | null>(null);
+
+  // added: reverse geocoding
+  const reverseGeocode = async (coords: LatLng) => {
+    if (!GOOGLE_MAPS_API_KEY) return null;
+    try {
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.latitude},${coords.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return json.results?.[0]?.formatted_address || null;
+    } catch {
+      return null;
+    }
+  };
+
+  // added: resolve names once
+  useEffect(() => {
+    (async () => {
+      const [start, end] = await Promise.all([
+        reverseGeocode(pickupCoords),
+        reverseGeocode(destCoords),
+      ]);
+      setPickupName(start);
+      setDestinationName(end);
+    })();
+  }, []);
+
+  // show green check for 0.5s when status becomes picked_up
+  useEffect(() => {
+    if (prevStatusRef.current === "waiting" && tripStatus === "picked_up") {
+      setShowScanSuccess(true);
+      setTimeout(() => setShowScanSuccess(false), 500);
+    }
+    prevStatusRef.current = tripStatus;
+  }, [tripStatus]);
+
+  // QR payload the conductor can scan (adjust fields as backend expects)
+  const qrPayload = JSON.stringify({
+    type: "pickup_request",
+    busId,
+    commuterId: session?.user?.id, // added
+    pickup: pickupCoords,
+    dest: destCoords,
+    ts: Date.now(),
+  });
+
   const fetchETA = async (origin: LatLng, destination: LatLng) => {
-    // (fetchETA function is unchanged)
     if (!GOOGLE_MAPS_API_KEY) {
       console.error("Google Maps API key is not configured.");
       setEta("Unavailable");
@@ -86,20 +161,70 @@ export default function TripScreen() {
     }
   };
 
+  const finalizeTrip = async (
+    reason: "driver_ended" | "arrived" | "cancelled"
+  ) => {
+    if (tripFinalizedRef.current) return;
+    tripFinalizedRef.current = true;
+    if (!session?.user?.id) {
+      Alert.alert("Not signed in", "Please sign in to save your trip.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      // changed: do not use coordinates; prefer resolved names, fallback labels
+      const startName = pickupName || "Pickup location";
+      const endName = destinationName || "Destination";
+      const { error } = await supabase.from("travel_history_commuter").insert({
+        user_id: session.user.id,
+        start_location_name: startName,
+        end_location_name: endName,
+        travel_date: new Date().toISOString(),
+        route_name: `Bus ${busPlateNumber}`, // if you don’t want this, remove and also adjust history screen
+        status: reason === "cancelled" ? "cancelled" : "completed",
+      });
+      if (error) throw error;
+      router.replace("/(commuter)/history");
+    } catch (e) {
+      console.error("Failed to save trip:", e);
+      Alert.alert("Error", "Could not save your trip. Please try again.");
+      tripFinalizedRef.current = false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const [QRCodeComponent, setQRCodeComponent] = useState<any>(null);
+  const [qrLoadError, setQrLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const mod = await import("react-native-qrcode-svg");
+        if (mounted) setQRCodeComponent(() => mod.default);
+      } catch (e: any) {
+        if (mounted) setQrLoadError("QR unavailable");
+        console.warn("Failed to load QR component:", e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   useEffect(() => {
     const fetchInitialLocation = async () => {
       if (!busId) return;
       setLoading(true);
       try {
-        // MODIFIED: Call the new RPC function instead of selecting from the table
+        // Location
         const { data, error } = await supabase.rpc("get_initial_bus_location", {
           p_bus_id: busId,
         });
-
         if (error) throw error;
 
-        // MODIFIED: The 'data' variable is now the GeoJSON object itself,
-        // so we check for 'data.coordinates' directly.
         if (data?.coordinates) {
           const location = {
             latitude: data.coordinates[1],
@@ -107,9 +232,26 @@ export default function TripScreen() {
           };
           setBusLocation(location);
           previousLocationRef.current = location;
+          // While waiting, ETA to pickup
           await fetchETA(location, pickupCoords);
         } else {
           Alert.alert("Error", "Could not find the bus's initial location.");
+        }
+
+        // NEW: Fetch initial trip status (assumes trips.status reflects pickup)
+        const { data: tripRow } = await supabase
+          .from("trips")
+          .select("status")
+          .eq("bus_id", busId)
+          .maybeSingle();
+
+        if (
+          tripRow?.status &&
+          `${tripRow.status}`.toLowerCase().includes("picked")
+        ) {
+          setTripStatus("picked_up");
+        } else {
+          setTripStatus("waiting");
         }
       } catch (err) {
         console.error("Failed to fetch initial bus location:", err);
@@ -125,7 +267,6 @@ export default function TripScreen() {
   }, [busId]);
 
   useEffect(() => {
-    // (Real-time update useEffect is unchanged)
     if (!busId) return;
     const channel = supabase
       .channel(`realtime-trip-${busId}`)
@@ -137,32 +278,77 @@ export default function TripScreen() {
           table: "trips",
           filter: `bus_id=eq.${busId}`,
         },
+        // REPLACE this handler body with your provided code:
         async (payload) => {
           const updatedTrip = payload.new as any;
+
+          // Location update
           if (updatedTrip.current_location?.coordinates) {
             const newLocation: LatLng = {
               latitude: updatedTrip.current_location.coordinates[1],
               longitude: updatedTrip.current_location.coordinates[0],
             };
             setBusLocation(newLocation);
-            await fetchETA(newLocation, pickupCoords);
+
+            const statusText = (updatedTrip.status || "")
+              .toString()
+              .toLowerCase();
+            const isPicked =
+              statusText.includes("picked") ||
+              statusText.includes("boarded") ||
+              statusText.includes("enroute");
+            setTripStatus(isPicked ? "picked_up" : "waiting");
+
+            await fetchETA(newLocation, isPicked ? destCoords : pickupCoords);
 
             const prevLocation = previousLocationRef.current;
             let heading = 0;
             if (prevLocation) {
               heading = calculateBearing(prevLocation, newLocation);
             }
-
             const camera: Partial<Camera> = {
               center: newLocation,
               pitch: 75,
               heading: heading,
               zoom: 18,
             };
-
             mapRef.current?.animateCamera(camera, { duration: 1500 });
-
             previousLocationRef.current = newLocation;
+
+            // Auto-finish near destination
+            if (isPicked) {
+              try {
+                const d = haversineMeters(newLocation, destCoords);
+                if (d <= 60) {
+                  await finalizeTrip("arrived");
+                }
+              } catch {}
+            }
+          }
+
+          // React to terminal status changes
+          if (updatedTrip?.status) {
+            const statusText = `${updatedTrip.status}`.toLowerCase();
+            const isPicked =
+              statusText.includes("picked") ||
+              statusText.includes("boarded") ||
+              statusText.includes("enroute");
+            setTripStatus(isPicked ? "picked_up" : "waiting");
+
+            if (busLocation) {
+              await fetchETA(busLocation, isPicked ? destCoords : pickupCoords);
+            }
+
+            if (
+              statusText.includes("completed") ||
+              statusText.includes("ended") ||
+              statusText.includes("arrived")
+            ) {
+              await finalizeTrip("driver_ended");
+            }
+            if (statusText.includes("cancel")) {
+              await finalizeTrip("cancelled");
+            }
           }
         }
       )
@@ -171,7 +357,7 @@ export default function TripScreen() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [busId]);
+  }, [busId, busLocation]);
 
   // Loading state remains the same
   if (loading) {
@@ -211,8 +397,6 @@ export default function TripScreen() {
         provider="google"
         customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
         initialCamera={{
-          // MODIFIED: The fallback to pickupCoords is no longer needed,
-          // as we now guarantee busLocation exists before rendering the map.
           center: busLocation,
           pitch: 75,
           heading: 0,
@@ -252,16 +436,71 @@ export default function TripScreen() {
         )}
       </MapView>
 
-      <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-        <Ionicons name="arrow-back" size={24} color="black" />
+      {showScanSuccess && (
+        <View
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0,0,0,0.15)",
+          }}
+        >
+          <Ionicons name="checkmark-circle" size={120} color="#28a745" />
+        </View>
+      )}
+
+      {/* REPLACED: Back button -> Cancel/Exit */}
+      <TouchableOpacity
+        onPress={() =>
+          Alert.alert("Cancel Trip", "Are you sure you want to cancel?", [
+            { text: "No", style: "cancel" },
+            {
+              text: "Yes, cancel",
+              style: "destructive",
+              onPress: () => finalizeTrip("cancelled"),
+            },
+          ])
+        }
+        style={styles.cancelButtonTop}
+      >
+        <Text style={styles.cancelButtonTopText}>Cancel</Text>
       </TouchableOpacity>
 
       <View style={styles.bottomPanel}>
         <View style={styles.etaContainer}>
-          <Text style={styles.etaLabel}>Arriving in</Text>
+          <Text style={styles.etaLabel}>
+            {tripStatus === "waiting"
+              ? "Bus arriving in"
+              : "Arriving at destination in"}
+          </Text>
           <Text style={styles.etaText}>{eta}</Text>
         </View>
-        <View style={styles.divider} />
+
+        {/* QR section only while waiting */}
+        {tripStatus === "waiting" && (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.qrContainer}>
+              {QRCodeComponent ? (
+                <>
+                  <QRCodeComponent value={qrPayload} size={160} />
+                  <Text style={styles.qrHelpText}>
+                    Show this QR to the conductor to be picked up
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.qrHelpText}>
+                  {qrLoadError ? "QR unavailable" : "Loading QR..."}
+                </Text>
+              )}
+            </View>
+          </>
+        )}
+
         <View style={styles.tripInfoContainer}>
           <FontAwesome5 name="bus-alt" size={20} color="#333" />
           <Text style={styles.dots}>········</Text>
@@ -270,8 +509,27 @@ export default function TripScreen() {
           <FontAwesome5 name="flag-checkered" size={20} color="#28a745" />
         </View>
         <Text style={styles.destinationText}>
-          Bus {busPlateNumber} to Your Destination
+          Bus {busPlateNumber}{" "}
+          {tripStatus === "waiting" ? "to your pickup" : "to your destination"}
         </Text>
+
+        {tripStatus === "picked_up" && (
+          <>
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={[
+                styles.goBackButton,
+                { backgroundColor: saving ? "#6c757d" : "#28a745" },
+              ]}
+              onPress={() => finalizeTrip("arrived")}
+              disabled={saving}
+            >
+              <Text style={styles.goBackButtonText}>
+                {saving ? "Saving..." : "I Arrived"}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
     </View>
   );
@@ -286,17 +544,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 30,
   },
-  backButton: {
+  // REMOVED: backButton
+  cancelButtonTop: {
     position: "absolute",
     top: 60,
     left: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
-    padding: 8,
+    backgroundColor: "rgba(220,53,69,0.95)",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 20,
     elevation: 5,
     shadowColor: "#000",
     shadowOpacity: 0.2,
     shadowRadius: 4,
+  },
+  cancelButtonTopText: {
+    color: "white",
+    fontWeight: "600",
   },
   bottomPanel: {
     position: "absolute",
@@ -328,6 +592,16 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "#e9ecef",
     marginVertical: 12,
+  },
+  qrContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  qrHelpText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#6c757d",
   },
   tripInfoContainer: {
     flexDirection: "row",
