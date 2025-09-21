@@ -67,7 +67,15 @@ const DriverScreen = () => {
       alert("Please select a route first");
       return;
     }
-    router.push("/(driver)/gps-tracking");
+    router.push({
+      pathname: "/gps-tracking",
+      params: {
+        routeId: selectedRoute.id,
+        routeName: selectedRoute.name,
+        startAddress: selectedRoute.start_address || "",
+        endAddress: selectedRoute.end_address || "",
+      }
+    });
   };
 
   const centerMapOnUser = () => {
@@ -138,7 +146,7 @@ const DriverScreen = () => {
         {/* Map Card */}
         <View style={styles.mapCard}>
           <MapView
-            ref={(ref) => (mapRef.current = ref)}
+            ref={mapRef}
             style={styles.map}
             provider="google"
             customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
