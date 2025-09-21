@@ -1,5 +1,5 @@
 import React from "react";
-import { Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 
 const trips = () => {
   return (
@@ -10,3 +10,5 @@ const trips = () => {
 };
 
 export default trips;
+
+const styles = StyleSheet.create({});
