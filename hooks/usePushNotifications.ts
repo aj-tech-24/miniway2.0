@@ -36,6 +36,17 @@ async function registerForPushNotificationsAsync(): Promise<
   string | undefined
 > {
   let token;
+
+  // Check if device supports Google Play Services (Huawei devices don't)
+  const isHuaweiDevice =
+    Device.brand?.toLowerCase().includes("huawei") ||
+    Device.manufacturer?.toLowerCase().includes("huawei");
+
+  if (isHuaweiDevice) {
+    console.log("Huawei device detected - skipping Expo push notifications");
+    return undefined;
+  }
+
   if (Device.isDevice) {
     const { status: existingStatus } =
       await Notifications.getPermissionsAsync();
@@ -50,11 +61,24 @@ async function registerForPushNotificationsAsync(): Promise<
       return;
     }
     // The project ID is found in your app.json or app.config.js
-    token = (
-      await Notifications.getExpoPushTokenAsync({
-        projectId: "0d76cce1-1248-4a60-9dae-ee20ac792120",
-      })
-    ).data;
+    try {
+      token = (
+        await Notifications.getExpoPushTokenAsync({
+          projectId: "0d76cce1-1248-4a60-9dae-ee20ac792120",
+        })
+      ).data;
+    } catch (error) {
+      console.error("Failed to get Expo push token:", error);
+      if (
+        error instanceof Error &&
+        error.message?.includes("MISSING_INSTANCEID_SERVICE")
+      ) {
+        console.log(
+          "Google Play Services not available - likely Huawei device"
+        );
+      }
+      return undefined;
+    }
   } else {
     alert("Must use physical device for Push Notifications");
   }

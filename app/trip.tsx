@@ -133,11 +133,15 @@ export default function TripScreen() {
     type: "pickup_request",
     busId,
     commuterId: session?.user?.id, // added
+    tripId: params.tripId || "will-be-created", // Add tripId to QR payload
     pickup: pickupCoords,
     dest: destCoords,
     ts: Date.now(),
   });
 
+  // Debug: Log the QR payload to see what's being generated (remove in production)
+  console.log("Trip screen params:", params);
+  console.log("QR Payload tripId:", params.tripId);
   const fetchETA = async (origin: LatLng, destination: LatLng) => {
     if (!GOOGLE_MAPS_API_KEY) {
       console.error("Google Maps API key is not configured.");
@@ -216,9 +220,34 @@ export default function TripScreen() {
 
   useEffect(() => {
     const fetchInitialLocation = async () => {
-      if (!busId) return;
+      if (!busId || !session?.user?.id) return;
       setLoading(true);
       try {
+        // Check if passenger is already boarded or cancelled
+        const { data: existingBoarding, error: boardingError } = await supabase
+          .from("trip_passengers")
+          .select("id, status")
+          .eq("passenger_id", session.user.id)
+          .eq("bus_id", busId)
+          .maybeSingle();
+
+        if (existingBoarding && !boardingError) {
+          if (existingBoarding.status === "boarded") {
+            console.log("Passenger already boarded:", existingBoarding);
+            setTripStatus("picked_up");
+          } else if (existingBoarding.status === "cancelled") {
+            console.log("Passenger trip was cancelled:", existingBoarding);
+            Alert.alert(
+              "Trip Cancelled",
+              "Your trip has been cancelled. You will be redirected to the home screen."
+            );
+            await finalizeTrip("cancelled");
+            return;
+          }
+        } else {
+          console.log("Passenger not yet boarded, checking trip status...");
+        }
+
         // Location
         const { data, error } = await supabase.rpc("get_initial_bus_location", {
           p_bus_id: busId,
@@ -233,7 +262,10 @@ export default function TripScreen() {
           setBusLocation(location);
           previousLocationRef.current = location;
           // While waiting, ETA to pickup
-          await fetchETA(location, pickupCoords);
+          await fetchETA(
+            location,
+            tripStatus === "picked_up" ? destCoords : pickupCoords
+          );
         } else {
           Alert.alert("Error", "Could not find the bus's initial location.");
         }
@@ -250,7 +282,7 @@ export default function TripScreen() {
           `${tripRow.status}`.toLowerCase().includes("picked")
         ) {
           setTripStatus("picked_up");
-        } else {
+        } else if (!existingBoarding) {
           setTripStatus("waiting");
         }
       } catch (err) {
@@ -264,11 +296,97 @@ export default function TripScreen() {
       }
     };
     fetchInitialLocation();
-  }, [busId]);
+  }, [busId, session?.user?.id]);
 
   useEffect(() => {
-    if (!busId) return;
-    const channel = supabase
+    if (!busId || !session?.user?.id) return;
+
+    // Listen for trip_passengers table changes to detect boarding and cancellation
+    const passengerChannel = supabase
+      .channel(`passenger-boarding-${session.user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "trip_passengers",
+          filter: `passenger_id=eq.${session.user.id}`,
+        },
+        async (payload) => {
+          console.log("Passenger boarding detected:", payload);
+          setTripStatus("picked_up");
+          setShowScanSuccess(true);
+          setTimeout(() => setShowScanSuccess(false), 2000);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "trip_passengers",
+          filter: `passenger_id=eq.${session.user.id}`,
+        },
+        async (payload) => {
+          console.log("Passenger record updated:", payload);
+          if (payload.new.status === "cancelled") {
+            console.log("Trip cancelled by driver");
+            Alert.alert(
+              "Trip Cancelled",
+              "The driver has ended the trip. You will be redirected to the home screen."
+            );
+            await finalizeTrip("cancelled");
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("Passenger channel subscription status:", status);
+      });
+
+    // Fallback: Poll for boarding status every 2 seconds
+    const checkBoardingStatus = async () => {
+      try {
+        console.log("Polling for boarding status...", {
+          passengerId: session.user.id,
+          busId,
+          currentTripStatus: tripStatus,
+        });
+
+        const { data: boardingRecord, error } = await supabase
+          .from("trip_passengers")
+          .select("id, status, boarded_at")
+          .eq("passenger_id", session.user.id)
+          .eq("bus_id", busId)
+          .maybeSingle();
+
+        console.log("Polling result:", { boardingRecord, error });
+
+        if (boardingRecord && !error) {
+          if (boardingRecord.status === "boarded" && tripStatus === "waiting") {
+            console.log("Boarding status found via polling:", boardingRecord);
+            setTripStatus("picked_up");
+            setShowScanSuccess(true);
+            setTimeout(() => setShowScanSuccess(false), 2000);
+          } else if (boardingRecord.status === "cancelled") {
+            console.log("Trip cancelled detected via polling");
+            Alert.alert(
+              "Trip Cancelled",
+              "The driver has ended the trip. You will be redirected to the home screen."
+            );
+            await finalizeTrip("cancelled");
+          }
+        }
+      } catch (err) {
+        console.error("Error checking boarding status:", err);
+      }
+    };
+
+    // Check immediately and then every 2 seconds
+    checkBoardingStatus();
+    const pollingInterval = setInterval(checkBoardingStatus, 2000);
+
+    // Listen for trip updates (location and status)
+    const tripChannel = supabase
       .channel(`realtime-trip-${busId}`)
       .on(
         "postgres_changes",
@@ -278,7 +396,6 @@ export default function TripScreen() {
           table: "trips",
           filter: `bus_id=eq.${busId}`,
         },
-        // REPLACE this handler body with your provided code:
         async (payload) => {
           const updatedTrip = payload.new as any;
 
@@ -290,16 +407,10 @@ export default function TripScreen() {
             };
             setBusLocation(newLocation);
 
-            const statusText = (updatedTrip.status || "")
-              .toString()
-              .toLowerCase();
-            const isPicked =
-              statusText.includes("picked") ||
-              statusText.includes("boarded") ||
-              statusText.includes("enroute");
-            setTripStatus(isPicked ? "picked_up" : "waiting");
-
-            await fetchETA(newLocation, isPicked ? destCoords : pickupCoords);
+            await fetchETA(
+              newLocation,
+              tripStatus === "picked_up" ? destCoords : pickupCoords
+            );
 
             const prevLocation = previousLocationRef.current;
             let heading = 0;
@@ -316,7 +427,7 @@ export default function TripScreen() {
             previousLocationRef.current = newLocation;
 
             // Auto-finish near destination
-            if (isPicked) {
+            if (tripStatus === "picked_up") {
               try {
                 const d = haversineMeters(newLocation, destCoords);
                 if (d <= 60) {
@@ -329,15 +440,6 @@ export default function TripScreen() {
           // React to terminal status changes
           if (updatedTrip?.status) {
             const statusText = `${updatedTrip.status}`.toLowerCase();
-            const isPicked =
-              statusText.includes("picked") ||
-              statusText.includes("boarded") ||
-              statusText.includes("enroute");
-            setTripStatus(isPicked ? "picked_up" : "waiting");
-
-            if (busLocation) {
-              await fetchETA(busLocation, isPicked ? destCoords : pickupCoords);
-            }
 
             if (
               statusText.includes("completed") ||
@@ -355,9 +457,11 @@ export default function TripScreen() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(passengerChannel);
+      supabase.removeChannel(tripChannel);
+      clearInterval(pollingInterval);
     };
-  }, [busId, busLocation]);
+  }, [busId, session?.user?.id, tripStatus]);
 
   // Loading state remains the same
   if (loading) {
@@ -453,21 +557,37 @@ export default function TripScreen() {
         </View>
       )}
 
-      {/* REPLACED: Back button -> Cancel/Exit */}
+      {/* REPLACED: Back button -> Cancel/Exit or End Trip */}
       <TouchableOpacity
-        onPress={() =>
-          Alert.alert("Cancel Trip", "Are you sure you want to cancel?", [
-            { text: "No", style: "cancel" },
-            {
-              text: "Yes, cancel",
-              style: "destructive",
-              onPress: () => finalizeTrip("cancelled"),
-            },
-          ])
-        }
-        style={styles.cancelButtonTop}
+        onPress={() => {
+          if (tripStatus === "picked_up") {
+            Alert.alert("End Trip", "Are you sure you want to end this trip?", [
+              { text: "No", style: "cancel" },
+              {
+                text: "Yes, end trip",
+                style: "destructive",
+                onPress: () => finalizeTrip("arrived"),
+              },
+            ]);
+          } else {
+            Alert.alert("Cancel Trip", "Are you sure you want to cancel?", [
+              { text: "No", style: "cancel" },
+              {
+                text: "Yes, cancel",
+                style: "destructive",
+                onPress: () => finalizeTrip("cancelled"),
+              },
+            ]);
+          }
+        }}
+        style={[
+          styles.cancelButtonTop,
+          tripStatus === "picked_up" && styles.endTripButtonTop,
+        ]}
       >
-        <Text style={styles.cancelButtonTopText}>Cancel</Text>
+        <Text style={styles.cancelButtonTopText}>
+          {tripStatus === "picked_up" ? "End Trip" : "Cancel"}
+        </Text>
       </TouchableOpacity>
 
       <View style={styles.bottomPanel}>
@@ -512,24 +632,6 @@ export default function TripScreen() {
           Bus {busPlateNumber}{" "}
           {tripStatus === "waiting" ? "to your pickup" : "to your destination"}
         </Text>
-
-        {tripStatus === "picked_up" && (
-          <>
-            <View style={styles.divider} />
-            <TouchableOpacity
-              style={[
-                styles.goBackButton,
-                { backgroundColor: saving ? "#6c757d" : "#28a745" },
-              ]}
-              onPress={() => finalizeTrip("arrived")}
-              disabled={saving}
-            >
-              <Text style={styles.goBackButtonText}>
-                {saving ? "Saving..." : "I Arrived"}
-              </Text>
-            </TouchableOpacity>
-          </>
-        )}
       </View>
     </View>
   );
@@ -557,6 +659,9 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.2,
     shadowRadius: 4,
+  },
+  endTripButtonTop: {
+    backgroundColor: "rgba(40,167,69,0.95)", // Green color for end trip
   },
   cancelButtonTopText: {
     color: "white",

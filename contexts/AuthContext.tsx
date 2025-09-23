@@ -3,6 +3,7 @@ import { Session } from "@supabase/supabase-js";
 import { registerIndieID } from "native-notify";
 import React, { createContext, useContext, useEffect, useState } from "react";
 
+import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
@@ -59,6 +60,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Function to register for push notifications
   const registerForPushNotifications = async (userId: string) => {
     try {
+      // Check if device supports Google Play Services (Huawei devices don't)
+      const isHuaweiDevice =
+        Device.brand?.toLowerCase().includes("huawei") ||
+        Device.manufacturer?.toLowerCase().includes("huawei");
+
+      if (isHuaweiDevice) {
+        console.log(
+          "Huawei device detected - skipping Google Play Services dependent notifications"
+        );
+        return false;
+      }
+
       const appId = 32035;
       const appToken = "C3YxvEGRY2D8OydDIV4Wvf";
 
@@ -72,6 +85,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error) {
       console.error("Failed to register for push notifications:", error);
+      // Don't throw error for Huawei devices - just log and continue
+      if (
+        error instanceof Error &&
+        error.message?.includes("MISSING_INSTANCEID_SERVICE")
+      ) {
+        console.log(
+          "Google Play Services not available - likely Huawei device"
+        );
+        return false;
+      }
       return false;
     }
   };
