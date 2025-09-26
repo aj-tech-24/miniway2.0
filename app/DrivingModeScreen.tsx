@@ -7,7 +7,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   Modal,
   StyleSheet,
@@ -86,6 +85,86 @@ const DrivingModeScreen = () => {
   const [pickupRequest, setPickupRequest] = useState<string | null>(null);
   const [offRouteWarning, setOffRouteWarning] = useState(false);
 
+  // NEW: Trip status and departure management
+  const [tripStatus, setTripStatus] = useState<
+    "waiting" | "ongoing" | "completed" | "cancelled"
+  >("waiting");
+  const [dynamicDepartureTime, setDynamicDepartureTime] =
+    useState<string>("Calculating...");
+  const [canStartNow, setCanStartNow] = useState(false);
+  const [oppositeRouteBuses, setOppositeRouteBuses] = useState<any[]>([]);
+
+  // NEW: Collapsible header state
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
+
+  // Custom Alert State
+  const [showCustomAlert, setShowCustomAlert] = useState(false);
+  const [alertConfig, setAlertConfig] = useState({
+    title: "",
+    message: "",
+    type: "info" as "info" | "error" | "warning" | "success",
+    onConfirm: () => {},
+    confirmText: "OK",
+    showCancel: false,
+    onCancel: () => {},
+    cancelText: "Cancel",
+  });
+
+  // Custom Alert Function
+  const showAlert = (
+    title: string,
+    message: string,
+    type: "info" | "error" | "warning" | "success" = "info",
+    onConfirm: () => void = () => {},
+    confirmText: string = "OK",
+    showCancel: boolean = false,
+    onCancel: () => void = () => {},
+    cancelText: string = "Cancel"
+  ) => {
+    setAlertConfig({
+      title,
+      message,
+      type,
+      onConfirm,
+      confirmText,
+      showCancel,
+      onCancel,
+      cancelText,
+    });
+    setShowCustomAlert(true);
+  };
+
+  const hideAlert = () => {
+    setShowCustomAlert(false);
+  };
+
+  // Helper functions for alert styling
+  const getAlertColor = (type: string) => {
+    switch (type) {
+      case "error":
+        return "#FF3B30";
+      case "warning":
+        return "#FF9500";
+      case "success":
+        return "#34C759";
+      default:
+        return "#007AFF";
+    }
+  };
+
+  const getAlertIcon = (type: string) => {
+    switch (type) {
+      case "error":
+        return "close-circle";
+      case "warning":
+        return "warning";
+      case "success":
+        return "checkmark-circle";
+      default:
+        return "information-circle";
+    }
+  };
+
   // Driver's current location
   const [driverLocation, setDriverLocation] = useState<LatLng | null>(
     polylineCoords[0] || null
@@ -99,6 +178,100 @@ const DrivingModeScreen = () => {
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
   const scanLineAnimation = useRef(new Animated.Value(0)).current;
+
+  // NEW: Function to find opposite route buses
+  const findOppositeRouteBuses = async () => {
+    try {
+      // Get current route details
+      const { data: currentRoute, error: routeError } = await supabase
+        .from("routes")
+        .select("id, name, start_address, end_address")
+        .ilike("name", `%${routeName}%`)
+        .single();
+
+      if (routeError || !currentRoute) {
+        console.error("Error fetching current route:", routeError);
+        return;
+      }
+
+      // Find opposite route (same start/end addresses but reversed)
+      const { data: oppositeRoute, error: oppositeError } = await supabase
+        .from("routes")
+        .select("id, name")
+        .eq("start_address", currentRoute.end_address)
+        .eq("end_address", currentRoute.start_address)
+        .single();
+
+      if (oppositeError || !oppositeRoute) {
+        console.log("No opposite route found");
+        setOppositeRouteBuses([]);
+        return;
+      }
+
+      // Get active buses on opposite route
+      const { data: oppositeBuses, error: busesError } = await supabase
+        .from("buses")
+        .select(
+          `
+          id,
+          plate_number,
+          passengers,
+          capacity,
+          status,
+          trips!inner(
+            id,
+            status,
+            created_at
+          )
+        `
+        )
+        .eq("route_id", oppositeRoute.id)
+        .eq("status", "active")
+        .eq("trips.status", "ongoing");
+
+      if (busesError) {
+        console.error("Error fetching opposite route buses:", busesError);
+        return;
+      }
+
+      setOppositeRouteBuses(oppositeBuses || []);
+    } catch (error) {
+      console.error("Error in findOppositeRouteBuses:", error);
+    }
+  };
+
+  // NEW: Function to calculate dynamic departure time
+  const calculateDynamicDepartureTime = () => {
+    const now = new Date();
+
+    // Check if bus is full
+    const isBusFull = passengerCount >= parsedCapacity;
+
+    // Check if there are opposite route buses
+    const hasOppositeBuses = oppositeRouteBuses.length > 0;
+
+    if (isBusFull) {
+      // If bus is full, depart immediately
+      setDynamicDepartureTime("Departing now - Bus is full!");
+      setCanStartNow(true);
+    } else if (hasOppositeBuses) {
+      // If there are opposite route buses, wait for coordination
+      const waitTime = Math.max(5, 15 - passengerCount); // Wait 5-15 minutes based on passengers
+      const departureTime = new Date(now.getTime() + waitTime * 60000);
+      setDynamicDepartureTime(
+        `Departing at ${departureTime.toLocaleTimeString()} - Coordinating with opposite route`
+      );
+      setCanStartNow(waitTime <= 5);
+    } else {
+      // No opposite buses, wait for more passengers or minimum time
+      const waitTime = Math.max(10, 20 - passengerCount * 2); // Wait 10-20 minutes
+      const departureTime = new Date(now.getTime() + waitTime * 60000);
+      setDynamicDepartureTime(
+        `Departing at ${departureTime.toLocaleTimeString()} - Waiting for more passengers`
+      );
+      setCanStartNow(waitTime <= 10);
+    }
+  };
 
   // All useEffect hooks here!
   useEffect(() => {
@@ -147,6 +320,63 @@ const DrivingModeScreen = () => {
     const minDist = getMinDistanceToRoute(driverLocation, polylineCoords);
     setOffRouteWarning(minDist > 100); // 100 meters threshold
   }, [driverLocation, polylineCoords]);
+
+  // NEW: Initialize departure time calculation
+  useEffect(() => {
+    findOppositeRouteBuses();
+  }, [routeName]);
+
+  // NEW: Recalculate departure time when passenger count or opposite buses change
+  useEffect(() => {
+    calculateDynamicDepartureTime();
+  }, [passengerCount, oppositeRouteBuses, parsedCapacity]);
+
+  // Debug: Log current state
+  useEffect(() => {
+    console.log("DrivingModeScreen Debug:", {
+      tripStatus,
+      canStartNow,
+      passengerCount,
+      parsedCapacity,
+      oppositeRouteBuses: oppositeRouteBuses.length,
+    });
+  }, [
+    tripStatus,
+    canStartNow,
+    passengerCount,
+    parsedCapacity,
+    oppositeRouteBuses,
+  ]);
+
+  // NEW: Initialize trip status from database
+  useEffect(() => {
+    const fetchTripStatus = async () => {
+      if (!tripId) return;
+
+      try {
+        const { data: tripData, error } = await supabase
+          .from("trips")
+          .select("status")
+          .eq("id", tripId)
+          .single();
+
+        if (error) {
+          console.error("Error fetching trip status:", error);
+          return;
+        }
+
+        if (tripData) {
+          setTripStatus(
+            tripData.status as "waiting" | "ongoing" | "completed" | "cancelled"
+          );
+        }
+      } catch (error) {
+        console.error("Error in fetchTripStatus:", error);
+      }
+    };
+
+    fetchTripStatus();
+  }, [tripId]);
 
   // NEW: Request camera permissions for QR scanner
   useEffect(() => {
@@ -213,7 +443,11 @@ const DrivingModeScreen = () => {
 
           if (createError) {
             console.error("Error creating trip:", createError);
-            Alert.alert("Error", "Failed to create trip. Please try again.");
+            showAlert(
+              "Trip Creation Failed",
+              "Unable to create a new trip for this passenger. Please try again or contact support.",
+              "error"
+            );
             return;
           }
           tripId = newTrip.id;
@@ -243,7 +477,11 @@ const DrivingModeScreen = () => {
 
         if (boardingError) {
           console.error("Error inserting boarding record:", boardingError);
-          Alert.alert("Error", "Failed to record passenger boarding.");
+          showAlert(
+            "Boarding Failed",
+            "Unable to record passenger boarding. Please try scanning the QR code again.",
+            "error"
+          );
           return;
         }
 
@@ -258,7 +496,11 @@ const DrivingModeScreen = () => {
 
         if (fetchError) {
           console.error("Error fetching trip status:", fetchError);
-          Alert.alert("Error", "Failed to fetch trip status.");
+          showAlert(
+            "Status Check Failed",
+            "Unable to verify trip status. The passenger has been boarded but trip status could not be updated.",
+            "warning"
+          );
           return;
         }
 
@@ -274,25 +516,51 @@ const DrivingModeScreen = () => {
               "Error updating trip status to ongoing:",
               updateError
             );
-            Alert.alert("Error", "Failed to update trip status to ongoing.");
+            showAlert(
+              "Status Update Failed",
+              "Unable to update trip status to ongoing. The passenger has been boarded successfully.",
+              "warning"
+            );
           }
         }
 
         // Increment passenger count and show success
         setPassengerCount((p) => Math.min(p + 1, parsedCapacity));
-        Alert.alert(
-          "Passenger Picked Up",
-          `Commuter ${payload.commuterId} has been boarded successfully!`
+
+        // Update bus passenger count in database
+        const { error: busUpdateError } = await supabase
+          .from("buses")
+          .update({ passengers: Math.min(passengerCount + 1, parsedCapacity) })
+          .eq("id", busId);
+
+        if (busUpdateError) {
+          console.error("Error updating bus passenger count:", busUpdateError);
+        }
+
+        showAlert(
+          "Passenger Boarded Successfully! 🎉",
+          `Commuter ${
+            payload.commuterId
+          } has been added to your trip. Current passengers: ${Math.min(
+            passengerCount + 1,
+            parsedCapacity
+          )}/${parsedCapacity}`,
+          "success"
         );
       } else {
-        Alert.alert(
+        showAlert(
           "Invalid QR Code",
-          "This QR code is not a valid pickup request for this bus."
+          "This QR code is not a valid pickup request for this bus. Please make sure the passenger is scanning the correct QR code for this route.",
+          "error"
         );
       }
     } catch (e) {
       console.error("Error processing QR code:", e);
-      Alert.alert("Invalid QR Code", "Could not parse QR code data.");
+      showAlert(
+        "QR Code Error",
+        "Could not read the QR code data. Please make sure the QR code is clear and try again.",
+        "error"
+      );
     }
     // Reset scanned state after a short delay to allow scanning again
     setTimeout(() => setScanned(false), 2000);
@@ -301,100 +569,212 @@ const DrivingModeScreen = () => {
   // MODIFIED: Dummy QR scan handler -> Actual QR scan trigger
   const handleQRScan = () => {
     if (hasPermission === null) {
-      Alert.alert(
-        "Requesting Camera Permission",
-        "Please grant camera permission to scan QR codes."
+      showAlert(
+        "Camera Permission Required",
+        "We need access to your camera to scan passenger QR codes. Please grant permission to continue.",
+        "info"
       );
     } else if (hasPermission === false) {
-      Alert.alert(
-        "Camera Permission Denied",
-        "Cannot scan QR codes without camera access."
+      showAlert(
+        "Camera Access Denied",
+        "Cannot scan QR codes without camera access. Please enable camera permission in your device settings to scan passenger QR codes.",
+        "error"
       );
     } else {
       setScanning(true);
     }
   };
 
+  // NEW: Start Now button handler
+  const handleStartNow = async () => {
+    if (!tripId || !busId) return;
+
+    const isEarlyStart = !canStartNow;
+    const alertTitle = isEarlyStart ? "Start Trip Early" : "Start Trip";
+    const alertMessage = isEarlyStart
+      ? "Are you sure you want to start this trip early? This will begin the journey before the recommended departure time. You currently have " +
+        passengerCount +
+        "/" +
+        parsedCapacity +
+        " passengers."
+      : "Are you sure you want to officially start this trip? This will begin the journey with " +
+        passengerCount +
+        "/" +
+        parsedCapacity +
+        " passengers.";
+
+    showAlert(
+      alertTitle,
+      alertMessage,
+      isEarlyStart ? "warning" : "info",
+      async () => {
+        try {
+          // Update trip status to ongoing
+          const { error: tripError } = await supabase
+            .from("trips")
+            .update({
+              status: "ongoing",
+              started_at: new Date().toISOString(),
+            })
+            .eq("id", tripId);
+
+          if (tripError) {
+            console.error("Error updating trip status:", tripError);
+            showAlert(
+              "Trip Start Failed",
+              "Unable to start the trip. Please check your connection and try again.",
+              "error"
+            );
+            return;
+          }
+
+          setTripStatus("ongoing");
+          showAlert(
+            "Trip Started Successfully! 🚌",
+            "The trip has been officially started! You can now begin the journey. Safe travels!",
+            "success"
+          );
+        } catch (error) {
+          console.error("Unexpected error starting trip:", error);
+          showAlert(
+            "Unexpected Error",
+            "An unexpected error occurred while starting the trip. Please try again or contact support.",
+            "error"
+          );
+        }
+      },
+      isEarlyStart ? "Start Early" : "Start Trip",
+      true,
+      () => {},
+      "Cancel"
+    );
+  };
+
   const handleEndTrip = async () => {
     if (!tripId || !busId) return;
-    Alert.alert(
-      "End Trip",
-      "Are you sure you want to end this trip? This will remove all boarded passengers.",
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "End Trip",
-          style: "destructive",
-          onPress: async () => {
-            setEndingTrip(true);
-            try {
-              // 1. Cancel/remove all passengers that boarded for this trip
-              const { error: passengersError } = await supabase
-                .from("trip_passengers")
-                .update({ status: "cancelled" })
-                .eq("trip_id", tripId)
-                .eq("bus_id", busId);
 
-              if (passengersError) {
-                console.error("Error cancelling passengers:", passengersError);
-                Alert.alert("Error", "Failed to cancel passenger bookings.");
-                setEndingTrip(false);
-                return;
-              }
+    const isTripOfficiallyStarted = tripStatus === "ongoing";
+    const alertMessage = isTripOfficiallyStarted
+      ? "Are you sure you want to end this trip? This will complete the journey for all " +
+        passengerCount +
+        " passengers."
+      : "Are you sure you want to cancel this trip? This will remove all " +
+        passengerCount +
+        " boarded passengers and they will need to book again.";
 
-              console.log("Successfully cancelled all passenger bookings");
+    showAlert(
+      isTripOfficiallyStarted ? "End Trip" : "Cancel Trip",
+      alertMessage,
+      isTripOfficiallyStarted ? "info" : "warning",
+      async () => {
+        setEndingTrip(true);
+        try {
+          // 1. Update passenger status based on trip status
+          const passengerStatus = isTripOfficiallyStarted
+            ? "completed"
+            : "cancelled";
+          const { error: passengersError } = await supabase
+            .from("trip_passengers")
+            .update({ status: passengerStatus })
+            .eq("trip_id", tripId)
+            .eq("bus_id", busId);
 
-              // 2. Update trip status to completed
-              const { error: tripError } = await supabase
-                .from("trips")
-                .update({ status: "completed" })
-                .eq("id", tripId);
+          if (passengersError) {
+            console.error("Error updating passengers:", passengersError);
+            showAlert(
+              "Passenger Update Failed",
+              `Unable to ${
+                isTripOfficiallyStarted ? "complete" : "cancel"
+              } passenger bookings. Please try again or contact support.`,
+              "error"
+            );
+            setEndingTrip(false);
+            return;
+          }
 
-              if (tripError) {
-                console.error("Error updating trip status:", tripError);
-                Alert.alert("Error", "Failed to update trip status.");
-                setEndingTrip(false);
-                return;
-              }
+          console.log(
+            `Successfully ${
+              isTripOfficiallyStarted ? "completed" : "cancelled"
+            } all passenger bookings`
+          );
 
-              // 3. Reset bus passenger count to 0 and set status to inactive
-              const { error: busError } = await supabase
-                .from("buses")
-                .update({
-                  status: "inactive",
-                  passengers: 0,
-                })
-                .eq("id", busId);
+          // 2. Update trip status
+          const updateData: any = {
+            ended_at: new Date().toISOString(),
+          };
 
-              if (busError) {
-                console.error("Error updating bus status:", busError);
-                Alert.alert("Error", "Failed to update bus status.");
-                setEndingTrip(false);
-                return;
-              }
+          if (isTripOfficiallyStarted) {
+            // Trip was officially started, mark as completed
+            updateData.status = "completed";
+          } else {
+            // Trip was never officially started, mark as cancelled
+            updateData.status = "cancelled";
+            updateData.cancelled_at = new Date().toISOString();
+            updateData.cancellation_reason = "driver_cancelled_before_start";
+          }
 
-              console.log("Successfully ended trip and reset bus");
-              Alert.alert(
-                "Success",
-                "Trip ended successfully! All passengers have been removed."
-              );
-              router.replace("/(driver)");
-            } catch (error) {
-              console.error("Unexpected error ending trip:", error);
-              Alert.alert(
-                "Error",
-                "An unexpected error occurred while ending the trip."
-              );
-            } finally {
-              setEndingTrip(false);
-            }
-          },
-        },
-      ],
-      { cancelable: true }
+          const { error: tripError } = await supabase
+            .from("trips")
+            .update(updateData)
+            .eq("id", tripId);
+
+          if (tripError) {
+            console.error("Error updating trip status:", tripError);
+            showAlert(
+              "Trip Status Update Failed",
+              "Unable to update trip status. Please try again or contact support.",
+              "error"
+            );
+            setEndingTrip(false);
+            return;
+          }
+
+          // 3. Reset bus passenger count to 0 and set status to inactive
+          const { error: busError } = await supabase
+            .from("buses")
+            .update({
+              status: "inactive",
+              passengers: 0,
+            })
+            .eq("id", busId);
+
+          if (busError) {
+            console.error("Error updating bus status:", busError);
+            showAlert(
+              "Bus Status Update Failed",
+              "Unable to update bus status. Please try again or contact support.",
+              "error"
+            );
+            setEndingTrip(false);
+            return;
+          }
+
+          console.log("Successfully ended trip and reset bus");
+          showAlert(
+            isTripOfficiallyStarted
+              ? "Trip Completed! ✅"
+              : "Trip Cancelled! ⚠️",
+            isTripOfficiallyStarted
+              ? "Trip completed successfully! All passengers have reached their destinations. Great job!"
+              : "Trip cancelled successfully! All passengers have been notified and can book again.",
+            "success"
+          );
+          router.replace("/(driver)");
+        } catch (error) {
+          console.error("Unexpected error ending trip:", error);
+          showAlert(
+            "Unexpected Error",
+            "An unexpected error occurred while ending the trip. Please try again or contact support.",
+            "error"
+          );
+        } finally {
+          setEndingTrip(false);
+        }
+      },
+      isTripOfficiallyStarted ? "End Trip" : "Cancel Trip",
+      true,
+      () => {},
+      "Cancel"
     );
   };
 
@@ -418,29 +798,146 @@ const DrivingModeScreen = () => {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f2f2f7" }}>
-      {/* Top Gradient Bar for status and info */}
-      <LinearGradient
-        colors={["#007AFF", "#00c6ff"]}
-        start={[0, 0]}
-        end={[1, 1]}
-        style={styles.topBar}
+      {/* Collapsible Top Header */}
+      <TouchableOpacity
+        onPress={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
+        activeOpacity={0.8}
       >
-        <Text style={styles.routeName}>{routeName}</Text>
-        <Text style={styles.infoText}>Departure: {departureTime}</Text>
-        <Text style={styles.infoText}>
-          Capacity: {parsedCapacity} | Passengers: {passengerCount}
-        </Text>
-        <Text style={styles.infoText}>
-          Location: {driverLocation.latitude.toFixed(5)},{" "}
-          {driverLocation.longitude.toFixed(5)}
-        </Text>
-        {offRouteWarning && (
-          <View style={styles.warningPanel}>
-            <Ionicons name="warning" size={20} color="#fff" />
-            <Text style={styles.warningText}>You are off the route!</Text>
+        <LinearGradient
+          colors={["#007AFF", "#00c6ff"]}
+          start={[0, 0]}
+          end={[1, 1]}
+          style={[styles.topBar, isHeaderCollapsed && styles.topBarCollapsed]}
+        >
+          {/* Route Title - Always Visible */}
+          <View style={styles.routeHeader}>
+            <Ionicons name="bus" size={24} color="#fff" />
+            <Text style={styles.routeName}>{routeName}</Text>
+            <View style={styles.headerToggle}>
+              <Ionicons
+                name={isHeaderCollapsed ? "chevron-down" : "chevron-up"}
+                size={20}
+                color="#fff"
+              />
+            </View>
           </View>
-        )}
-      </LinearGradient>
+
+          {/* Collapsible Content */}
+          {!isHeaderCollapsed && (
+            <>
+              {/* Status Card */}
+              <View style={styles.statusCard}>
+                <View style={styles.statusRow}>
+                  <View style={styles.statusItem}>
+                    <Ionicons
+                      name={
+                        tripStatus === "waiting"
+                          ? "time"
+                          : tripStatus === "ongoing"
+                          ? "play-circle"
+                          : "checkmark-circle"
+                      }
+                      size={20}
+                      color="#fff"
+                    />
+                    <Text style={styles.statusLabel}>Status</Text>
+                    <Text style={styles.statusValue}>
+                      {tripStatus === "waiting"
+                        ? "Waiting to Start"
+                        : tripStatus === "ongoing"
+                        ? "Trip in Progress"
+                        : tripStatus === "completed"
+                        ? "Completed"
+                        : "Cancelled"}
+                    </Text>
+                  </View>
+
+                  <View style={styles.statusItem}>
+                    <Ionicons name="people" size={20} color="#fff" />
+                    <Text style={styles.statusLabel}>Passengers</Text>
+                    <Text style={styles.statusValue}>
+                      {passengerCount}/{parsedCapacity}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Departure Time */}
+                <View style={styles.departureSection}>
+                  <Ionicons name="time-outline" size={18} color="#fff" />
+                  <Text style={styles.departureText}>
+                    {dynamicDepartureTime}
+                  </Text>
+                </View>
+
+                {/* Progress Bar */}
+                <View style={styles.progressContainer}>
+                  <View style={styles.progressBar}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        {
+                          width: `${(passengerCount / parsedCapacity) * 100}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.progressText}>
+                    {Math.round((passengerCount / parsedCapacity) * 100)}% Full
+                  </Text>
+                </View>
+              </View>
+
+              {/* Warning Panel */}
+              {offRouteWarning && (
+                <View style={styles.warningPanel}>
+                  <Ionicons name="warning" size={20} color="#fff" />
+                  <Text style={styles.warningText}>You are off the route!</Text>
+                </View>
+              )}
+            </>
+          )}
+
+          {/* Quick Info Bar - Always Visible When Collapsed */}
+          {isHeaderCollapsed && (
+            <View style={styles.quickInfoBar}>
+              <View style={styles.quickInfoItem}>
+                <Ionicons name="people" size={16} color="#fff" />
+                <Text style={styles.quickInfoText}>
+                  {passengerCount}/{parsedCapacity}
+                </Text>
+              </View>
+              <View style={styles.quickInfoItem}>
+                <Ionicons
+                  name={
+                    tripStatus === "waiting"
+                      ? "time"
+                      : tripStatus === "ongoing"
+                      ? "play-circle"
+                      : "checkmark-circle"
+                  }
+                  size={16}
+                  color="#fff"
+                />
+                <Text style={styles.quickInfoText}>
+                  {tripStatus === "waiting"
+                    ? "Waiting"
+                    : tripStatus === "ongoing"
+                    ? "Active"
+                    : "Done"}
+                </Text>
+              </View>
+              {offRouteWarning && (
+                <View style={styles.quickInfoItem}>
+                  <Ionicons name="warning" size={16} color="#ff4d4f" />
+                  <Text style={[styles.quickInfoText, { color: "#ff4d4f" }]}>
+                    Off Route
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+        </LinearGradient>
+      </TouchableOpacity>
 
       <View style={styles.container}>
         {/* Map */}
@@ -466,20 +963,80 @@ const DrivingModeScreen = () => {
           )}
         </MapView>
 
-        {/* Action Buttons */}
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.actionButton} onPress={handleQRScan}>
-            <Ionicons name="qr-code" size={24} color="#fff" />
-            <Text style={styles.actionButtonText}>Scan QR</Text>
-          </TouchableOpacity>
+        {/* Enhanced Action Buttons */}
+        <View style={styles.actionContainer}>
+          {/* Primary Actions Row */}
+          <View style={styles.primaryActions}>
+            <TouchableOpacity
+              style={[styles.primaryButton, styles.scanButton]}
+              onPress={handleQRScan}
+            >
+              <View style={styles.buttonIconContainer}>
+                <Ionicons name="qr-code" size={28} color="#fff" />
+              </View>
+              <Text style={styles.primaryButtonText}>Scan QR Code</Text>
+              <Text style={styles.buttonSubtext}>Add Passengers</Text>
+            </TouchableOpacity>
+
+            {tripStatus === "waiting" && (
+              <TouchableOpacity
+                style={[
+                  styles.primaryButton,
+                  styles.startButton,
+                  {
+                    backgroundColor: canStartNow ? "#4CAF50" : "#FF9500",
+                  },
+                ]}
+                onPress={handleStartNow}
+              >
+                <View style={styles.buttonIconContainer}>
+                  <Ionicons
+                    name={canStartNow ? "play" : "play-forward"}
+                    size={28}
+                    color="#fff"
+                  />
+                </View>
+                <Text style={styles.primaryButtonText}>
+                  {canStartNow ? "Start Trip" : "Start Early"}
+                </Text>
+                <Text style={styles.buttonSubtext}>
+                  {canStartNow ? "Ready to go!" : "Before scheduled time"}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Secondary Action */}
           <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: "#ff4d4f" }]}
+            style={[
+              styles.secondaryButton,
+              endingTrip && styles.disabledButton,
+            ]}
             onPress={handleEndTrip}
             disabled={endingTrip}
           >
-            <Ionicons name="stop" size={24} color="#fff" />
-            <Text style={styles.actionButtonText}>
-              {endingTrip ? "Ending..." : "End Trip"}
+            <Ionicons
+              name={
+                endingTrip
+                  ? "hourglass"
+                  : tripStatus === "waiting"
+                  ? "close-circle"
+                  : "stop-circle"
+              }
+              size={20}
+              color={endingTrip ? "#8e8e93" : "#ff4d4f"}
+            />
+            <Text
+              style={[
+                styles.secondaryButtonText,
+                endingTrip && styles.disabledText,
+              ]}
+            >
+              {endingTrip
+                ? "Processing..."
+                : tripStatus === "waiting"
+                ? "Cancel Trip"
+                : "End Trip"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -584,6 +1141,68 @@ const DrivingModeScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Custom Alert Modal */}
+      <Modal
+        visible={showCustomAlert}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={hideAlert}
+      >
+        <View style={styles.alertOverlay}>
+          <View style={styles.alertContainer}>
+            <View style={styles.alertHeader}>
+              <View
+                style={[
+                  styles.alertIconContainer,
+                  { backgroundColor: getAlertColor(alertConfig.type) },
+                ]}
+              >
+                <Ionicons
+                  name={getAlertIcon(alertConfig.type)}
+                  size={24}
+                  color="#fff"
+                />
+              </View>
+              <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+            </View>
+
+            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+
+            <View style={styles.alertButtons}>
+              {alertConfig.showCancel && (
+                <TouchableOpacity
+                  style={[styles.alertButton, styles.alertCancelButton]}
+                  onPress={() => {
+                    alertConfig.onCancel();
+                    hideAlert();
+                  }}
+                >
+                  <Text style={styles.alertCancelButtonText}>
+                    {alertConfig.cancelText}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={[
+                  styles.alertButton,
+                  styles.alertConfirmButton,
+                  { backgroundColor: getAlertColor(alertConfig.type) },
+                ]}
+                onPress={() => {
+                  alertConfig.onConfirm();
+                  hideAlert();
+                }}
+              >
+                <Text style={styles.alertConfirmButtonText}>
+                  {alertConfig.confirmText}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -597,57 +1216,216 @@ const styles = StyleSheet.create({
     backgroundColor: "#f2f2f7",
   },
   map: { flex: 1 },
+
+  // Enhanced Top Bar Styles
   topBar: {
-    paddingTop: 18,
-    paddingBottom: 12,
+    paddingTop: 20,
+    paddingBottom: 20,
     paddingHorizontal: 20,
-    borderBottomLeftRadius: 18,
-    borderBottomRightRadius: 18,
-    elevation: 4,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    elevation: 6,
     shadowColor: "#007AFF",
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
   },
-  routeName: { fontSize: 20, fontWeight: "bold", color: "#fff" },
-  infoText: { fontSize: 15, color: "#e6f0fa", marginTop: 2 },
+  topBarCollapsed: {
+    paddingBottom: 12,
+  },
+  routeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  routeName: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#fff",
+    marginLeft: 8,
+    flex: 1,
+  },
+  headerToggle: {
+    marginLeft: "auto",
+  },
+
+  // Quick Info Bar (when collapsed)
+  quickInfoBar: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  quickInfoItem: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  quickInfoText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    marginLeft: 4,
+  },
+
+  // Status Card Styles
+  statusCard: {
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 8,
+  },
+  statusRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  statusItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+  statusLabel: {
+    fontSize: 12,
+    color: "#e6f0fa",
+    marginTop: 4,
+    fontWeight: "500",
+  },
+  statusValue: {
+    fontSize: 16,
+    color: "#fff",
+    fontWeight: "bold",
+    marginTop: 2,
+  },
+  departureSection: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  departureText: {
+    fontSize: 16,
+    color: "#fff",
+    marginLeft: 8,
+    fontWeight: "600",
+  },
+  progressContainer: {
+    marginTop: 8,
+  },
+  progressBar: {
+    height: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: "#4CAF50",
+    borderRadius: 3,
+  },
+  progressText: {
+    fontSize: 12,
+    color: "#e6f0fa",
+    textAlign: "center",
+    marginTop: 4,
+    fontWeight: "500",
+  },
+
   warningPanel: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#ff4d4f",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     marginTop: 8,
     alignSelf: "flex-start",
   },
-  warningText: { color: "#fff", marginLeft: 6, fontWeight: "bold" },
-  buttonRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 18,
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    elevation: 8,
-    shadowColor: "#007AFF",
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-  },
-  actionButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#007AFF",
-    paddingHorizontal: 22,
-    paddingVertical: 12,
-    borderRadius: 24,
-    elevation: 2,
-  },
-  actionButtonText: {
+  warningText: {
     color: "#fff",
-    fontSize: 16,
     marginLeft: 8,
     fontWeight: "bold",
+    fontSize: 14,
   },
+
+  // Enhanced Action Button Styles
+  actionContainer: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+  },
+  primaryActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  primaryButton: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    marginHorizontal: 4,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+  },
+  scanButton: {
+    backgroundColor: "#007AFF",
+  },
+  startButton: {
+    backgroundColor: "#4CAF50",
+  },
+  buttonIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  primaryButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+    textAlign: "center",
+  },
+  buttonSubtext: {
+    color: "rgba(255, 255, 255, 0.8)",
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: 2,
+  },
+  secondaryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#ff4d4f",
+    backgroundColor: "transparent",
+  },
+  secondaryButtonText: {
+    color: "#ff4d4f",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  disabledButton: {
+    borderColor: "#8e8e93",
+    opacity: 0.6,
+  },
+  disabledText: {
+    color: "#8e8e93",
+  },
+
   // Improved QR Scanner Modal Styles
   qrScannerContainer: {
     flex: 1,
@@ -812,6 +1590,86 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     marginLeft: 8,
+  },
+
+  // Custom Alert Styles
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  alertContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  alertHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  alertIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  alertTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    flex: 1,
+  },
+  alertMessage: {
+    fontSize: 16,
+    color: "#666",
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  alertButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
+  alertButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    minWidth: 80,
+    alignItems: "center",
+  },
+  alertCancelButton: {
+    backgroundColor: "#f2f2f7",
+    borderWidth: 1,
+    borderColor: "#e5e5e7",
+  },
+  alertCancelButtonText: {
+    color: "#666",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  alertConfirmButton: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  alertConfirmButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });
 

@@ -2,17 +2,26 @@ import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
-import * as Location from "expo-location"; // Import expo-location
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import MapView from "react-native-maps";
@@ -46,6 +55,10 @@ interface ActiveTripResponse {
   } | null;
 }
 
+// Storage keys
+const LAST_SELECTED_ROUTE_KEY = "driver_last_selected_route";
+const DRIVER_LOCATION_CACHE_KEY = "driver_location_cache";
+
 const DriverScreen = () => {
   const { theme } = useAppTheme();
   const router = useRouter();
@@ -62,8 +75,147 @@ const DriverScreen = () => {
   const [locationLoading, setLocationLoading] = useState(true);
   const [locationError, setLocationError] = useState(false);
 
+  // Custom Alert State
+  const [showCustomAlert, setShowCustomAlert] = useState(false);
+  const [alertConfig, setAlertConfig] = useState({
+    title: "",
+    message: "",
+    type: "info" as "info" | "error" | "warning" | "success",
+    onConfirm: () => {},
+    confirmText: "OK",
+    showCancel: false,
+    onCancel: () => {},
+    cancelText: "Cancel",
+  });
+
+  // Custom Alert Function
+  const showAlert = useCallback(
+    (
+      title: string,
+      message: string,
+      type: "info" | "error" | "warning" | "success" = "info",
+      onConfirm: () => void = () => {},
+      confirmText: string = "OK",
+      showCancel: boolean = false,
+      onCancel: () => void = () => {},
+      cancelText: string = "Cancel"
+    ) => {
+      setAlertConfig({
+        title,
+        message,
+        type,
+        onConfirm,
+        confirmText,
+        showCancel,
+        onCancel,
+        cancelText,
+      });
+      setShowCustomAlert(true);
+    },
+    []
+  );
+
+  const hideAlert = useCallback(() => {
+    setShowCustomAlert(false);
+  }, []);
+
+  // Helper functions for alert styling
+  const getAlertColor = (type: string) => {
+    switch (type) {
+      case "error":
+        return "#FF3B30";
+      case "warning":
+        return "#FF9500";
+      case "success":
+        return "#34C759";
+      default:
+        return "#007AFF";
+    }
+  };
+
+  const getAlertIcon = (type: string) => {
+    switch (type) {
+      case "error":
+        return "close-circle";
+      case "warning":
+        return "warning";
+      case "success":
+        return "checkmark-circle";
+      default:
+        return "information-circle";
+    }
+  };
+
+  // Save selected route to AsyncStorage
+  const saveSelectedRoute = useCallback(async (route: Route) => {
+    try {
+      await AsyncStorage.setItem(
+        LAST_SELECTED_ROUTE_KEY,
+        JSON.stringify(route)
+      );
+    } catch (error) {
+      //console.error("Error saving selected route:", error);
+    }
+  }, []);
+
+  // Load last selected route from AsyncStorage
+  const loadLastSelectedRoute = useCallback(async (): Promise<Route | null> => {
+    try {
+      const savedRoute = await AsyncStorage.getItem(LAST_SELECTED_ROUTE_KEY);
+      return savedRoute ? JSON.parse(savedRoute) : null;
+    } catch (error) {
+      // console.error("Error loading last selected route:", error);
+      return null;
+    }
+  }, []);
+
+  // Cache driver location
+  const cacheDriverLocation = useCallback(
+    async (location: { latitude: number; longitude: number }) => {
+      try {
+        const locationData = {
+          ...location,
+          timestamp: Date.now(),
+        };
+        await AsyncStorage.setItem(
+          DRIVER_LOCATION_CACHE_KEY,
+          JSON.stringify(locationData)
+        );
+      } catch (error) {
+        //console.error("Error caching driver location:", error);
+      }
+    },
+    []
+  );
+
+  // Get cached driver location
+  const getCachedDriverLocation = useCallback(async (): Promise<{
+    latitude: number;
+    longitude: number;
+  } | null> => {
+    try {
+      const cachedLocation = await AsyncStorage.getItem(
+        DRIVER_LOCATION_CACHE_KEY
+      );
+      if (cachedLocation) {
+        const locationData = JSON.parse(cachedLocation);
+        // Use cached location if it's less than 5 minutes old
+        if (Date.now() - locationData.timestamp < 5 * 60 * 1000) {
+          return {
+            latitude: locationData.latitude,
+            longitude: locationData.longitude,
+          };
+        }
+      }
+      return null;
+    } catch (error) {
+      // console.error("Error getting cached driver location:", error);
+      return null;
+    }
+  }, []);
+
   // Fetch routes from database
-  const fetchRoutes = async () => {
+  const fetchRoutes = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("routes")
@@ -72,37 +224,59 @@ const DriverScreen = () => {
 
       if (error) throw error;
       setAllRoutes(data || []);
-      if (data && data.length > 0) {
+
+      // Try to load last selected route first
+      const lastSelectedRoute = await loadLastSelectedRoute();
+      if (lastSelectedRoute && data) {
+        // Check if the last selected route still exists in the current routes
+        const routeExists = data.find(
+          (route) => route.id === lastSelectedRoute.id
+        );
+        if (routeExists) {
+          setSelectedRoute(routeExists);
+        } else if (data.length > 0) {
+          setSelectedRoute(data[0]);
+        }
+      } else if (data && data.length > 0) {
         setSelectedRoute(data[0]); // Set first route as default
       }
     } catch (error) {
-      console.error("Error fetching routes:", error);
+      //console.error("Error fetching routes:", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [loadLastSelectedRoute]);
 
   useEffect(() => {
     fetchRoutes();
     getCurrentLocation();
-  }, []);
+  }, [fetchRoutes]);
 
   // Optimized location fetching function
-  const getCurrentLocation = async () => {
+  const getCurrentLocation = useCallback(async () => {
     setLocationLoading(true);
     setLocationError(false);
 
     try {
+      // First, try to get cached location
+      const cachedLocation = await getCachedDriverLocation();
+      if (cachedLocation) {
+        setDriverLocation(cachedLocation);
+        setLocationLoading(false);
+        //console.log("Using cached location for faster loading");
+      }
+
       // Request permissions
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        console.error("Permission to access location was denied");
+        //console.error("Permission to access location was denied");
         setLocationError(true);
         // Set a default location if permission denied
-        setDriverLocation({
+        const defaultLocation = {
           latitude: 6.7536,
           longitude: 125.356,
-        });
+        };
+        setDriverLocation(defaultLocation);
         setLocationLoading(false);
         return;
       }
@@ -114,12 +288,14 @@ const DriverScreen = () => {
       });
 
       if (lastKnownPosition) {
-        setDriverLocation({
+        const location = {
           latitude: lastKnownPosition.coords.latitude,
           longitude: lastKnownPosition.coords.longitude,
-        });
+        };
+        setDriverLocation(location);
+        await cacheDriverLocation(location);
         setLocationLoading(false);
-        console.log("Using cached location for faster loading");
+        // console.log("Using last known position for faster loading");
       }
 
       // Get more accurate current position in background
@@ -127,33 +303,44 @@ const DriverScreen = () => {
         accuracy: Location.Accuracy.Balanced, // Balanced accuracy for faster response
       });
 
-      setDriverLocation({
+      const location = {
         latitude: currentPosition.coords.latitude,
         longitude: currentPosition.coords.longitude,
-      });
+      };
+      setDriverLocation(location);
+      await cacheDriverLocation(location);
       setLocationError(false);
-      console.log("Updated with current location");
+      //console.log("Updated with current location");
     } catch (error) {
-      console.error("Error getting location:", error);
+      //console.error("Error getting location:", error);
       setLocationError(true);
       // Fallback to default location
-      setDriverLocation({
+      const defaultLocation = {
         latitude: 6.7536,
         longitude: 125.356,
-      });
+      };
+      setDriverLocation(defaultLocation);
     } finally {
       setLocationLoading(false);
     }
-  };
+  }, [getCachedDriverLocation, cacheDriverLocation]);
 
-  const handleRouteSelect = (route: Route) => {
-    setSelectedRoute(route);
-    setShowDropdown(false);
-  };
+  const handleRouteSelect = useCallback(
+    async (route: Route) => {
+      setSelectedRoute(route);
+      setShowDropdown(false);
+      await saveSelectedRoute(route);
+    },
+    [saveSelectedRoute]
+  );
 
   const handleStartTrip = async () => {
     if (!selectedRoute) {
-      alert("Please select a route first");
+      showAlert(
+        "Route Required",
+        "Please select a route before starting your trip. Choose from the available routes in the dropdown above.",
+        "warning"
+      );
       return;
     }
     setLoading(true);
@@ -166,7 +353,11 @@ const DriverScreen = () => {
     const currentUserId = user?.id;
     if (!currentUserId) {
       setLoading(false);
-      alert("User not logged in");
+      showAlert(
+        "Authentication Required",
+        "You need to be logged in to start a trip. Please sign in and try again.",
+        "error"
+      );
       return;
     }
     // 1. Fetch route details
@@ -177,17 +368,19 @@ const DriverScreen = () => {
       .single<RouteGeoJSONResponse>();
     if (routeError || !routeData) {
       setLoading(false);
-      alert(
-        "Failed to fetch route data: " + (routeError?.message || "No data")
+      showAlert(
+        "Route Data Error",
+        "Unable to load route information. Please check your internet connection and try again.",
+        "error"
       );
       return;
     }
     const geojson = routeData.geojson;
     const coordinates = geojson.coordinates;
-    console.log(
-      "DEBUG index.tsx: geojson coordinates length before passing:",
-      coordinates.length
-    );
+    // console.log(
+    //   "DEBUG index.tsx: geojson coordinates length before passing:",
+    //   coordinates.length
+    // );
 
     // 2. Fetch the active trip for this driver and route using RPC
     let tripId: string | undefined;
@@ -201,13 +394,15 @@ const DriverScreen = () => {
       })
       .single<ActiveTripResponse>();
 
-    if (activeTripError || !activeTripData) {
-      // No active trip found, create a new one
-      alert("No active trip found for this driver. Creating a new trip.");
-
+    // Function to create new trip
+    const createNewTrip = async () => {
       if (!driverLocation) {
         setLoading(false);
-        alert("Unable to get driver's current location to start a new trip.");
+        showAlert(
+          "Location Required",
+          "Unable to get your current location. Please ensure location services are enabled and try again.",
+          "error"
+        );
         return;
       }
 
@@ -220,9 +415,10 @@ const DriverScreen = () => {
 
       if (driverBusError || !driverBusData) {
         setLoading(false);
-        alert(
-          "Failed to find an assigned bus for the driver: " +
-            (driverBusError?.message || "No data")
+        showAlert(
+          "Bus Assignment Error",
+          "No bus has been assigned to you yet. Please contact your administrator to get a bus assigned.",
+          "error"
         );
         return;
       }
@@ -250,24 +446,94 @@ const DriverScreen = () => {
 
       if (newTripError || !newTripData) {
         setLoading(false);
-        alert(
-          "Failed to create a new trip: " + (newTripError?.message || "No data")
+        showAlert(
+          "Trip Creation Failed",
+          "Unable to create a new trip. Please try again or contact support if the problem persists.",
+          "error"
         );
-        console.log(
-          "DEBUG index.tsx: Failed to create a new trip error: ",
-          newTripError
-        );
+        // console.log(
+        //   "DEBUG index.tsx: Failed to create a new trip error: ",
+        //   newTripError
+        // );
         return;
       }
       tripId = newTripData.id;
       currentTripLocation = driverLocation;
-      console.log(
-        "DEBUG index.tsx: New trip created. tripId:",
-        tripId,
-        "busId:",
-        busId
-      ); // Added log
-    } else {
+      // console.log(
+      //   "DEBUG index.tsx: New trip created. tripId:",
+      //   tripId,
+      //   "busId:",
+      //   busId
+      // ); // Added log
+
+      // Continue with the rest of the trip setup
+      continueTripSetup();
+    };
+
+    // Function to continue trip setup after trip creation or existing trip found
+    const continueTripSetup = async () => {
+      // 3. Fetch the bus details using bus_id from the determined trip (either new or existing)
+      if (!busId) {
+        setLoading(false);
+        showAlert(
+          "Bus Information Missing",
+          "Bus information is not available. Please try again or contact support.",
+          "error"
+        );
+        //console.log("DEBUG index.tsx: busId is not available."); // Added log
+        return;
+      }
+
+      // console.log(
+      //   "DEBUG index.tsx: Final busId before fetching busData:",
+      //   busId
+      // ); // Added log
+      const { data: busData, error: busError } = await supabase
+        .from("buses")
+        .select("id, capacity, passengers")
+        .eq("id", busId)
+        .single();
+      // console.log(
+      //   "DEBUG index.tsx: Result of fetching bus data - data:",
+      //   busData,
+      //   "error:",
+      //   busError
+      // ); // Added log
+
+      if (busError || !busData) {
+        setLoading(false);
+        showAlert(
+          "Bus Data Loading Failed",
+          "Unable to load bus details. Please check your connection and try again.",
+          "error"
+        );
+        // console.log(
+        //   "DEBUG index.tsx: Failed to fetch bus data error inside if block:",
+        //   busError,
+        //   "busData:",
+        //   busData
+        // );
+        return;
+      }
+
+      setLoading(false); // Set loading to false just before navigating
+      router.push({
+        pathname: "/DrivingModeScreen",
+        params: {
+          routeName: routeData.name,
+          path: JSON.stringify(coordinates),
+          capacity: (busData.capacity || 0).toString(),
+          passengers: passengersOnTrip.toString(),
+          departureTime: "Calculating...", // Will be calculated dynamically in DrivingModeScreen
+          busLocation: JSON.stringify(currentTripLocation),
+          tripId: tripId,
+          busId: busId,
+        },
+      });
+    };
+
+    // Handle existing trip
+    if (activeTripData) {
       // Active trip found, use its data
       tripId = activeTripData.id;
       busId = activeTripData.bus_id;
@@ -289,90 +555,52 @@ const DriverScreen = () => {
 
       if (existingBusError || !existingBusData) {
         setLoading(false);
-        alert(
-          "Failed to fetch bus data for active trip: " +
-            (existingBusError?.message || "No data")
+        showAlert(
+          "Bus Data Error",
+          "Unable to load bus information for your active trip. Please try again.",
+          "error"
         );
-        console.log(
-          "DEBUG index.tsx: Failed to fetch bus data for active trip error:",
-          existingBusError
-        ); // Added log
+        // console.log(
+        //   "DEBUG index.tsx: Failed to fetch bus data for active trip error:",
+        //   existingBusError
+        // ); // Added log
         return;
       }
       passengersOnTrip = existingBusData.passengers || 0;
-      console.log(
-        "DEBUG index.tsx: Active trip found. tripId:",
-        tripId,
-        "busId:",
-        busId
-      ); // Added log
+      // console.log(
+      //   "DEBUG index.tsx: Active trip found. tripId:",
+      //   tripId,
+      //   "busId:",
+      //   busId
+      // ); // Added log
+
+      // Continue with trip setup for existing trip
+      continueTripSetup();
     }
 
-    // 3. Fetch the bus details using bus_id from the determined trip (either new or existing)
-    if (!busId) {
-      setLoading(false);
-      alert("Bus ID not available.");
-      console.log("DEBUG index.tsx: busId is not available."); // Added log
-      return;
-    }
-
-    console.log("DEBUG index.tsx: Final busId before fetching busData:", busId); // Added log
-    const { data: busData, error: busError } = await supabase
-      .from("buses")
-      .select("id, capacity, passengers")
-      .eq("id", busId)
-      .single();
-    console.log(
-      "DEBUG index.tsx: Result of fetching bus data - data:",
-      busData,
-      "error:",
-      busError
-    ); // Added log
-
-    if (busError || !busData) {
-      setLoading(false);
-      alert("Failed to fetch bus data: " + (busError?.message || "No data"));
-      console.log(
-        "DEBUG index.tsx: Failed to fetch bus data error inside if block:",
-        busError,
-        "busData:",
-        busData
+    // Check if we need to create a new trip
+    if (activeTripError || !activeTripData) {
+      // No active trip found, create a new one
+      showAlert(
+        "Creating New Trip",
+        "No active trip found. We're creating a new trip for you now.",
+        "info",
+        () => {
+          // Continue with trip creation after user confirms
+          createNewTrip();
+        },
+        "Continue",
+        true,
+        () => {
+          setLoading(false);
+        },
+        "Cancel"
       );
       return;
     }
-
-    setLoading(false); // Set loading to false just before navigating
-    // console.log(
-    //   "DEBUG index.tsx: Navigating to DrivingModeScreen with params:",
-    //   {
-    //     // Added log
-    //     routeName: routeData.name,
-    //     path: "JSON_STRINGIFIED_COORDINATES", // Log as string to avoid very long output
-    //     capacity: (busData.capacity || 0).toString(),
-    //     passengers: passengersOnTrip.toString(),
-    //     departureTime: new Date().toLocaleTimeString(),
-    //     busLocation: JSON.stringify(currentTripLocation),
-    //     tripId: tripId,
-    //     busId: busId,
-    //   }
-    // );
-
-    router.push({
-      pathname: "/DrivingModeScreen",
-      params: {
-        routeName: routeData.name,
-        path: JSON.stringify(coordinates),
-        capacity: (busData.capacity || 0).toString(),
-        passengers: passengersOnTrip.toString(),
-        departureTime: new Date().toLocaleTimeString(),
-        busLocation: JSON.stringify(currentTripLocation),
-        tripId: tripId,
-        busId: busId,
-      },
-    });
   };
 
-  const centerMapOnUser = () => {
+  const centerMapOnUser = useCallback(() => {
     if (mapRef.current && driverLocation) {
       mapRef.current.animateToRegion(
         {
@@ -384,7 +612,7 @@ const DriverScreen = () => {
         1000
       );
     } else if (mapRef.current) {
-      console.warn("Driver location not available for centering map.");
+      //console.warn("Driver location not available for centering map.");
       mapRef.current.animateToRegion(
         {
           latitude: 6.7536,
@@ -395,229 +623,404 @@ const DriverScreen = () => {
         1000
       );
     }
-  };
+  }, [driverLocation]);
 
-  const refreshLocation = () => {
+  const refreshLocation = useCallback(() => {
     getCurrentLocation();
-  };
+  }, [getCurrentLocation]);
 
-  const zoomIn = () => {
+  const zoomIn = useCallback(() => {
     if (mapRef.current) {
+      const center = driverLocation || { latitude: 6.7536, longitude: 125.356 };
       mapRef.current.animateCamera(
         {
-          center: {
-            latitude: 6.7536,
-            longitude: 125.356,
-          },
+          center,
           zoom: 15,
         },
         { duration: 500 }
       );
     }
-  };
+  }, [driverLocation]);
 
-  const zoomOut = () => {
+  const zoomOut = useCallback(() => {
     if (mapRef.current) {
+      const center = driverLocation || { latitude: 6.7536, longitude: 125.356 };
       mapRef.current.animateCamera(
         {
-          center: {
-            latitude: 6.7536,
-            longitude: 125.356,
-          },
+          center,
           zoom: 10,
         },
         { duration: 500 }
       );
     }
-  };
+  }, [driverLocation]);
 
-  // Filtered routes based on search
-  const filteredRoutes = allRoutes.filter((route) =>
-    route.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filtered routes based on search - memoized for performance
+  const filteredRoutes = useMemo(() => {
+    if (!searchTerm.trim()) return allRoutes;
+    return allRoutes.filter((route) =>
+      route.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [allRoutes, searchTerm]);
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
-      <TouchableOpacity
-        style={styles.container}
-        activeOpacity={1}
-        onPress={() => setShowDropdown(false)}
-      >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          {/* Header Section */}
-          <View style={styles.header}>
-            <View style={styles.headerContent}>
-              <Ionicons name="bus" size={32} color="#007AFF" />
-              <Text style={styles.title}>Driver Dashboard</Text>
-            </View>
+      {/* Enhanced Header Section */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <View style={styles.headerIconContainer}>
+            <Ionicons name="bus" size={28} color="#fff" />
           </View>
-
-          {/* Status Bar */}
-          <View style={styles.statusBar}>
-            <View style={styles.statusLeft}>
-              <Ionicons name="pause-circle-outline" size={24} color="#8e8e93" />
-              <Text style={styles.statusText}>Waiting to start</Text>
-            </View>
-            <View
-              style={[
-                styles.gpsIndicator,
-                locationError && styles.gpsErrorIndicator,
-                locationLoading && styles.gpsLoadingIndicator,
-              ]}
-            >
-              {locationLoading ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <View
-                  style={[styles.gpsDot, locationError && styles.gpsErrorDot]}
-                />
-              )}
-              <Text style={styles.gpsText}>
-                {locationLoading
-                  ? "Getting Location..."
-                  : locationError
-                  ? "GPS Error"
-                  : "GPS OK"}
-              </Text>
-            </View>
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.title}>Driver Dashboard</Text>
+            <Text style={styles.subtitle}>Ready to start your journey</Text>
           </View>
-
-          {/* Map Card */}
-          <View style={styles.mapCard}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              provider="google"
-              customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
-              initialRegion={{
-                latitude: 6.7536,
-                longitude: 125.356,
-                latitudeDelta: 0.0922,
-                longitudeDelta: 0.0421,
-              }}
-              showsUserLocation
-              showsMyLocationButton={false}
-            ></MapView>
-
-            {/* Center Button */}
-            <TouchableOpacity
-              style={styles.centerButton}
-              onPress={centerMapOnUser}
-            >
-              <Ionicons name="locate" size={18} color="#007AFF" />
-            </TouchableOpacity>
-
-            {/* Refresh Location Button */}
-            <TouchableOpacity
-              style={[
-                styles.refreshButton,
-                locationLoading && styles.refreshButtonLoading,
-              ]}
-              onPress={refreshLocation}
-              disabled={locationLoading}
-            >
-              <Ionicons
-                name="refresh"
-                size={18}
-                color={locationLoading ? "#8e8e93" : "#007AFF"}
-              />
-            </TouchableOpacity>
-
-            {/* Zoom Controls */}
-            <View style={styles.zoomControls}>
-              <TouchableOpacity style={styles.zoomButton} onPress={zoomIn}>
-                <Ionicons name="add" size={16} color="#007AFF" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.zoomButton} onPress={zoomOut}>
-                <Ionicons name="remove" size={16} color="#007AFF" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Assigned Route Card */}
-          <View style={styles.routeCard}>
-            <View style={styles.routeHeader}>
-              <Ionicons name="map" size={24} color="#007AFF" />
-              <Text style={styles.routeTitle}>Assigned Route</Text>
-            </View>
-
-            {/* Route Dropdown */}
-            <View style={styles.dropdownContainer}>
-              <TouchableOpacity
-                style={styles.dropdownField}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  setShowDropdown(!showDropdown);
-                }}
-              >
-                <Ionicons name="bus" size={20} color="#8e8e93" />
-                <Text style={styles.dropdownText}>
-                  Select Route: {selectedRoute?.name || "Loading..."}
-                </Text>
-                <Ionicons
-                  name={showDropdown ? "chevron-up" : "chevron-down"}
-                  size={20}
-                  color="#8e8e93"
-                />
-              </TouchableOpacity>
-            </View>
-
-            {/* Current Route Display */}
-            {selectedRoute && (
-              <View style={styles.currentRoute}>
-                <View style={styles.routeItem}>
-                  <View style={styles.locationMarker}>
-                    <Ionicons name="location" size={16} color="#007AFF" />
-                  </View>
-                  <Text style={styles.locationText}>
-                    {selectedRoute.start_address || "Start Location"}
-                  </Text>
+        </View>
+      </View>
+      <View style={styles.container}>
+        <TouchableWithoutFeedback onPress={() => setShowDropdown(false)}>
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            bounces={true}
+            scrollEnabled={true}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
+            removeClippedSubviews={false}
+            onScrollBeginDrag={() => setShowDropdown(false)}
+          >
+            {/* Enhanced Status Cards */}
+            <View style={styles.statusCardsContainer}>
+              {/* Driver Status Card */}
+              <View style={styles.statusCard}>
+                <View style={styles.statusCardHeader}>
+                  <Ionicons name="person-circle" size={24} color="#007AFF" />
+                  <Text style={styles.statusCardTitle}>Driver Status</Text>
                 </View>
-
-                <View style={styles.arrowContainer}>
-                  <Ionicons name="arrow-forward" size={20} color="#8e8e93" />
-                </View>
-
-                <View style={styles.routeItem}>
-                  <View
-                    style={[
-                      styles.locationMarker,
-                      { backgroundColor: "#FF3B30" },
-                    ]}
-                  >
-                    <Ionicons name="location" size={16} color="#FFFFFF" />
+                <View style={styles.statusCardContent}>
+                  <View style={styles.statusItem}>
+                    <Ionicons
+                      name="pause-circle-outline"
+                      size={20}
+                      color="#8e8e93"
+                    />
+                    <Text style={styles.statusItemText}>Waiting to start</Text>
                   </View>
-                  <Text style={styles.locationText}>
-                    {selectedRoute.end_address || "End Location"}
-                  </Text>
+                  <View style={styles.statusItem}>
+                    <Ionicons name="time-outline" size={20} color="#8e8e93" />
+                    <Text style={styles.statusItemText}>Ready for trip</Text>
+                  </View>
                 </View>
               </View>
-            )}
-          </View>
 
-          {/* Start Trip Button */}
+              {/* GPS Status Card */}
+              <View style={styles.statusCard}>
+                <View style={styles.statusCardHeader}>
+                  <Ionicons name="location" size={24} color="#007AFF" />
+                  <Text style={styles.statusCardTitle}>Location Status</Text>
+                </View>
+                <View style={styles.statusCardContent}>
+                  <View style={styles.gpsStatusContainer}>
+                    <View
+                      style={[
+                        styles.gpsIndicator,
+                        locationError && styles.gpsErrorIndicator,
+                        locationLoading && styles.gpsLoadingIndicator,
+                      ]}
+                    >
+                      {locationLoading ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <View
+                          style={[
+                            styles.gpsDot,
+                            locationError && styles.gpsErrorDot,
+                          ]}
+                        />
+                      )}
+                      <Text style={styles.gpsText}>
+                        {locationLoading
+                          ? "Getting Location..."
+                          : locationError
+                          ? "GPS Error"
+                          : "GPS Connected"}
+                      </Text>
+                    </View>
+                  </View>
+                  {driverLocation && (
+                    <Text style={styles.coordinatesText}>
+                      {driverLocation.latitude.toFixed(4)},{" "}
+                      {driverLocation.longitude.toFixed(4)}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            {/* Enhanced Map Card */}
+            <View style={styles.mapCard}>
+              <View style={styles.mapHeader}>
+                <View style={styles.mapHeaderLeft}>
+                  <Ionicons name="map" size={20} color="#007AFF" />
+                  <Text style={styles.mapTitle}>Current Location</Text>
+                </View>
+                <View style={styles.mapHeaderRight}>
+                  <TouchableOpacity
+                    style={[
+                      styles.mapActionButton,
+                      locationLoading && styles.mapActionButtonDisabled,
+                    ]}
+                    onPress={refreshLocation}
+                    disabled={locationLoading}
+                  >
+                    <Ionicons
+                      name="refresh"
+                      size={16}
+                      color={locationLoading ? "#8e8e93" : "#007AFF"}
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                provider="google"
+                customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
+                initialRegion={{
+                  latitude: 6.7536,
+                  longitude: 125.356,
+                  latitudeDelta: 0.0922,
+                  longitudeDelta: 0.0421,
+                }}
+                showsUserLocation
+                showsMyLocationButton={false}
+              ></MapView>
+
+              {/* Enhanced Map Controls */}
+              <View style={styles.mapControls}>
+                <View style={styles.zoomControls}>
+                  <TouchableOpacity style={styles.zoomButton} onPress={zoomIn}>
+                    <Ionicons name="add" size={16} color="#007AFF" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.zoomButton} onPress={zoomOut}>
+                    <Ionicons name="remove" size={16} color="#007AFF" />
+                  </TouchableOpacity>
+                </View>
+                {/* Center Button */}
+                <TouchableOpacity
+                  style={styles.mapControlButton}
+                  onPress={centerMapOnUser}
+                >
+                  <Ionicons name="locate" size={18} color="#007AFF" />
+                </TouchableOpacity>
+
+                {/* Zoom Controls */}
+              </View>
+            </View>
+
+            {/* Enhanced Route Selection Card */}
+            <View style={styles.routeCard}>
+              <View style={styles.routeHeader}>
+                <View style={styles.routeHeaderLeft}>
+                  <Ionicons name="map" size={24} color="#007AFF" />
+                  <Text style={styles.routeTitle}>Route Selection</Text>
+                </View>
+                {selectedRoute && (
+                  <View style={styles.routeStatusBadge}>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={16}
+                      color="#4CAF50"
+                    />
+                    <Text style={styles.routeStatusText}>Selected</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Enhanced Route Dropdown */}
+              <View style={styles.dropdownContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.dropdownField,
+                    selectedRoute && styles.dropdownFieldSelected,
+                  ]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setShowDropdown(!showDropdown);
+                  }}
+                >
+                  <View style={styles.dropdownLeft}>
+                    <Ionicons
+                      name="bus"
+                      size={20}
+                      color={selectedRoute ? "#007AFF" : "#8e8e93"}
+                    />
+                    <View style={styles.dropdownTextContainer}>
+                      <Text
+                        style={[
+                          styles.dropdownText,
+                          selectedRoute && styles.dropdownTextSelected,
+                        ]}
+                      >
+                        {selectedRoute?.name || "Select a route to begin"}
+                      </Text>
+                      {selectedRoute && (
+                        <Text style={styles.dropdownSubText}>
+                          {selectedRoute.start_address} →{" "}
+                          {selectedRoute.end_address}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                  <Ionicons
+                    name={showDropdown ? "chevron-up" : "chevron-down"}
+                    size={20}
+                    color="#8e8e93"
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {/* Enhanced Route Display */}
+              {selectedRoute && (
+                <View style={styles.currentRoute}>
+                  <View style={styles.routeItem}>
+                    <View style={styles.locationMarker}>
+                      <Ionicons name="location" size={16} color="#fff" />
+                    </View>
+                    <View style={styles.locationTextContainer}>
+                      <Text style={styles.locationLabel}>From</Text>
+                      <Text style={styles.locationText}>
+                        {selectedRoute.start_address || "Start Location"}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.arrowContainer}>
+                    <Ionicons name="arrow-down" size={20} color="#8e8e93" />
+                  </View>
+
+                  <View style={styles.routeItem}>
+                    <View
+                      style={[
+                        styles.locationMarker,
+                        { backgroundColor: "#FF3B30" },
+                      ]}
+                    >
+                      <Ionicons name="location" size={16} color="#FFFFFF" />
+                    </View>
+                    <View style={styles.locationTextContainer}>
+                      <Text style={styles.locationLabel}>To</Text>
+                      <Text style={styles.locationText}>
+                        {selectedRoute.end_address || "End Location"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+          </ScrollView>
+        </TouchableWithoutFeedback>
+
+        {/* Fixed Start Trip Button - Outside ScrollView */}
+        <View style={styles.fixedStartButtonContainer}>
           <TouchableOpacity
             style={[
               styles.startButton,
               !selectedRoute && styles.disabledButton,
-              loading && styles.disabledButton, // Disable and style differently when loading
+              loading && styles.disabledButton,
             ]}
             onPress={handleStartTrip}
-            disabled={!selectedRoute || loading} // Disable when no route is selected or when loading
+            disabled={!selectedRoute || loading}
           >
-            {loading ? ( // Show ActivityIndicator when loading
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <Ionicons name="play" size={24} color="#FFFFFF" />
-            )}
-            <Text style={styles.startButtonText}>
-              {loading ? "Starting Trip..." : "Start New Trip"}
-              {/* Change text when loading */}
-            </Text>
+            <View style={styles.startButtonContent}>
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <View style={styles.startButtonIcon}>
+                  <Ionicons name="play" size={24} color="#FFFFFF" />
+                </View>
+              )}
+              <View style={styles.startButtonTextContainer}>
+                <Text style={styles.startButtonText}>
+                  {loading ? "Starting Trip..." : "Start New Trip"}
+                </Text>
+                <Text style={styles.startButtonSubtext}>
+                  {!selectedRoute
+                    ? "Select a route first"
+                    : loading
+                    ? "Please wait..."
+                    : "Begin your journey"}
+                </Text>
+              </View>
+            </View>
           </TouchableOpacity>
-        </ScrollView>
-      </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Custom Alert Modal */}
+      <Modal
+        visible={showCustomAlert}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={hideAlert}
+      >
+        <View style={styles.alertOverlay}>
+          <View style={styles.alertContainer}>
+            <View style={styles.alertHeader}>
+              <View
+                style={[
+                  styles.alertIconContainer,
+                  { backgroundColor: getAlertColor(alertConfig.type) },
+                ]}
+              >
+                <Ionicons
+                  name={getAlertIcon(alertConfig.type)}
+                  size={24}
+                  color="#fff"
+                />
+              </View>
+              <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+            </View>
+
+            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+
+            <View style={styles.alertButtons}>
+              {alertConfig.showCancel && (
+                <TouchableOpacity
+                  style={[styles.alertButton, styles.alertCancelButton]}
+                  onPress={() => {
+                    alertConfig.onCancel();
+                    hideAlert();
+                  }}
+                >
+                  <Text style={styles.alertCancelButtonText}>
+                    {alertConfig.cancelText}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={[
+                  styles.alertButton,
+                  styles.alertConfirmButton,
+                  { backgroundColor: getAlertColor(alertConfig.type) },
+                ]}
+                onPress={() => {
+                  alertConfig.onConfirm();
+                  hideAlert();
+                }}
+              >
+                <Text style={styles.alertConfirmButtonText}>
+                  {alertConfig.confirmText}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Dropdown Overlay at Root Level */}
       {showDropdown && (
         <TouchableOpacity
@@ -693,49 +1096,101 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingBottom: 120, // Add more space for fixed button
+    flexGrow: 1,
+    minHeight: "100%", // Ensure content is at least full height
   },
 
-  // Header Styles
   header: {
-    paddingTop: 20,
-    paddingBottom: 16,
+    backgroundColor: "#007AFF",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
   },
+
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
   },
+  headerIconContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  headerTextContainer: {
+    flex: 1,
+  },
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#007AFF",
-    marginLeft: 12,
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#fff",
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.8)",
   },
 
-  // Status Bar Styles
-  statusBar: {
+  // Enhanced Status Cards Styles
+  statusCardsContainer: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "#ffffff",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
+    gap: 12,
     marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    marginTop: 20,
   },
-  statusLeft: {
+  statusCard: {
+    flex: 1,
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  statusCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  statusCardTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#333",
+    marginLeft: 8,
+    flex: 1,
+    flexWrap: "wrap",
+  },
+  statusCardContent: {
+    gap: 8,
+  },
+  statusItem: {
     flexDirection: "row",
     alignItems: "center",
   },
-  statusText: {
-    fontSize: 16,
+  statusItemText: {
+    fontSize: 12,
     color: "#8e8e93",
     marginLeft: 8,
+    flex: 1,
+    flexWrap: "wrap",
+  },
+  gpsStatusContainer: {
+    flex: 1,
+    minWidth: 0, // Allow shrinking
+  },
+  coordinatesText: {
+    fontSize: 10,
+    color: "#8e8e93",
+    fontFamily: "monospace",
+    marginTop: 4,
+    flexWrap: "wrap",
   },
   gpsIndicator: {
     flexDirection: "row",
@@ -744,6 +1199,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+    flex: 1,
+    minWidth: 0, // Allow shrinking
   },
   gpsLoadingIndicator: {
     backgroundColor: "#FF9500",
@@ -767,70 +1224,105 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  // Map Card Styles
+  // Enhanced Map Card Styles
   mapCard: {
-    height: 200,
-    borderRadius: 16,
+    height: 240,
+    borderRadius: 20,
     marginBottom: 20,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
     overflow: "hidden",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#f0f0f0",
+  },
+  mapHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: "linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e5e7",
+  },
+  mapHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  mapTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1c1c1e",
+    marginLeft: 10,
+  },
+  mapHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  mapActionButton: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "#e5e5e7",
+  },
+  mapActionButtonDisabled: {
+    backgroundColor: "#f2f2f7",
   },
   map: {
     flex: 1,
   },
-  centerButton: {
+  mapControls: {
     position: "absolute",
-    top: 16,
-    right: 16,
+    top: 80,
+    right: 20,
+    flexDirection: "column",
+    gap: 10,
+  },
+  mapControlButton: {
     backgroundColor: "#ffffff",
     borderRadius: 24,
-    padding: 12,
+    padding: 14,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  refreshButton: {
-    position: "absolute",
-    top: 70,
-    right: 16,
-    backgroundColor: "#ffffff",
-    borderRadius: 24,
-    padding: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  refreshButtonLoading: {
-    backgroundColor: "#f2f2f7",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    width: 48,
+    height: 48,
+    borderWidth: 1,
+    borderColor: "#e5e5e7",
   },
   zoomControls: {
-    position: "absolute",
-    top: 16,
-    left: 16,
     flexDirection: "column",
+    gap: 4,
   },
   zoomButton: {
     backgroundColor: "#ffffff",
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 10,
-    marginBottom: 8,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
-    elevation: 5,
+    elevation: 4,
     alignItems: "center",
     justifyContent: "center",
     width: 40,
     height: 40,
+    borderWidth: 1,
+    borderColor: "#e5e5e7",
   },
   hospitalMarker: {
     backgroundColor: "#ffffff",
@@ -863,30 +1355,49 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
 
-  // Route Card Styles
+  // Enhanced Route Card Styles
   routeCard: {
     backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 30,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 3,
     overflow: "visible",
-    position: "relative", // <-- Add this!
+    position: "relative",
   },
   routeHeader: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 16,
+  },
+  routeHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   routeTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: "#007AFF",
     marginLeft: 8,
+  },
+  routeStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#E8F5E8",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  routeStatusText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#4CAF50",
+    marginLeft: 4,
   },
   dropdownContainer: {
     marginBottom: 16,
@@ -903,11 +1414,33 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e5e5ea",
   },
-  dropdownText: {
+  dropdownFieldSelected: {
+    backgroundColor: "#E3F2FD",
+    borderColor: "#007AFF",
+  },
+  dropdownLeft: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  dropdownTextContainer: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  dropdownText: {
     fontSize: 16,
     color: "#1c1c1e",
-    marginLeft: 8,
+    flexWrap: "wrap",
+  },
+  dropdownTextSelected: {
+    color: "#007AFF",
+    fontWeight: "600",
+  },
+  dropdownSubText: {
+    fontSize: 12,
+    color: "#8e8e93",
+    marginTop: 2,
+    flexWrap: "wrap",
   },
   dropdownList: {
     backgroundColor: "#ffffff",
@@ -957,55 +1490,104 @@ const styles = StyleSheet.create({
     maxHeight: 200,
   },
   currentRoute: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: "#f8f9fa",
-    padding: 12,
-    borderRadius: 8,
+    padding: 16,
+    borderRadius: 12,
+    gap: 12,
   },
   routeItem: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
   },
   locationMarker: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#007AFF",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#4CAF50",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 8,
+    marginRight: 12,
+  },
+  locationTextContainer: {
+    flex: 1,
+  },
+  locationLabel: {
+    fontSize: 12,
+    color: "#8e8e93",
+    fontWeight: "500",
+    marginBottom: 2,
   },
   locationText: {
     fontSize: 14,
     color: "#1c1c1e",
-    fontWeight: "500",
-    flex: 1,
+    fontWeight: "600",
+    flexWrap: "wrap",
   },
   arrowContainer: {
-    marginHorizontal: 8,
+    alignItems: "center",
+    marginVertical: 4,
   },
 
-  // Start Button Styles
+  // Fixed Start Button Styles
+  fixedStartButtonContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#f2f2f7",
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: "#e5e5e7",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 1000,
+    pointerEvents: "box-none", // Allow touch events to pass through to ScrollView
+  },
   startButton: {
     backgroundColor: "#007AFF",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     shadowColor: "#007AFF",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
+    width: "100%",
+    pointerEvents: "auto", // Ensure button can receive touch events
+  },
+  startButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+  },
+  startButtonIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  startButtonTextContainer: {
+    flex: 1,
   },
   startButtonText: {
     fontSize: 18,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#ffffff",
-    marginLeft: 8,
+    marginBottom: 4,
+    flexWrap: "wrap",
+  },
+  startButtonSubtext: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.8)",
+    flexWrap: "wrap",
   },
   disabledButton: {
     backgroundColor: "#8e8e93",
@@ -1094,6 +1676,80 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     color: "#333",
+  },
+
+  // Custom Alert Styles
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  alertContainer: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  alertHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  alertIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  alertTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#1c1c1e",
+    flex: 1,
+  },
+  alertMessage: {
+    fontSize: 16,
+    color: "#8e8e93",
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  alertButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
+  alertButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    minWidth: 80,
+    alignItems: "center",
+  },
+  alertCancelButton: {
+    backgroundColor: "#f2f2f7",
+  },
+  alertCancelButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#8e8e93",
+  },
+  alertConfirmButton: {
+    // backgroundColor will be set dynamically
+  },
+  alertConfirmButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#ffffff",
   },
 });
 
