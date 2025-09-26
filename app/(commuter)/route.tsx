@@ -38,7 +38,7 @@ export function RouteScreen() {
   const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
   const separatorColor = useThemeColor({}, "separatorColor");
 
-  const fetchRoutes = async () => {
+  const fetchRoutes = useCallback(async () => {
     try {
       // Fetch the new columns as well
       const { data, error } = await supabase
@@ -54,16 +54,16 @@ export function RouteScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchRoutes();
-  }, []);
+  }, [fetchRoutes]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchRoutes();
-  }, []);
+  }, [fetchRoutes]);
 
   // Filter routes based on the search query
   const filteredRoutes = useMemo(() => {
@@ -79,8 +79,12 @@ export function RouteScreen() {
       style={[styles.card, { backgroundColor, borderColor: separatorColor }]}
       onPress={() =>
         router.push({
-          pathname: "/route-details",
-          params: { routeId: item.id },
+          pathname: "/(commuter)",
+          params: {
+            selectedRouteId: item.id,
+            selectedRouteName: item.name,
+            message: `Selected route: ${item.name}. Please set your pickup and destination to view buses for this route.`,
+          },
         })
       }
     >

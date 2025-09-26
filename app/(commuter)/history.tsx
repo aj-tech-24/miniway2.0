@@ -38,7 +38,7 @@ export function TravelHistoryScreen() {
   const separatorColor = useThemeColor({}, "separatorColor");
   const { theme } = useAppTheme();
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     if (!session?.user) return;
 
     try {
@@ -74,15 +74,15 @@ export function TravelHistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [session?.user]);
   useEffect(() => {
     fetchHistory();
-  }, [session]);
+  }, [fetchHistory]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchHistory();
-  }, [session]);
+  }, [fetchHistory]);
 
   // Render a single history card
   // Render a single history card

@@ -59,6 +59,8 @@ const DriverScreen = () => {
     latitude: number;
     longitude: number;
   } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(true);
+  const [locationError, setLocationError] = useState(false);
 
   // Fetch routes from database
   const fetchRoutes = async () => {
@@ -82,22 +84,67 @@ const DriverScreen = () => {
 
   useEffect(() => {
     fetchRoutes();
+    getCurrentLocation();
+  }, []);
 
-    // Request location permissions and get initial location
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
+  // Optimized location fetching function
+  const getCurrentLocation = async () => {
+    setLocationLoading(true);
+    setLocationError(false);
+
+    try {
+      // Request permissions
+      const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         console.error("Permission to access location was denied");
+        setLocationError(true);
+        // Set a default location if permission denied
+        setDriverLocation({
+          latitude: 6.7536,
+          longitude: 125.356,
+        });
+        setLocationLoading(false);
         return;
       }
 
-      let location = await Location.getCurrentPositionAsync({});
-      setDriverLocation({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
+      // Check if we have a recent cached location first
+      const lastKnownPosition = await Location.getLastKnownPositionAsync({
+        maxAge: 30000, // 30 seconds
+        requiredAccuracy: 100, // 100 meters accuracy is acceptable for initial load
       });
-    })();
-  }, []);
+
+      if (lastKnownPosition) {
+        setDriverLocation({
+          latitude: lastKnownPosition.coords.latitude,
+          longitude: lastKnownPosition.coords.longitude,
+        });
+        setLocationLoading(false);
+        console.log("Using cached location for faster loading");
+      }
+
+      // Get more accurate current position in background
+      const currentPosition = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced, // Balanced accuracy for faster response
+      });
+
+      setDriverLocation({
+        latitude: currentPosition.coords.latitude,
+        longitude: currentPosition.coords.longitude,
+      });
+      setLocationError(false);
+      console.log("Updated with current location");
+    } catch (error) {
+      console.error("Error getting location:", error);
+      setLocationError(true);
+      // Fallback to default location
+      setDriverLocation({
+        latitude: 6.7536,
+        longitude: 125.356,
+      });
+    } finally {
+      setLocationLoading(false);
+    }
+  };
 
   const handleRouteSelect = (route: Route) => {
     setSelectedRoute(route);
@@ -337,7 +384,7 @@ const DriverScreen = () => {
         1000
       );
     } else if (mapRef.current) {
-      console.warn("Driver location not available for centering map."); // Changed from alert to console.warn
+      console.warn("Driver location not available for centering map.");
       mapRef.current.animateToRegion(
         {
           latitude: 6.7536,
@@ -348,6 +395,10 @@ const DriverScreen = () => {
         1000
       );
     }
+  };
+
+  const refreshLocation = () => {
+    getCurrentLocation();
   };
 
   const zoomIn = () => {
@@ -408,9 +459,27 @@ const DriverScreen = () => {
               <Ionicons name="pause-circle-outline" size={24} color="#8e8e93" />
               <Text style={styles.statusText}>Waiting to start</Text>
             </View>
-            <View style={styles.gpsIndicator}>
-              <View style={styles.gpsDot} />
-              <Text style={styles.gpsText}>GPS OK</Text>
+            <View
+              style={[
+                styles.gpsIndicator,
+                locationError && styles.gpsErrorIndicator,
+                locationLoading && styles.gpsLoadingIndicator,
+              ]}
+            >
+              {locationLoading ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <View
+                  style={[styles.gpsDot, locationError && styles.gpsErrorDot]}
+                />
+              )}
+              <Text style={styles.gpsText}>
+                {locationLoading
+                  ? "Getting Location..."
+                  : locationError
+                  ? "GPS Error"
+                  : "GPS OK"}
+              </Text>
             </View>
           </View>
 
@@ -437,6 +506,22 @@ const DriverScreen = () => {
               onPress={centerMapOnUser}
             >
               <Ionicons name="locate" size={18} color="#007AFF" />
+            </TouchableOpacity>
+
+            {/* Refresh Location Button */}
+            <TouchableOpacity
+              style={[
+                styles.refreshButton,
+                locationLoading && styles.refreshButtonLoading,
+              ]}
+              onPress={refreshLocation}
+              disabled={locationLoading}
+            >
+              <Ionicons
+                name="refresh"
+                size={18}
+                color={locationLoading ? "#8e8e93" : "#007AFF"}
+              />
             </TouchableOpacity>
 
             {/* Zoom Controls */}
@@ -660,12 +745,21 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
   },
+  gpsLoadingIndicator: {
+    backgroundColor: "#FF9500",
+  },
+  gpsErrorIndicator: {
+    backgroundColor: "#FF3B30",
+  },
   gpsDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: "#ffffff",
     marginRight: 6,
+  },
+  gpsErrorDot: {
+    backgroundColor: "#ffffff",
   },
   gpsText: {
     fontSize: 12,
@@ -700,6 +794,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
+  },
+  refreshButton: {
+    position: "absolute",
+    top: 70,
+    right: 16,
+    backgroundColor: "#ffffff",
+    borderRadius: 24,
+    padding: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  refreshButtonLoading: {
+    backgroundColor: "#f2f2f7",
   },
   zoomControls: {
     position: "absolute",

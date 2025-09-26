@@ -94,14 +94,34 @@ export default function TripScreen() {
   const [pickupName, setPickupName] = useState<string | null>(null);
   const [destinationName, setDestinationName] = useState<string | null>(null);
 
-  // added: reverse geocoding
+  // added: reverse geocoding with caching
+  const geocodeCache = useRef<Map<string, string>>(new Map());
+
   const reverseGeocode = async (coords: LatLng) => {
     if (!GOOGLE_MAPS_API_KEY) return null;
+
+    // Create cache key
+    const cacheKey = `${coords.latitude.toFixed(4)},${coords.longitude.toFixed(
+      4
+    )}`;
+
+    // Check cache first
+    if (geocodeCache.current.has(cacheKey)) {
+      return geocodeCache.current.get(cacheKey) || null;
+    }
+
     try {
       const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.latitude},${coords.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
       const res = await fetch(url);
       const json = await res.json();
-      return json.results?.[0]?.formatted_address || null;
+      const address = json.results?.[0]?.formatted_address || null;
+
+      // Cache the result
+      if (address) {
+        geocodeCache.current.set(cacheKey, address);
+      }
+
+      return address;
     } catch {
       return null;
     }

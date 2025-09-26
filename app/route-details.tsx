@@ -18,7 +18,7 @@ import {
 } from "react-native";
 import MapView, { Camera, LatLng, Marker, Polyline } from "react-native-maps";
 
-// --- Data Types (Unchanged) ---
+// --- Data Types ---
 type Driver = {
   id: string;
   fullName: string;
@@ -38,13 +38,15 @@ type Bus = {
 type Route = {
   id: string;
   name: string;
+  start_address?: string | null;
+  end_address?: string | null;
   path: {
     type: "LineString";
     coordinates: [number, number][];
   };
 };
 
-// --- Helper & Location Functions (Unchanged) ---
+// --- Helper Functions ---
 const calculateBearing = (start: LatLng, end: LatLng) => {
   const toRadians = (deg: number) => deg * (Math.PI / 180);
   const toDegrees = (rad: number) => rad * (180 / Math.PI);
@@ -76,8 +78,25 @@ const getCurrentLocation = async (
       );
       return;
     }
+
+    // Check for cached location first for faster response
+    const lastKnownPosition = await Location.getLastKnownPositionAsync({
+      maxAge: 30000, // 30 seconds
+      requiredAccuracy: 100, // 100 meters accuracy is acceptable
+    });
+
+    if (lastKnownPosition) {
+      const currentLatLng: LatLng = {
+        latitude: lastKnownPosition.coords.latitude,
+        longitude: lastKnownPosition.coords.longitude,
+      };
+      setCurrentLocation(currentLatLng);
+      setLocationLoading(false);
+    }
+
+    // Get more accurate current position
     const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
+      accuracy: Location.Accuracy.Balanced, // Balanced accuracy for faster response
     });
     const currentLatLng: LatLng = {
       latitude: location.coords.latitude,
@@ -117,60 +136,225 @@ export default function RouteDetailsScreen() {
     longitude: parseFloat((params.destLng as string) || "0"),
   };
 
-  // --- Data Fetching and Real-time useEffects (Largely Unchanged) ---
+  // --- Data Fetching ---
   useEffect(() => {
-    if (!destCoords.latitude) {
-      Alert.alert("Error", "Missing destination.", [
-        { text: "OK", onPress: () => router.back() },
-      ]);
-      return;
-    }
-    const findNearestRouteAndBuses = async () => {
-      setLoading(true);
-      try {
-        const { data: routeData, error: routeError } = await supabase.rpc(
-          "find_best_route_for_trip",
-          {
-            origin_lon: originCoords.longitude,
-            origin_lat: originCoords.latitude,
-            dest_lon: destCoords.longitude,
-            dest_lat: destCoords.latitude,
-          }
-        );
-        if (routeError) throw routeError;
-        if (!routeData || routeData.length === 0) {
-          setNearestRoute(null);
-          return;
-        }
-        const fetchedRoute = routeData[0] as Route;
-        setNearestRoute(fetchedRoute);
-        if (
-          fetchedRoute.path?.coordinates &&
-          fetchedRoute.path.coordinates.length >= 2
-        ) {
-          const coords = fetchedRoute.path.coordinates;
-          const startPoint = {
-            latitude: coords[0][1],
-            longitude: coords[0][0],
-          };
-          const endPoint = {
-            latitude: coords[coords.length - 1][1],
-            longitude: coords[coords.length - 1][0],
-          };
-          const heading = calculateBearing(startPoint, endPoint);
-          setInitialCamera({
-            center: startPoint,
-            pitch: 80,
-            heading: heading,
-            zoom: 14,
-          });
-        }
+    const routeId = params.routeId as string;
 
-        // 1. Get active buses for the route
-        const { data: busesData, error: busesError } = await supabase
-          .from("buses")
-          .select(
+    const fetchData = async () => {
+      setLoading(true);
+
+      try {
+        // If we have a specific route ID, use that instead of finding the best route
+        if (routeId) {
+          // Use the RPC function to get the route with proper GeoJSON format
+          // We'll use a very large search radius to ensure we find the route
+          const { data: routeData, error: routeError } = await supabase.rpc(
+            "find_best_route_for_trip",
+            {
+              origin_lat: originCoords.latitude,
+              origin_lon: originCoords.longitude,
+              dest_lat: destCoords.latitude || originCoords.latitude, // Fallback if no destination
+              dest_lon: destCoords.longitude || originCoords.longitude, // Fallback if no destination
+              search_radius_meters: 50000, // Large radius to find the route
+            }
+          );
+
+          if (routeError) {
+            console.error("Route fetch error:", routeError);
+            throw routeError;
+          }
+          if (!routeData || routeData.length === 0) {
+            setNearestRoute(null);
+            setLoading(false);
+            return;
+          }
+
+          // Find the route that matches our requested routeId
+          const requestedRoute = routeData.find(
+            (route: any) => route.id === routeId
+          );
+
+          if (!requestedRoute) {
+            console.error("Requested route not found in results");
+            setNearestRoute(null);
+            setLoading(false);
+            return;
+          }
+
+          const fetchedRoute = {
+            ...requestedRoute,
+            path: requestedRoute.path, // This is already in GeoJSON format from the RPC
+          } as Route;
+          setNearestRoute(fetchedRoute);
+
+          // Set initial camera based on route path
+          if (
+            fetchedRoute.path?.coordinates &&
+            fetchedRoute.path.coordinates.length >= 2
+          ) {
+            const coords = fetchedRoute.path.coordinates;
+            const startPoint = {
+              latitude: coords[0][1],
+              longitude: coords[0][0],
+            };
+            const endPoint = {
+              latitude: coords[coords.length - 1][1],
+              longitude: coords[coords.length - 1][0],
+            };
+            const heading = calculateBearing(startPoint, endPoint);
+            setInitialCamera({
+              center: startPoint,
+              pitch: 80,
+              heading: heading,
+              zoom: 14,
+            });
+          }
+
+          // Get active buses for this specific route
+          const { data: busesData, error: busesError } = await supabase
+            .from("buses")
+            .select(
+              `
+              id,
+              plate_number,
+              route_id,
+              status,
+              capacity,
+              passengers,
+              driver_id,
+              driver:users (
+                id,
+                fullName
+              )
             `
+            )
+            .eq("route_id", fetchedRoute.id)
+            .eq("status", "active");
+
+          if (busesError) throw busesError;
+          if (!Array.isArray(busesData)) throw new Error("Invalid data.");
+
+          // Get trips for these buses
+          const busIds = busesData.map((bus: any) => bus.id);
+          const { data: tripsData, error: tripsError } = await supabase.rpc(
+            "get_active_trips_with_geojson",
+            { bus_ids: busIds }
+          );
+
+          // Map bus to its latest trip location
+          const formattedBuses: Bus[] = (busesData ?? []).map((bus: any) => {
+            const trip = (tripsData ?? []).find(
+              (t: any) =>
+                t.bus_id === bus.id &&
+                (t.status === "ongoing" || t.status === "waiting")
+            );
+
+            let location = null;
+            if (trip?.current_location) {
+              try {
+                const geo = JSON.parse(trip.current_location);
+                location = {
+                  latitude: geo.coordinates[1],
+                  longitude: geo.coordinates[0],
+                };
+              } catch {
+                location = null;
+              }
+            }
+
+            return {
+              id: bus.id,
+              plate_number: bus.plate_number,
+              route_id: bus.route_id,
+              status: bus.status,
+              passengers: bus.passengers,
+              capacity: bus.capacity,
+              driver: bus.driver
+                ? { id: bus.driver.id, fullName: bus.driver.fullName }
+                : null,
+              location,
+            };
+          });
+          setBuses(formattedBuses);
+        } else {
+          // Original logic for finding best route when no specific route ID
+          if (!destCoords.latitude) {
+            Alert.alert("Error", "Missing destination.", [
+              { text: "OK", onPress: () => router.back() },
+            ]);
+            setLoading(false);
+            return;
+          }
+
+          const { data: routeData, error: routeError } = await supabase.rpc(
+            "find_best_route_for_trip",
+            {
+              origin_lon: originCoords.longitude,
+              origin_lat: originCoords.latitude,
+              dest_lon: destCoords.longitude,
+              dest_lat: destCoords.latitude,
+            }
+          );
+          if (routeError) throw routeError;
+          if (!routeData || routeData.length === 0) {
+            setNearestRoute(null);
+            setLoading(false);
+            return;
+          }
+
+          // Handle WKT geometry conversion for best route as well
+          let routePath;
+          const rawRoute = routeData[0];
+          if (typeof rawRoute.path === "string") {
+            // Use origin and destination coordinates for best route
+            console.log(
+              "Using origin and destination coordinates for best route path"
+            );
+            // Use origin and destination since coordinate columns don't exist
+            routePath = {
+              type: "LineString",
+              coordinates: [
+                [originCoords.longitude, originCoords.latitude],
+                [destCoords.longitude, destCoords.latitude],
+              ],
+            };
+          } else {
+            routePath = rawRoute.path;
+          }
+
+          const fetchedRoute = {
+            ...rawRoute,
+            path: routePath,
+          } as Route;
+          setNearestRoute(fetchedRoute);
+
+          if (
+            fetchedRoute.path?.coordinates &&
+            fetchedRoute.path.coordinates.length >= 2
+          ) {
+            const coords = fetchedRoute.path.coordinates;
+            const startPoint = {
+              latitude: coords[0][1],
+              longitude: coords[0][0],
+            };
+            const endPoint = {
+              latitude: coords[coords.length - 1][1],
+              longitude: coords[coords.length - 1][0],
+            };
+            const heading = calculateBearing(startPoint, endPoint);
+            setInitialCamera({
+              center: startPoint,
+              pitch: 80,
+              heading: heading,
+              zoom: 14,
+            });
+          }
+
+          // Get active buses for the route
+          const { data: busesData, error: busesError } = await supabase
+            .from("buses")
+            .select(
+              `
             id,
             plate_number,
             route_id,
@@ -183,66 +367,56 @@ export default function RouteDetailsScreen() {
               fullName
             )
           `
-          )
-          .eq("route_id", fetchedRoute.id)
-          .eq("status", "active");
+            )
+            .eq("route_id", fetchedRoute.id)
+            .eq("status", "active");
 
-        if (busesError) throw busesError;
-        if (!Array.isArray(busesData)) throw new Error("Invalid data.");
+          if (busesError) throw busesError;
+          if (!Array.isArray(busesData)) throw new Error("Invalid data.");
 
-        // 2. Get trips for these buses (status: ongoing or waiting)
-        const busIds = busesData.map((bus: any) => bus.id);
-        const { data: tripsData, error: tripsError } = await supabase.rpc(
-          "get_active_trips_with_geojson",
-          { bus_ids: busIds }
-        );
-
-        // if (tripsError) throw tripsError;
-        // console.log("tripsData:", tripsData);
-        // if (Array.isArray(tripsData)) {
-        //   tripsData.forEach((trip) => {
-        //     console.log(
-        //       `Trip bus_id: ${trip.bus_id}, status: ${trip.status}, current_location:`,
-        //       trip.current_location
-        //     );
-        //   });
-        // }
-        // 3. Map bus to its latest trip location
-        const formattedBuses: Bus[] = (busesData ?? []).map((bus: any) => {
-          const trip = (tripsData ?? []).find(
-            (t: any) =>
-              t.bus_id === bus.id &&
-              (t.status === "ongoing" || t.status === "waiting")
+          // Get trips for these buses
+          const busIds = busesData.map((bus: any) => bus.id);
+          const { data: tripsData, error: tripsError } = await supabase.rpc(
+            "get_active_trips_with_geojson",
+            { bus_ids: busIds }
           );
 
-          let location = null;
-          if (trip?.current_location) {
-            try {
-              const geo = JSON.parse(trip.current_location); // { type: "Point", coordinates: [lng, lat] }
-              location = {
-                latitude: geo.coordinates[1],
-                longitude: geo.coordinates[0],
-              };
-            } catch {
-              location = null;
-            }
-          }
+          // Map bus to its latest trip location
+          const formattedBuses: Bus[] = (busesData ?? []).map((bus: any) => {
+            const trip = (tripsData ?? []).find(
+              (t: any) =>
+                t.bus_id === bus.id &&
+                (t.status === "ongoing" || t.status === "waiting")
+            );
 
-          return {
-            id: bus.id,
-            plate_number: bus.plate_number,
-            route_id: bus.route_id,
-            status: bus.status,
-            passengers: bus.passengers,
-            capacity: bus.capacity,
-            driver: bus.driver
-              ? { id: bus.driver.id, fullName: bus.driver.fullName }
-              : null,
-            location,
-          };
-        });
-        setBuses(formattedBuses);
-        console.log("formattedBuses: ", formattedBuses);
+            let location = null;
+            if (trip?.current_location) {
+              try {
+                const geo = JSON.parse(trip.current_location);
+                location = {
+                  latitude: geo.coordinates[1],
+                  longitude: geo.coordinates[0],
+                };
+              } catch {
+                location = null;
+              }
+            }
+
+            return {
+              id: bus.id,
+              plate_number: bus.plate_number,
+              route_id: bus.route_id,
+              status: bus.status,
+              passengers: bus.passengers,
+              capacity: bus.capacity,
+              driver: bus.driver
+                ? { id: bus.driver.id, fullName: bus.driver.fullName }
+                : null,
+              location,
+            };
+          });
+          setBuses(formattedBuses);
+        }
       } catch (err) {
         console.error("Error fetching data:", err);
         Alert.alert("Error", "Failed to fetch route and bus data.", [
@@ -252,9 +426,11 @@ export default function RouteDetailsScreen() {
         setLoading(false);
       }
     };
-    findNearestRouteAndBuses();
-  }, [destCoords.latitude, destCoords.longitude]);
 
+    fetchData();
+  }, [destCoords.latitude, destCoords.longitude, params.routeId]);
+
+  // Real-time updates
   useEffect(() => {
     if (!buses || buses.length === 0) return;
     const busIds = buses.map((bus) => bus.id);
@@ -312,14 +488,14 @@ export default function RouteDetailsScreen() {
     };
   }, [buses, selectedBus]);
 
-  // --- MODIFIED Handlers ---
+  // --- Handlers ---
   const handleBusSelect = (bus: Bus) => {
     if (bus.status !== "active") {
       Alert.alert("Bus Inactive", "This bus is not currently active.");
       return;
     }
     setSelectedBus(bus);
-    setShowPickupSelection(true); // This triggers the new UI
+    setShowPickupSelection(true);
     setPickupLocation(null);
     setCurrentLocation(null);
     if (bus.location) {
@@ -349,23 +525,11 @@ export default function RouteDetailsScreen() {
   };
 
   const handleConfirmPickup = async () => {
-    console.log("handleConfirmPickup called with:", {
-      pickupLocation,
-      selectedBus: selectedBus?.id,
-      nearestRoute: !!nearestRoute,
-    });
-
     if (!pickupLocation || !selectedBus || !nearestRoute) {
-      console.log("Missing required data:", {
-        pickupLocation: !!pickupLocation,
-        selectedBus: !!selectedBus,
-        nearestRoute: !!nearestRoute,
-      });
       return;
     }
 
     try {
-      // First, we need to get or create a trip ID for this bus
       // Check if there's an active trip for this bus
       const { data: existingTrip, error: tripError } = await supabase
         .from("trips")
@@ -374,15 +538,11 @@ export default function RouteDetailsScreen() {
         .eq("status", "waiting")
         .maybeSingle();
 
-      console.log("Existing trip check:", { existingTrip, tripError });
-
       let tripId;
       if (existingTrip && !tripError) {
         tripId = existingTrip.id;
-        console.log("Using existing trip:", tripId);
       } else {
         // Create a new trip if none exists
-        console.log("Creating new trip for bus:", selectedBus.id);
         const { data: newTrip, error: createError } = await supabase
           .from("trips")
           .insert({
@@ -398,29 +558,24 @@ export default function RouteDetailsScreen() {
           return;
         }
         tripId = newTrip.id;
-        console.log("Created new trip:", tripId);
       }
 
-      // Navigate to the trip screen with the tripId
-      const navigationParams = {
-        busId: selectedBus.id,
-        busPlateNumber: selectedBus.plate_number,
-        tripId: tripId, // Add the tripId
-        pickupLat: pickupLocation.latitude.toString(),
-        pickupLng: pickupLocation.longitude.toString(),
-        destLat: destCoords.latitude.toString(),
-        destLng: destCoords.longitude.toString(),
-        routePath: JSON.stringify(nearestRoute.path.coordinates),
-      };
-
-      console.log("Navigating to trip with params:", navigationParams);
-
+      // Navigate to the trip screen
       router.push({
         pathname: "/trip",
-        params: navigationParams,
+        params: {
+          busId: selectedBus.id,
+          busPlateNumber: selectedBus.plate_number,
+          tripId: tripId,
+          pickupLat: pickupLocation.latitude.toString(),
+          pickupLng: pickupLocation.longitude.toString(),
+          destLat: destCoords.latitude.toString(),
+          destLng: destCoords.longitude.toString(),
+          routePath: JSON.stringify(nearestRoute.path.coordinates),
+        },
       });
 
-      // Reset state after navigating
+      // Reset state
       setShowPickupSelection(false);
       setSelectedBus(null);
       setPickupLocation(null);
@@ -436,12 +591,12 @@ export default function RouteDetailsScreen() {
     setPickupLocation(null);
   };
 
-  // --- Loading and Error States (Unchanged) ---
+  // --- Loading and Error States ---
   if (loading) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" />
-        <Text>Entering to trip mode...</Text>
+        <Text>Loading route details...</Text>
       </View>
     );
   }
@@ -449,7 +604,7 @@ export default function RouteDetailsScreen() {
   if (!nearestRoute || !initialCamera) {
     return (
       <View style={styles.centered}>
-        <Text>No nearest route was found.</Text>
+        <Text>No route found.</Text>
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.goBackButton}
@@ -475,7 +630,7 @@ export default function RouteDetailsScreen() {
         pitchEnabled={true}
         initialCamera={initialCamera}
         showsCompass={false}
-        onPress={(e) => handlePinLocation(e.nativeEvent.coordinate)} // Allow pinning location
+        onPress={(e) => handlePinLocation(e.nativeEvent.coordinate)}
       >
         <Marker
           coordinate={destCoords}
@@ -488,7 +643,6 @@ export default function RouteDetailsScreen() {
           strokeWidth={6}
         />
 
-        {/* --- NEW: Marker for the selected pickup location --- */}
         {pickupLocation && (
           <Marker
             coordinate={pickupLocation}
@@ -546,10 +700,9 @@ export default function RouteDetailsScreen() {
         <Ionicons name="arrow-back" size={24} color="black" />
       </TouchableOpacity>
 
-      {/* --- MODIFIED: Conditional Bottom Panel --- */}
+      {/* Bottom Panel */}
       <View style={styles.bottomPanel}>
         {showPickupSelection ? (
-          // --- NEW: Pickup Selection UI ---
           <View>
             <Text style={styles.panelTitle}>Set Your Pickup Location</Text>
             <Text style={styles.panelSubtitle}>
@@ -590,11 +743,8 @@ export default function RouteDetailsScreen() {
             </View>
           </View>
         ) : (
-          // --- Original Bus List UI ---
           <>
-            <Text style={styles.routeName}>
-              Nearest Route: {nearestRoute.name}
-            </Text>
+            <Text style={styles.routeName}>Route: {nearestRoute.name}</Text>
             <Text style={styles.panelTitle}>Select a Bus</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               {buses.map((bus) => {
@@ -667,7 +817,7 @@ export default function RouteDetailsScreen() {
         )}
       </View>
 
-      {/* --- NEW: Modal for Bus Details --- */}
+      {/* Bus Details Modal */}
       <Modal
         visible={showBusModal}
         transparent
@@ -714,7 +864,6 @@ export default function RouteDetailsScreen() {
                     setSelectedBus(modalBus);
                     setShowPickupSelection(true);
                     setShowBusModal(false);
-                    // Center the map camera on the bus location
                     if (modalBus.location) {
                       mapRef.current?.animateToRegion(
                         {
@@ -722,7 +871,7 @@ export default function RouteDetailsScreen() {
                           latitudeDelta: 0.01,
                           longitudeDelta: 0.01,
                         },
-                        1000 // animation duration in ms
+                        1000
                       );
                     }
                   }
@@ -739,7 +888,7 @@ export default function RouteDetailsScreen() {
   );
 }
 
-// --- ADDED New Styles ---
+// --- Styles ---
 const styles = StyleSheet.create({
   container: { flex: 1 },
   centered: {

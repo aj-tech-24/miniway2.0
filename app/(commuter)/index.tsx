@@ -8,7 +8,7 @@ import { supabase } from "@/lib/supabase";
 import { FontAwesome, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -61,18 +61,19 @@ interface Place {
 // --- Constants ---
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.6;
-const BOTTOM_SHEET_MIN_HEIGHT = SCREEN_HEIGHT * 0.35;
+const BOTTOM_SHEET_MIN_HEIGHT = SCREEN_HEIGHT * 0.375;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
 
 export function CommuterHomeScreen() {
   // Hooks and State declarations remain the same...
   const { session } = useAuth();
   const { theme } = useAppTheme();
+  const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
-  const [minibuses, setMinibuses] = useState<Minibus[]>([]);
+  const [buses, setBuses] = useState<Minibus[]>([]);
   const [userLocation, setUserLocation] =
     useState<Location.LocationObject | null>(null);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
@@ -92,6 +93,15 @@ export function CommuterHomeScreen() {
     latitude: number;
     longitude: number;
   } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationError, setLocationError] = useState(false);
+  const [selectedRouteMessage, setSelectedRouteMessage] = useState<
+    string | null
+  >(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [selectedRouteName, setSelectedRouteName] = useState<string | null>(
+    null
+  );
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
   const primaryColor = useThemeColor({}, "tint");
@@ -104,6 +114,44 @@ export function CommuterHomeScreen() {
   }));
 
   const handleFindRide = () => {
+    console.log("=== FIND RIDE DEBUG ===");
+    console.log("User location:", userLocation);
+    console.log("Confirmed destination:", confirmedDestination);
+    console.log("Selected route ID:", selectedRouteId);
+    console.log("Selected route name:", selectedRouteName);
+
+    // If a route is selected, we only need user location
+    if (selectedRouteId) {
+      if (!userLocation) {
+        Alert.alert(
+          "Missing Information",
+          "Please ensure your location is enabled."
+        );
+        return;
+      }
+
+      // For selected routes, use default destination coordinates or let route-details handle it
+      const routeParams: any = {
+        originLat: userLocation.coords.latitude,
+        originLng: userLocation.coords.longitude,
+        routeId: selectedRouteId,
+      };
+
+      // If we have a confirmed destination, include it
+      if (confirmedDestination) {
+        routeParams.destLat = confirmedDestination.latitude;
+        routeParams.destLng = confirmedDestination.longitude;
+      }
+
+      console.log("Navigating to route-details with params:", routeParams);
+      router.push({
+        pathname: "/route-details",
+        params: routeParams,
+      });
+      return;
+    }
+
+    // For general route finding, we need both location and destination
     if (!userLocation || !confirmedDestination) {
       Alert.alert(
         "Missing Information",
@@ -111,14 +159,18 @@ export function CommuterHomeScreen() {
       );
       return;
     }
+
+    const routeParams: any = {
+      originLat: userLocation.coords.latitude,
+      originLng: userLocation.coords.longitude,
+      destLat: confirmedDestination.latitude,
+      destLng: confirmedDestination.longitude,
+    };
+
+    console.log("Navigating to route-details with params:", routeParams);
     router.push({
       pathname: "/route-details",
-      params: {
-        originLat: userLocation.coords.latitude,
-        originLng: userLocation.coords.longitude,
-        destLat: confirmedDestination.latitude,
-        destLng: confirmedDestination.longitude,
-      },
+      params: routeParams,
     });
   };
 
@@ -126,7 +178,7 @@ export function CommuterHomeScreen() {
   const fetchActiveMinibuses = useCallback(async () => {
     try {
       const { data, error } = await supabase
-        .from("minibuses")
+        .from("buses")
         .select("id, plateNumber, currentLocation")
         .eq("status", "active");
       if (error) throw error;
@@ -138,13 +190,39 @@ export function CommuterHomeScreen() {
           .map(Number);
         return { ...bus, currentLocation: { latitude, longitude } };
       });
-      runOnJS(setMinibuses)(formattedData);
+      runOnJS(setBuses)(formattedData);
     } catch (error) {
       if (error instanceof Error) {
         runOnJS(Alert.alert)("Error", "Could not fetch minibus locations.");
       }
     }
   }, []);
+
+  // Handle route selection from route tab
+  useEffect(() => {
+    console.log("=== ROUTE SELECTION DEBUG ===");
+    console.log("Params:", params);
+    console.log("Current selectedRouteId:", selectedRouteId);
+    console.log("Current selectedRouteName:", selectedRouteName);
+
+    // Check if we have route selection params
+    if (params.selectedRouteId && params.selectedRouteName) {
+      console.log("Processing route selection from params");
+      console.log("Setting selectedRouteId to:", params.selectedRouteId);
+      console.log("Setting selectedRouteName to:", params.selectedRouteName);
+
+      setSelectedRouteId(params.selectedRouteId as string);
+      setSelectedRouteName(params.selectedRouteName as string);
+
+      if (params.message) {
+        setSelectedRouteMessage(params.message as string);
+        // Clear the message after 8 seconds (longer for route selection)
+        setTimeout(() => {
+          setSelectedRouteMessage(null);
+        }, 8000);
+      }
+    }
+  }, [params.selectedRouteId, params.selectedRouteName, params.message]);
 
   useEffect(() => {
     translateY.value = withSpring(-BOTTOM_SHEET_MIN_HEIGHT);
@@ -338,7 +416,28 @@ export function CommuterHomeScreen() {
     Keyboard.dismiss();
   };
 
+  const handleResetRouteSelection = () => {
+    console.log("=== RESET ROUTE SELECTION ===");
+    console.log("Clearing all route selection state");
+
+    setSelectedRouteId(null);
+    setSelectedRouteName(null);
+    setSelectedRouteMessage(null);
+    setConfirmedDestination(null);
+    setDropoffLocation("");
+    setSelectedPlace(null);
+    setSearchQuery("");
+    setPredictions([]);
+    setNoResultsFound(false);
+
+    // Clear the params to ensure fresh route selection works
+    router.replace("/(commuter)");
+  };
+
   const trackUserLocation = async () => {
+    setLocationLoading(true);
+    setLocationError(false);
+
     try {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
@@ -348,6 +447,7 @@ export function CommuterHomeScreen() {
           await Location.enableNetworkProviderAsync?.();
         } catch (_) {}
 
+        setLocationError(true);
         Alert.alert(
           "Enable Location Services",
           "Location services are turned off. Please enable them in Settings.",
@@ -368,6 +468,7 @@ export function CommuterHomeScreen() {
         status = req.status;
       }
       if (status !== "granted") {
+        setLocationError(true);
         Alert.alert(
           "Permission Required",
           "We need your permission to access your location. You can enable it in Settings.",
@@ -379,8 +480,32 @@ export function CommuterHomeScreen() {
         return;
       }
 
-      const location = await Location.getCurrentPositionAsync({});
+      // Check for cached location first for faster response
+      const lastKnownPosition = await Location.getLastKnownPositionAsync({
+        maxAge: 30000, // 30 seconds
+        requiredAccuracy: 100, // 100 meters accuracy is acceptable
+      });
+
+      if (lastKnownPosition) {
+        setUserLocation(lastKnownPosition);
+        mapRef.current?.animateToRegion(
+          {
+            latitude: lastKnownPosition.coords.latitude,
+            longitude: lastKnownPosition.coords.longitude,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
+          },
+          1000
+        );
+        setLocationLoading(false);
+      }
+
+      // Get more accurate current position
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced, // Balanced accuracy for faster response
+      });
       setUserLocation(location);
+      setLocationError(false);
       mapRef.current?.animateToRegion(
         {
           latitude: location.coords.latitude,
@@ -392,7 +517,10 @@ export function CommuterHomeScreen() {
       );
     } catch (error) {
       console.error("Failed to track user location:", error);
+      setLocationError(true);
       Alert.alert("Error", "Unable to get your location. Please try again.");
+    } finally {
+      setLocationLoading(false);
     }
   };
 
@@ -454,7 +582,7 @@ export function CommuterHomeScreen() {
               <UserMarker3D />
             </Marker>
           )}
-          {minibuses.map((bus) => (
+          {buses.map((bus) => (
             <Marker
               key={bus.id}
               coordinate={bus.currentLocation}
@@ -511,6 +639,27 @@ export function CommuterHomeScreen() {
           </View>
         )}
         <View style={styles.topContainer}>
+          {/* Route Selection Message */}
+          {selectedRouteMessage && (
+            <View
+              style={[
+                styles.routeMessageContainer,
+                { backgroundColor: primaryColor },
+              ]}
+            >
+              <Ionicons name="bus" size={20} color="#fff" />
+              <Text style={styles.routeMessageText}>
+                {selectedRouteMessage}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setSelectedRouteMessage(null)}
+                style={styles.closeMessageButton}
+              >
+                <Ionicons name="close" size={16} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* ... Search Bar and Predictions ... */}
           <View style={[styles.searchContainer, { backgroundColor }]}>
             <Ionicons name="search" size={20} color={textColor} />
@@ -613,10 +762,25 @@ export function CommuterHomeScreen() {
           </>
         )}
         <TouchableOpacity
-          style={styles.trackButton}
+          style={[
+            styles.trackButton,
+            locationLoading && styles.trackButtonLoading,
+            locationError && styles.trackButtonError,
+          ]}
           onPress={trackUserLocation}
+          disabled={locationLoading}
         >
-          <Ionicons name="navigate-circle-outline" size={24} color="#fff" />
+          {locationLoading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Ionicons
+              name={
+                locationError ? "location-outline" : "navigate-circle-outline"
+              }
+              size={24}
+              color="#fff"
+            />
+          )}
         </TouchableOpacity>
 
         <GestureDetector gesture={panGesture}>
@@ -627,7 +791,10 @@ export function CommuterHomeScreen() {
             onFindRide={handleFindRide}
             textColor={textColor}
             backgroundColor={backgroundColor}
-            minibuses={minibuses}
+            minibuses={buses}
+            hideWhereToButton={!!selectedRouteId}
+            selectedRouteName={selectedRouteName}
+            onResetRoute={handleResetRouteSelection}
           />
         </GestureDetector>
       </View>
@@ -723,6 +890,16 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 30,
     elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  trackButtonLoading: {
+    backgroundColor: "#FF9500",
+  },
+  trackButtonError: {
+    backgroundColor: "#FF3B30",
   },
   bottomSheet: {
     position: "absolute",
@@ -924,6 +1101,30 @@ const styles = StyleSheet.create({
     // Offset by half the icon's size to truly center it
     marginLeft: -20,
     marginTop: -40, // Adjust this to have the tip of the pin at the center
+  },
+  routeMessageContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginBottom: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  routeMessageText: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 14,
+    marginLeft: 8,
+    fontWeight: "500",
+  },
+  closeMessageButton: {
+    padding: 4,
+    marginLeft: 8,
   },
 });
 

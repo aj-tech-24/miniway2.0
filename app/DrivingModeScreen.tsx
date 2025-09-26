@@ -8,6 +8,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Modal,
   StyleSheet,
   Text,
@@ -97,6 +98,7 @@ const DrivingModeScreen = () => {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
+  const scanLineAnimation = useRef(new Animated.Value(0)).current;
 
   // All useEffect hooks here!
   useEffect(() => {
@@ -154,6 +156,27 @@ const DrivingModeScreen = () => {
       setHasPermission(status === "granted");
     })();
   }, []);
+
+  // Animation for scanning line
+  useEffect(() => {
+    if (scanning && !scanned) {
+      const startAnimation = () => {
+        scanLineAnimation.setValue(0);
+        Animated.timing(scanLineAnimation, {
+          toValue: 1,
+          duration: 2000,
+          useNativeDriver: true,
+        }).start(() => {
+          if (scanning && !scanned) {
+            startAnimation();
+          }
+        });
+      };
+      startAnimation();
+    } else {
+      scanLineAnimation.stopAnimation();
+    }
+  }, [scanning, scanned, scanLineAnimation]);
 
   // NEW: Handle scanned QR code
   const handleBarCodeScanned = async ({
@@ -462,10 +485,10 @@ const DrivingModeScreen = () => {
         </View>
       </View>
 
-      {/* NEW: QR Code Scanner Modal */}
+      {/* Improved QR Code Scanner Modal */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={scanning}
         onRequestClose={() => setScanning(false)}
       >
@@ -473,18 +496,91 @@ const DrivingModeScreen = () => {
           <CameraView
             onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
             barcodeScannerSettings={{
-              barcodeTypes: ["qr"], // Changed from Camera.Constants.BarCodeType.qr
+              barcodeTypes: ["qr"],
             }}
             style={StyleSheet.absoluteFillObject}
           />
-          <View style={styles.qrOverlay}>
-            <Text style={styles.qrOverlayText}>Scan Commuter QR Code</Text>
+
+          {/* Top Header */}
+          <View style={styles.qrHeader}>
             <TouchableOpacity
-              style={styles.closeScannerButton}
+              style={styles.qrBackButton}
               onPress={() => setScanning(false)}
             >
-              <Text style={styles.closeScannerButtonText}>Cancel Scan</Text>
+              <Ionicons name="arrow-back" size={24} color="#fff" />
             </TouchableOpacity>
+            <Text style={styles.qrHeaderTitle}>Scan Passenger QR</Text>
+            <View style={styles.qrHeaderSpacer} />
+          </View>
+
+          {/* Scanning Frame Overlay */}
+          <View style={styles.qrOverlay}>
+            {/* Middle Section - Scanning Frame */}
+            <View style={styles.qrMiddleSection}>
+              <View style={styles.qrScanningFrame}>
+                {/* Corner indicators */}
+                <View style={[styles.qrCorner, styles.qrTopLeft]} />
+                <View style={[styles.qrCorner, styles.qrTopRight]} />
+                <View style={[styles.qrCorner, styles.qrBottomLeft]} />
+                <View style={[styles.qrCorner, styles.qrBottomRight]} />
+
+                {/* Scanning line animation */}
+                {!scanned && (
+                  <Animated.View
+                    style={[
+                      styles.qrScanningLine,
+                      {
+                        transform: [
+                          {
+                            translateY: scanLineAnimation.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [-100, 100],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                )}
+              </View>
+            </View>
+
+            {/* Bottom Section */}
+            <View style={styles.qrBottomSection}>
+              <View style={styles.qrStatusContainer}>
+                {scanned ? (
+                  <View style={styles.qrSuccessContainer}>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={48}
+                      color="#4CAF50"
+                    />
+                    <Text style={styles.qrSuccessText}>QR Code Scanned!</Text>
+                    <Text style={styles.qrSuccessSubtext}>
+                      Processing passenger data...
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.qrWaitingContainer}>
+                    <Ionicons name="scan-outline" size={48} color="#fff" />
+                    <Text style={styles.qrWaitingText}>
+                      Waiting for QR Code
+                    </Text>
+                    <Text style={styles.qrWaitingSubtext}>
+                      Make sure the QR code is clearly visible
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <TouchableOpacity
+                style={styles.qrCancelButton}
+                onPress={() => setScanning(false)}
+              >
+                <Ionicons name="close" size={20} color="#fff" />
+                <Text style={styles.qrCancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -552,12 +648,40 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontWeight: "bold",
   },
-  // NEW: Styles for QR Scanner Modal
+  // Improved QR Scanner Modal Styles
   qrScannerContainer: {
     flex: 1,
-    flexDirection: "column",
-    justifyContent: "center",
     backgroundColor: "black",
+  },
+  qrHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    zIndex: 10,
+  },
+  qrBackButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  qrHeaderTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  qrHeaderSpacer: {
+    width: 40,
   },
   qrOverlay: {
     position: "absolute",
@@ -566,25 +690,128 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     justifyContent: "space-between",
+    paddingTop: 120,
+    paddingBottom: 50,
+    paddingHorizontal: 20,
+  },
+  qrMiddleSection: {
+    flex: 2,
+    justifyContent: "center",
     alignItems: "center",
-    paddingVertical: 50,
   },
-  qrOverlayText: {
-    color: "white",
-    fontSize: 20,
+  qrScanningFrame: {
+    width: 250,
+    height: 250,
+    position: "relative",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  qrCorner: {
+    position: "absolute",
+    width: 30,
+    height: 30,
+    borderColor: "#007AFF",
+    borderWidth: 4,
+  },
+  qrTopLeft: {
+    top: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+  },
+  qrTopRight: {
+    top: 0,
+    right: 0,
+    borderLeftWidth: 0,
+    borderBottomWidth: 0,
+  },
+  qrBottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+  },
+  qrBottomRight: {
+    bottom: 0,
+    right: 0,
+    borderLeftWidth: 0,
+    borderTopWidth: 0,
+  },
+  qrScanningLine: {
+    position: "absolute",
+    width: 200,
+    height: 2,
+    backgroundColor: "#007AFF",
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  qrBottomSection: {
+    flex: 1,
+    justifyContent: "flex-end",
+    alignItems: "center",
+  },
+  qrStatusContainer: {
+    alignItems: "center",
+    marginBottom: 30,
+  },
+  qrSuccessContainer: {
+    alignItems: "center",
+    backgroundColor: "rgba(76,175,80,0.1)",
+    paddingHorizontal: 30,
+    paddingVertical: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(76,175,80,0.3)",
+  },
+  qrSuccessText: {
+    color: "#4CAF50",
+    fontSize: 18,
     fontWeight: "bold",
-    backgroundColor: "rgba(0,0,0,0.5)",
-    padding: 10,
-    borderRadius: 5,
+    marginTop: 12,
+    marginBottom: 4,
   },
-  closeScannerButton: {
+  qrSuccessSubtext: {
+    color: "#e0e0e0",
+    fontSize: 14,
+    textAlign: "center",
+  },
+  qrWaitingContainer: {
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: 30,
+    paddingVertical: 20,
+    borderRadius: 16,
+  },
+  qrWaitingText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "bold",
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  qrWaitingSubtext: {
+    color: "#e0e0e0",
+    fontSize: 14,
+    textAlign: "center",
+  },
+  qrCancelButton: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.2)",
-    padding: 15,
-    borderRadius: 30,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
   },
-  closeScannerButtonText: {
-    color: "white",
+  qrCancelButtonText: {
+    color: "#fff",
     fontSize: 16,
+    fontWeight: "500",
+    marginLeft: 8,
   },
 });
 

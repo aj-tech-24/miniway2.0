@@ -20,6 +20,9 @@ type BottomSheetProps = {
   minibuses: Minibus[];
   textColor: string;
   backgroundColor: string;
+  hideWhereToButton?: boolean;
+  selectedRouteName?: string | null;
+  onResetRoute?: () => void;
 };
 
 export function BottomSheet({
@@ -30,47 +33,113 @@ export function BottomSheet({
   minibuses,
   textColor,
   backgroundColor,
+  hideWhereToButton = false,
+  selectedRouteName,
+  onResetRoute,
 }: BottomSheetProps) {
+  // console.log("=== BOTTOMSHEET DEBUG ===");
+  // console.log("hideWhereToButton:", hideWhereToButton);
+  // console.log("onResetRoute:", !!onResetRoute);
+  // console.log("selectedRouteName:", selectedRouteName);
+  // console.log("Should show reset button:", hideWhereToButton && !!onResetRoute);
   return (
     <Animated.View
       style={[styles.bottomSheet, { backgroundColor }, animatedStyle]}
     >
-      <View style={styles.handleBar} />
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <Text style={[styles.bottomSheetTitle, { color: textColor }]}>
-          Where to?
-        </Text>
-        <View
-          style={[
-            styles.inputContainer,
-            { borderColor: "#444", backgroundColor, borderWidth: 1 },
-          ]}
+      {hideWhereToButton && onResetRoute && (
+        <TouchableOpacity
+          style={styles.resetButton}
+          onPress={() => {
+            // console.log("Reset button pressed");
+            onResetRoute();
+          }}
         >
-          <Ionicons
-            name="flag-outline"
-            size={24}
-            style={[styles.inputIcon, { color: "#007AFF" }]}
-          />
-          <TouchableOpacity
-            style={styles.inputTouchable}
-            onPress={onSetDestination}
-          >
-            <Text
+          <Ionicons name="refresh" size={16} color="#ffffff" />
+          <Text style={styles.resetButtonText}>Reset</Text>
+        </TouchableOpacity>
+      )}
+      <View style={styles.handleBar} />
+
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {!hideWhereToButton ? (
+          <>
+            <Text style={[styles.bottomSheetTitle, { color: textColor }]}>
+              Where to?
+            </Text>
+            <View
               style={[
-                styles.inputText,
-                { color: dropoffLocation ? textColor : "#888" },
+                styles.inputContainer,
+                { borderColor: "#444", backgroundColor, borderWidth: 1 },
               ]}
             >
-              {dropoffLocation || "Set destination on map"}
+              <Ionicons
+                name="flag-outline"
+                size={24}
+                style={[styles.inputIcon, { color: "#007AFF" }]}
+              />
+              <TouchableOpacity
+                style={styles.inputTouchable}
+                onPress={onSetDestination}
+              >
+                <Text
+                  style={[
+                    styles.inputText,
+                    { color: dropoffLocation ? textColor : "#888" },
+                  ]}
+                >
+                  {dropoffLocation || "Set destination on map"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.findRideButton}
+              onPress={onFindRide}
+            >
+              <Text style={styles.findRideButtonText}>Find Route</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.bottomSheetTitle, { color: textColor }]}>
+              {selectedRouteName
+                ? `Route: ${selectedRouteName}`
+                : "Selected Route"}
             </Text>
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity
-          style={styles.findRideButton}
-          onPress={onFindRide} // 👈 Add the onPress handler
-        >
-          <Text style={styles.findRideButtonText}>Find Route</Text>
-        </TouchableOpacity>
+            <View
+              style={[
+                styles.inputContainer,
+                { borderColor: "#444", backgroundColor, borderWidth: 1 },
+              ]}
+            >
+              <Ionicons
+                name="flag-outline"
+                size={24}
+                style={[styles.inputIcon, { color: "#007AFF" }]}
+              />
+              <TouchableOpacity
+                style={styles.inputTouchable}
+                onPress={onSetDestination}
+              >
+                <Text
+                  style={[
+                    styles.inputText,
+                    { color: dropoffLocation ? textColor : "#888" },
+                  ]}
+                >
+                  {dropoffLocation || "Pin your destination on the map"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.findRideButton}
+              onPress={onFindRide}
+            >
+              <Text style={styles.findRideButtonText}>
+                Continue to Bus Selection
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
         <View style={styles.nearbyContainer}>
           <Text style={[styles.nearbyTitle, { color: textColor }]}>
             Nearby Minibuses
@@ -370,5 +439,34 @@ const styles = StyleSheet.create({
     // Offset by half the icon's size to truly center it
     marginLeft: -20,
     marginTop: -40, // Adjust this to have the tip of the pin at the center
+  },
+  routeHeaderContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  resetButton: {
+    position: "absolute",
+    top: 10,
+    right: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#D63D2F",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 25,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+    zIndex: 10,
+  },
+  resetButtonText: {
+    marginLeft: 6,
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "bold",
   },
 });
