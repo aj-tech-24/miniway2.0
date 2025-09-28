@@ -382,17 +382,71 @@ const DriverScreen = () => {
     //   coordinates.length
     // );
 
-    // 2. Fetch the active trip for this driver and route using RPC
+    // 2. Check for existing trips (including waiting status) for this driver
     let tripId: string | undefined;
     let busId: string | undefined;
     let currentTripLocation = { latitude: 0, longitude: 0 };
     let passengersOnTrip = 0;
 
-    const { data: activeTripData, error: activeTripError } = await supabase
-      .rpc("get_active_driver_trip", {
-        p_driver_id: currentUserId,
-      })
-      .single<ActiveTripResponse>();
+    // First, let's check ALL trips for this driver to see what's in the database
+    const { data: allTrips, error: allTripsError } = await supabase
+      .from("trips")
+      .select("id, bus_id, status, current_location, started_at")
+      .eq("driver_id", currentUserId)
+      .order("started_at", { ascending: false })
+      .limit(10);
+
+    console.log("🔍 DEBUG: All trips for driver");
+    console.log("All trips query result:", allTrips);
+    console.log("All trips query error:", allTripsError);
+    if (allTrips && allTrips.length > 0) {
+      console.log("📊 All trips found:");
+      allTrips.forEach((trip, index) => {
+        console.log(`  Trip ${index + 1}:`, {
+          id: trip.id,
+          bus_id: trip.bus_id,
+          status: trip.status,
+          started_at: trip.started_at,
+          has_location: !!trip.current_location,
+        });
+      });
+    } else {
+      console.log("❌ No trips found for this driver at all");
+    }
+
+    // Now, try to get any existing trip for this driver (including waiting status)
+    const { data: existingTrips, error: existingTripsError } = await supabase
+      .from("trips")
+      .select("id, bus_id, status, current_location")
+      .eq("driver_id", currentUserId)
+      .in("status", ["waiting", "ongoing"])
+      .order("started_at", { ascending: false })
+      .limit(1);
+
+    // Debug logging
+    console.log("🔍 DEBUG: Trip Detection Results");
+    console.log("Driver ID:", currentUserId);
+    console.log("Existing trips query result:", existingTrips);
+    console.log("Query error:", existingTripsError);
+    console.log("Number of trips found:", existingTrips?.length || 0);
+
+    if (existingTrips && existingTrips.length > 0) {
+      console.log("✅ Found existing trip(s):");
+      existingTrips.forEach((trip, index) => {
+        console.log(`  Trip ${index + 1}:`, {
+          id: trip.id,
+          bus_id: trip.bus_id,
+          status: trip.status,
+          has_location: !!trip.current_location,
+        });
+      });
+    } else {
+      console.log("❌ No existing trips found");
+    }
+
+    const activeTripData =
+      existingTrips && existingTrips.length > 0 ? existingTrips[0] : null;
+    const activeTripError = existingTripsError;
 
     // Function to create new trip
     const createNewTrip = async () => {
@@ -532,16 +586,10 @@ const DriverScreen = () => {
       });
     };
 
-    // Handle existing trip
-    if (activeTripData) {
-      // Active trip found, use its data
-      tripId = activeTripData.id;
-      busId = activeTripData.bus_id;
-      if (
-        activeTripData.current_location &&
-        activeTripData.current_location.coordinates
-      ) {
-        const [lng, lat] = activeTripData.current_location.coordinates;
+    // Helper function to continue with existing trip
+    const continueWithExistingTrip = async (tripData: any) => {
+      if (tripData?.current_location && tripData.current_location.coordinates) {
+        const [lng, lat] = tripData.current_location.coordinates;
         currentTripLocation = { latitude: lat, longitude: lng };
       } else if (driverLocation) {
         currentTripLocation = driverLocation;
@@ -557,33 +605,61 @@ const DriverScreen = () => {
         setLoading(false);
         showAlert(
           "Bus Data Error",
-          "Unable to load bus information for your active trip. Please try again.",
+          "Unable to load bus information for your existing trip. Please try again.",
           "error"
         );
-        // console.log(
-        //   "DEBUG index.tsx: Failed to fetch bus data for active trip error:",
-        //   existingBusError
-        // ); // Added log
         return;
       }
       passengersOnTrip = existingBusData.passengers || 0;
-      // console.log(
-      //   "DEBUG index.tsx: Active trip found. tripId:",
-      //   tripId,
-      //   "busId:",
-      //   busId
-      // ); // Added log
 
       // Continue with trip setup for existing trip
       continueTripSetup();
+    };
+
+    // Handle existing trip
+    if (activeTripData) {
+      console.log("🎯 DEBUG: Using existing trip");
+      console.log("Trip ID:", activeTripData.id);
+      console.log("Bus ID:", activeTripData.bus_id);
+      console.log("Status:", activeTripData.status);
+
+      // Existing trip found, use its data
+      tripId = activeTripData.id;
+      busId = activeTripData.bus_id;
+
+      // Show appropriate message based on trip status
+      if (activeTripData.status === "waiting") {
+        console.log(
+          "📋 DEBUG: Showing 'Resuming Trip' alert for waiting status"
+        );
+        showAlert(
+          "Resuming Trip",
+          `You have an existing trip with "waiting" status. Continuing with that trip.`,
+          "info",
+          async () => {
+            // Continue with existing trip setup
+            await continueWithExistingTrip(activeTripData);
+          },
+          "Continue"
+        );
+      } else {
+        console.log("🚀 DEBUG: Continuing directly with ongoing trip");
+        // Trip is ongoing, continue directly
+        await continueWithExistingTrip(activeTripData);
+      }
+      return;
     }
 
     // Check if we need to create a new trip
     if (activeTripError || !activeTripData) {
-      // No active trip found, create a new one
+      console.log("🆕 DEBUG: No existing trip found, creating new one");
+      console.log("Active trip error:", activeTripError);
+      console.log("Active trip data:", activeTripData);
+
+      // No existing trip found, create a new one
       showAlert(
         "Creating New Trip",
-        "No active trip found. We're creating a new trip for you now.",
+        "No existing trip found. We're creating a new trip for you now.",
         "info",
         () => {
           // Continue with trip creation after user confirms

@@ -30,6 +30,7 @@ export function RouteScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const { theme } = useAppTheme();
   const backgroundColor = useThemeColor({}, "background");
@@ -40,7 +41,7 @@ export function RouteScreen() {
 
   const fetchRoutes = useCallback(async () => {
     try {
-      // Fetch the new columns as well
+      setError(null);
       const { data, error } = await supabase
         .from("routes")
         .select("id, name, start_address, end_address")
@@ -50,6 +51,7 @@ export function RouteScreen() {
       setAllRoutes(data || []);
     } catch (error) {
       console.error("Error fetching routes:", error);
+      setError("Failed to load routes. Please try again.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -73,59 +75,149 @@ export function RouteScreen() {
     );
   }, [allRoutes, searchQuery]);
 
-  // A redesigned, more informative route card component
   const renderRouteCard = ({ item }: { item: Route }) => (
     <TouchableOpacity
-      style={[styles.card, { backgroundColor, borderColor: separatorColor }]}
+      style={[styles.routeCard, { backgroundColor }]}
       onPress={() =>
         router.push({
-          pathname: "/(commuter)",
+          pathname: "/select-destination",
           params: {
             selectedRouteId: item.id,
             selectedRouteName: item.name,
-            message: `Selected route: ${item.name}. Please set your pickup and destination to view buses for this route.`,
           },
         })
       }
+      activeOpacity={0.7}
     >
-      <View style={[styles.cardHeader, { borderBottomColor: separatorColor }]}>
-        <Ionicons name="bus-outline" size={24} color={primaryColor} />
-        <Text style={[styles.cardTitle, { color: textColor }]}>
-          {item.name}
-        </Text>
-      </View>
-      <View style={styles.cardBody}>
-        <View style={styles.addressLine}>
-          <Text style={[styles.addressLabel, { color: placeholderTextColor }]}>
-            FROM:
-          </Text>
-          <Text style={[styles.addressText, { color: textColor }]}>
-            {item.start_address || "N/A"}
-          </Text>
+      {/* Card Header */}
+      <View style={styles.cardHeader}>
+        <View style={styles.routeInfo}>
+          <View
+            style={[
+              styles.routeIconContainer,
+              { backgroundColor: "rgba(0, 122, 255, 0.1)" },
+            ]}
+          >
+            <Ionicons name="bus" size={20} color={primaryColor} />
+          </View>
+          <View style={styles.routeDetails}>
+            <Text
+              style={[styles.routeName, { color: textColor }]}
+              numberOfLines={1}
+            >
+              {item.name}
+            </Text>
+            <Text
+              style={[styles.routeSubtitle, { color: placeholderTextColor }]}
+            >
+              Bus Route
+            </Text>
+          </View>
         </View>
-        <View style={styles.addressLine}>
-          <Text style={[styles.addressLabel, { color: placeholderTextColor }]}>
-            TO:
-          </Text>
-          <Text style={[styles.addressText, { color: textColor }]}>
-            {item.end_address || "N/A"}
-          </Text>
+        <View style={[styles.selectButton, { backgroundColor: primaryColor }]}>
+          <Ionicons name="arrow-forward" size={16} color="#fff" />
         </View>
       </View>
+
+      {/* Route Details */}
+      <View style={styles.routeDetailsContainer}>
+        <View style={styles.locationRow}>
+          <View style={[styles.locationDot, { backgroundColor: "#34C759" }]} />
+          <View style={styles.locationInfo}>
+            <Text
+              style={[styles.locationLabel, { color: placeholderTextColor }]}
+            >
+              From
+            </Text>
+            <Text
+              style={[styles.locationText, { color: textColor }]}
+              numberOfLines={2}
+            >
+              {item.start_address || "Starting point not specified"}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.connectionLine} />
+
+        <View style={styles.locationRow}>
+          <View style={[styles.locationDot, { backgroundColor: "#FF3B30" }]} />
+          <View style={styles.locationInfo}>
+            <Text
+              style={[styles.locationLabel, { color: placeholderTextColor }]}
+            >
+              To
+            </Text>
+            <Text
+              style={[styles.locationText, { color: textColor }]}
+              numberOfLines={2}
+            >
+              {item.end_address || "Destination not specified"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Card Footer */}
       <View style={[styles.cardFooter, { borderTopColor: separatorColor }]}>
-        <Text style={[styles.footerText, { color: primaryColor }]}>
-          View Details
-        </Text>
-        <Ionicons name="arrow-forward" size={16} color={primaryColor} />
+        <View style={styles.footerLeft}>
+          <Ionicons
+            name="information-circle-outline"
+            size={16}
+            color={placeholderTextColor}
+          />
+          <Text style={[styles.footerText, { color: placeholderTextColor }]}>
+            Tap to view buses and schedule
+          </Text>
+        </View>
+        <View style={styles.footerRight}>
+          <Ionicons name="chevron-forward" size={16} color={primaryColor} />
+        </View>
       </View>
     </TouchableOpacity>
   );
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" />
-      </View>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor }]}
+        edges={["top", "left", "right"]}
+      >
+        <StatusBar style={theme === "dark" ? "light" : "dark"} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={[styles.loadingText, { color: textColor }]}>
+            Loading available routes...
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView
+        style={[styles.container, { backgroundColor }]}
+        edges={["top", "left", "right"]}
+      >
+        <StatusBar style={theme === "dark" ? "light" : "dark"} />
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={60} color="#FF3B30" />
+          <Text style={[styles.errorTitle, { color: textColor }]}>
+            Oops! Something went wrong
+          </Text>
+          <Text style={[styles.errorMessage, { color: placeholderTextColor }]}>
+            {error}
+          </Text>
+          <TouchableOpacity
+            style={[styles.retryButton, { backgroundColor: primaryColor }]}
+            onPress={fetchRoutes}
+          >
+            <Ionicons name="refresh" size={20} color="#fff" />
+            <Text style={styles.retryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
@@ -135,19 +227,40 @@ export function RouteScreen() {
       edges={["top", "left", "right"]}
     >
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
+
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <View style={styles.headerIconContainer}>
+            <Ionicons name="map-outline" size={28} color="#007AFF" />
+          </View>
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.headerTitle}>Explore Routes</Text>
+            <Text style={styles.headerSubtitle}>
+              {refreshing ? "Refreshing..." : "Find your perfect bus route"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
       <FlatList
         data={filteredRoutes}
         renderItem={renderRouteCard}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#007AFF"]}
+            tintColor="#007AFF"
+            title="Pull to refresh routes"
+            titleColor="#8e8e93"
+            progressBackgroundColor="#ffffff"
+          />
         }
-        contentContainerStyle={{ paddingHorizontal: 20 }}
+        contentContainerStyle={styles.listContent}
         ListHeaderComponent={
-          <>
-            <Text style={[styles.title, { color: textColor }]}>
-              Explore Routes
-            </Text>
+          <View style={styles.searchSection}>
             <View
               style={[
                 styles.searchContainer,
@@ -162,16 +275,57 @@ export function RouteScreen() {
                 value={searchQuery}
                 onChangeText={setSearchQuery}
               />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery("")}
+                  style={styles.clearButton}
+                >
+                  <Ionicons
+                    name="close-circle"
+                    size={20}
+                    color={placeholderTextColor}
+                  />
+                </TouchableOpacity>
+              )}
             </View>
-          </>
-        }
-        ListEmptyComponent={
-          <View style={styles.centered}>
-            <Text style={[styles.emptyText, { color: placeholderTextColor }]}>
-              No routes match your search.
-            </Text>
+            {filteredRoutes.length > 0 && (
+              <Text
+                style={[styles.resultsCount, { color: placeholderTextColor }]}
+              >
+                {filteredRoutes.length} route
+                {filteredRoutes.length !== 1 ? "s" : ""} found
+              </Text>
+            )}
           </View>
         }
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Ionicons name="bus-outline" size={80} color="#d1d1d6" />
+            <Text style={[styles.emptyTitle, { color: textColor }]}>
+              {searchQuery ? "No routes found" : "No routes available"}
+            </Text>
+            <Text
+              style={[styles.emptySubtitle, { color: placeholderTextColor }]}
+            >
+              {searchQuery
+                ? `No routes match "${searchQuery}". Try a different search term.`
+                : "There are currently no bus routes available."}
+            </Text>
+            {searchQuery && (
+              <TouchableOpacity
+                style={[
+                  styles.clearSearchButton,
+                  { backgroundColor: primaryColor },
+                ]}
+                onPress={() => setSearchQuery("")}
+              >
+                <Ionicons name="refresh" size={16} color="#fff" />
+                <Text style={styles.clearSearchButtonText}>Clear Search</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        }
+        showsVerticalScrollIndicator={false}
       />
     </SafeAreaView>
   );
@@ -180,98 +334,259 @@ export function RouteScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f2f2f7",
+    backgroundColor: "#f8f9fa",
   },
-  centered: {
+  header: {
+    backgroundColor: "#007AFF",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+  },
+  headerContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  headerTextContainer: {
+    flex: 1,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.8)",
+    marginTop: 2,
+  },
+  listContent: {
+    paddingBottom: 100,
+  },
+  loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 50,
+    paddingHorizontal: 20,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#1c1c1e",
-    paddingVertical: 20,
+  loadingText: {
+    fontSize: 16,
+    marginTop: 16,
+    textAlign: "center",
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    marginTop: 16,
+    textAlign: "center",
+  },
+  errorMessage: {
+    fontSize: 16,
+    marginTop: 8,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  retryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+  retryButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  searchSection: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 10,
   },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#fff",
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    marginBottom: 20,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderWidth: 1,
-    borderColor: "#e5e5ea",
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   searchInput: {
     flex: 1,
-    height: 44,
-    fontSize: 17,
-    marginLeft: 10,
+    fontSize: 16,
+    marginLeft: 12,
+    marginRight: 8,
   },
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 20,
+  clearButton: {
+    padding: 4,
+  },
+  resultsCount: {
+    fontSize: 14,
+    fontWeight: "500",
+    marginTop: 8,
+    textAlign: "center",
+  },
+  routeCard: {
+    marginHorizontal: 20,
     marginBottom: 16,
+    borderRadius: 16,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.1,
     shadowRadius: 10,
-    elevation: 3,
-    borderWidth: 1,
-    borderColor: "#e5e5ea",
+    elevation: 5,
+    overflow: "hidden",
   },
   cardHeader: {
     flexDirection: "row",
     alignItems: "center",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e5ea",
-    paddingBottom: 12,
+    justifyContent: "space-between",
+    padding: 20,
+    paddingBottom: 16,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginLeft: 12,
-    color: "#1c1c1e",
-  },
-  cardBody: {
-    paddingVertical: 15,
-  },
-  addressLine: {
+  routeInfo: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
-  },
-  addressLabel: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#8e8e93",
-    width: 50,
-  },
-  addressText: {
-    fontSize: 16,
-    color: "#3c3c43",
     flex: 1,
+  },
+  routeIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  routeDetails: {
+    flex: 1,
+  },
+  routeName: {
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  routeSubtitle: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  selectButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  routeDetailsContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  locationRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 12,
+  },
+  locationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 6,
+    marginRight: 12,
+  },
+  locationInfo: {
+    flex: 1,
+  },
+  locationLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    marginBottom: 2,
+  },
+  locationText: {
+    fontSize: 14,
+    fontWeight: "500",
+    lineHeight: 20,
+  },
+  connectionLine: {
+    width: 2,
+    height: 20,
+    backgroundColor: "#E5E5E7",
+    marginLeft: 3,
+    marginBottom: 12,
   },
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
-    paddingTop: 12,
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
     borderTopWidth: 1,
-    borderTopColor: "#e5e5ea",
+    backgroundColor: "rgba(0, 0, 0, 0.02)",
+  },
+  footerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  footerRight: {
+    alignItems: "center",
   },
   footerText: {
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: "500",
-    color: "#007AFF",
-    marginRight: 5,
+    marginLeft: 6,
   },
-  emptyText: {
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    marginTop: 16,
+    textAlign: "center",
+  },
+  emptySubtitle: {
     fontSize: 16,
-    color: "#8e8e93",
+    marginTop: 8,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  clearSearchButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginTop: 16,
+  },
+  clearSearchButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    marginLeft: 6,
   },
 });
 

@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Animated,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -97,6 +98,11 @@ const DrivingModeScreen = () => {
   // NEW: Collapsible header state
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
 
+  // Pickup Request Management
+  const [pickupRequests, setPickupRequests] = useState<any[]>([]);
+  const [newPickupNotification, setNewPickupNotification] = useState<any>(null);
+  const [showPickupNotification, setShowPickupNotification] = useState(false);
+
   // Custom Alert State
   const [showCustomAlert, setShowCustomAlert] = useState(false);
   const [alertConfig, setAlertConfig] = useState({
@@ -179,6 +185,139 @@ const DrivingModeScreen = () => {
   const [scanned, setScanned] = useState(false);
   const scanLineAnimation = useRef(new Animated.Value(0)).current;
 
+  // Track scanned passengers to prevent duplicate scans
+  const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(
+    new Set()
+  );
+
+  // Function to fetch active pickup requests for this bus
+  const fetchPickupRequests = async () => {
+    if (!busId) return;
+
+    try {
+      const { data: requests, error } = await supabase
+        .from("pickup_requests")
+        .select(
+          `
+          id,
+          commuter_id,
+          trip_id,
+          pickup_lat,
+          pickup_lng,
+          dest_lat,
+          dest_lng,
+          status,
+          created_at,
+          commuter_name,
+          commuter_phone,
+          notes
+        `
+        )
+        .eq("bus_id", busId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("Error fetching pickup requests:", error);
+        return;
+      }
+
+      setPickupRequests(requests || []);
+    } catch (error) {
+      console.error("Error in fetchPickupRequests:", error);
+    }
+  };
+
+  // Function to handle new pickup request notification
+  const handleNewPickupRequest = (request: any) => {
+    setNewPickupNotification(request);
+    setShowPickupNotification(true);
+
+    // Auto-hide notification after 10 seconds
+    setTimeout(() => {
+      setShowPickupNotification(false);
+      setNewPickupNotification(null);
+    }, 10000);
+  };
+
+  // Function to accept a pickup request
+  const acceptPickupRequest = async (requestId: string) => {
+    try {
+      const { error } = await supabase
+        .from("pickup_requests")
+        .update({
+          status: "accepted",
+          accepted_at: new Date().toISOString(),
+        })
+        .eq("id", requestId);
+
+      if (error) {
+        console.error("Error accepting pickup request:", error);
+        showAlert(
+          "Accept Failed",
+          "Unable to accept the pickup request. Please try again.",
+          "error"
+        );
+        return;
+      }
+
+      // Refresh pickup requests
+      await fetchPickupRequests();
+
+      showAlert(
+        "Pickup Request Accepted! ✅",
+        "You have accepted the pickup request. The passenger will be notified.",
+        "success"
+      );
+    } catch (error) {
+      console.error("Error in acceptPickupRequest:", error);
+      showAlert(
+        "Unexpected Error",
+        "An unexpected error occurred. Please try again.",
+        "error"
+      );
+    }
+  };
+
+  // Function to decline a pickup request
+  const declinePickupRequest = async (requestId: string) => {
+    try {
+      const { error } = await supabase
+        .from("pickup_requests")
+        .update({
+          status: "declined",
+          declined_at: new Date().toISOString(),
+        })
+        .eq("id", requestId);
+
+      if (error) {
+        console.error("Error declining pickup request:", error);
+        showAlert(
+          "Decline Failed",
+          "Unable to decline the pickup request. Please try again.",
+          "error"
+        );
+        return;
+      }
+
+      // Refresh pickup requests
+      await fetchPickupRequests();
+
+      showAlert(
+        "Pickup Request Declined",
+        "The pickup request has been declined. The passenger will be notified.",
+        "info"
+      );
+    } catch (error) {
+      console.error("Error in declinePickupRequest:", error);
+      showAlert(
+        "Unexpected Error",
+        "An unexpected error occurred. Please try again.",
+        "error"
+      );
+    }
+  };
+
   // NEW: Function to find opposite route buses
   const findOppositeRouteBuses = async () => {
     try {
@@ -203,7 +342,6 @@ const DrivingModeScreen = () => {
         .single();
 
       if (oppositeError || !oppositeRoute) {
-        console.log("No opposite route found");
         setOppositeRouteBuses([]);
         return;
       }
@@ -326,27 +464,89 @@ const DrivingModeScreen = () => {
     findOppositeRouteBuses();
   }, [routeName]);
 
+  // Fetch pickup requests on component mount
+  useEffect(() => {
+    if (busId) {
+      fetchPickupRequests();
+    }
+  }, [busId]);
+
+  // Initialize scanned passengers from database
+  useEffect(() => {
+    const initializeScannedPassengers = async () => {
+      if (!busId || !tripId) return;
+
+      try {
+        const { data: boardedPassengers, error } = await supabase
+          .from("trip_passengers")
+          .select("passenger_id")
+          .eq("bus_id", busId)
+          .eq("trip_id", tripId)
+          .eq("status", "boarded");
+
+        if (error) {
+          console.error("Error fetching boarded passengers:", error);
+          return;
+        }
+
+        if (boardedPassengers && boardedPassengers.length > 0) {
+          const passengerIds = new Set(
+            boardedPassengers.map((p) => p.passenger_id)
+          );
+          setScannedPassengers(passengerIds);
+        }
+      } catch (error) {
+        console.error("Error initializing scanned passengers:", error);
+      }
+    };
+
+    initializeScannedPassengers();
+  }, [busId, tripId]);
+
+  // Set up real-time subscription for pickup requests
+  useEffect(() => {
+    if (!busId) return;
+
+    const subscription = supabase
+      .channel(`pickup_requests_${busId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "pickup_requests",
+          filter: `bus_id=eq.${busId}`,
+        },
+        (payload) => {
+          handleNewPickupRequest(payload.new);
+          // Refresh the pickup requests list
+          fetchPickupRequests();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "pickup_requests",
+          filter: `bus_id=eq.${busId}`,
+        },
+        (payload) => {
+          // Refresh the pickup requests list
+          fetchPickupRequests();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [busId]);
+
   // NEW: Recalculate departure time when passenger count or opposite buses change
   useEffect(() => {
     calculateDynamicDepartureTime();
   }, [passengerCount, oppositeRouteBuses, parsedCapacity]);
-
-  // Debug: Log current state
-  useEffect(() => {
-    console.log("DrivingModeScreen Debug:", {
-      tripStatus,
-      canStartNow,
-      passengerCount,
-      parsedCapacity,
-      oppositeRouteBuses: oppositeRouteBuses.length,
-    });
-  }, [
-    tripStatus,
-    canStartNow,
-    passengerCount,
-    parsedCapacity,
-    oppositeRouteBuses,
-  ]);
 
   // NEW: Initialize trip status from database
   useEffect(() => {
@@ -425,13 +625,10 @@ const DrivingModeScreen = () => {
         payload.commuterId &&
         payload.busId === busId
       ) {
-        console.log("QR Scan Payload:", payload);
-
         // Handle tripId - create one if missing
         let tripId = payload.tripId;
 
         if (!tripId || tripId === "will-be-created") {
-          console.log("No tripId in QR, creating new trip for bus:", busId);
           const { data: newTrip, error: createError } = await supabase
             .from("trips")
             .insert({
@@ -451,41 +648,77 @@ const DrivingModeScreen = () => {
             return;
           }
           tripId = newTrip.id;
-          console.log("Created new trip:", tripId);
         }
 
-        // Insert boarding record into trip_passengers table
-        const boardingData = {
-          bus_id: busId,
-          passenger_id: payload.commuterId,
-          trip_id: tripId,
-          pickup_lat: payload.pickup.latitude,
-          pickup_lng: payload.pickup.longitude,
-          dest_lat: payload.dest.latitude,
-          dest_lng: payload.dest.longitude,
-          status: "boarded",
-          boarded_at: new Date().toISOString(),
-        };
-
-        console.log("Inserting boarding record:", boardingData);
-
-        const { data: insertedRecord, error: boardingError } = await supabase
+        // Check if trip_passengers record already exists
+        const { data: existingRecord, error: checkError } = await supabase
           .from("trip_passengers")
-          .insert(boardingData)
-          .select()
-          .single();
+          .select("id, status")
+          .eq("bus_id", busId)
+          .eq("passenger_id", payload.commuterId)
+          .eq("trip_id", tripId)
+          .maybeSingle();
 
-        if (boardingError) {
-          console.error("Error inserting boarding record:", boardingError);
+        if (!existingRecord || checkError) {
+          console.error("No trip_passengers record found for this passenger:", {
+            busId,
+            passengerId: payload.commuterId,
+            tripId,
+            error: checkError,
+          });
           showAlert(
             "Boarding Failed",
-            "Unable to record passenger boarding. Please try scanning the QR code again.",
+            "No pickup request found for this passenger. Please make sure the passenger has requested a pickup first.",
             "error"
           );
           return;
         }
 
-        console.log("Successfully inserted boarding record:", insertedRecord);
+        // Check if passenger is already boarded
+        if (existingRecord.status === "boarded") {
+          showAlert(
+            "Already Boarded",
+            "This passenger has already been boarded. No need to scan again.",
+            "info"
+          );
+          return;
+        }
+
+        // Check if passenger has already been scanned in this session
+        if (scannedPassengers.has(payload.commuterId)) {
+          showAlert(
+            "Already Scanned",
+            "This passenger has already been scanned in this session. No need to scan again.",
+            "info"
+          );
+          return;
+        }
+
+        // Update existing record to boarded status
+
+        const { data: updatedRecord, error: updateError } = await supabase
+          .from("trip_passengers")
+          .update({
+            pickup_lat: payload.pickup.latitude,
+            pickup_lng: payload.pickup.longitude,
+            dest_lat: payload.dest.latitude,
+            dest_lng: payload.dest.longitude,
+            status: "boarded",
+            boarded_at: new Date().toISOString(),
+          })
+          .eq("id", existingRecord.id)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.error("Error updating boarding record:", updateError);
+          showAlert(
+            "Boarding Failed",
+            "Unable to update passenger boarding record. Please try scanning the QR code again.",
+            "error"
+          );
+          return;
+        }
 
         // Check current trip status and update to 'ongoing' if 'waiting'
         const { data: currentTrip, error: fetchError } = await supabase
@@ -523,6 +756,9 @@ const DrivingModeScreen = () => {
             );
           }
         }
+
+        // Add passenger to scanned passengers set
+        setScannedPassengers((prev) => new Set(prev).add(payload.commuterId));
 
         // Increment passenger count and show success
         setPassengerCount((p) => Math.min(p + 1, parsedCapacity));
@@ -750,6 +986,10 @@ const DrivingModeScreen = () => {
           }
 
           console.log("Successfully ended trip and reset bus");
+
+          // Reset scanned passengers for next trip
+          setScannedPassengers(new Set());
+
           showAlert(
             isTripOfficiallyStarted
               ? "Trip Completed! ✅"
@@ -858,6 +1098,9 @@ const DrivingModeScreen = () => {
                     <Text style={styles.statusValue}>
                       {passengerCount}/{parsedCapacity}
                     </Text>
+                    <Text style={styles.statusSubtext}>
+                      {scannedPassengers.size} scanned
+                    </Text>
                   </View>
                 </View>
 
@@ -903,7 +1146,7 @@ const DrivingModeScreen = () => {
               <View style={styles.quickInfoItem}>
                 <Ionicons name="people" size={16} color="#fff" />
                 <Text style={styles.quickInfoText}>
-                  {passengerCount}/{parsedCapacity}
+                  {passengerCount}/{parsedCapacity} ({scannedPassengers.size})
                 </Text>
               </View>
               <View style={styles.quickInfoItem}>
@@ -961,7 +1204,76 @@ const DrivingModeScreen = () => {
               <Ionicons name="bus" size={32} color="#007AFF" />
             </Marker>
           )}
+
+          {/* Pickup Request Markers */}
+          {pickupRequests.map((request) => (
+            <Marker
+              key={request.id}
+              coordinate={{
+                latitude: request.pickup_lat,
+                longitude: request.pickup_lng,
+              }}
+              title={`Pickup Request - ${request.commuter_name || "Unknown"}`}
+              description={`Phone: ${request.commuter_phone || "N/A"}`}
+              pinColor="#FF9500"
+            >
+              <View style={styles.pickupMarker}>
+                <Ionicons name="person" size={20} color="#fff" />
+              </View>
+            </Marker>
+          ))}
         </MapView>
+
+        {/* Pickup Requests Panel */}
+        {pickupRequests.length > 0 && (
+          <View style={styles.pickupRequestsPanel}>
+            <View style={styles.pickupRequestsHeader}>
+              <Ionicons name="people" size={20} color="#FF9500" />
+              <Text style={styles.pickupRequestsTitle}>
+                Pickup Requests ({pickupRequests.length})
+              </Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.pickupRequestsScroll}
+            >
+              {pickupRequests.map((request) => (
+                <View key={request.id} style={styles.pickupRequestCard}>
+                  <View style={styles.pickupRequestInfo}>
+                    <Text style={styles.pickupRequestName}>
+                      {request.commuter_name || "Unknown"}
+                    </Text>
+                    <Text style={styles.pickupRequestPhone}>
+                      {request.commuter_phone || "No phone"}
+                    </Text>
+                    {request.notes && (
+                      <Text style={styles.pickupRequestNotes}>
+                        Note: {request.notes}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={styles.pickupRequestActions}>
+                    <TouchableOpacity
+                      style={[styles.pickupActionButton, styles.acceptButton]}
+                      onPress={() => acceptPickupRequest(request.id)}
+                    >
+                      <Ionicons name="checkmark" size={16} color="#fff" />
+                      <Text style={styles.acceptButtonText}>Accept</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.pickupActionButton, styles.declineButton]}
+                      onPress={() => declinePickupRequest(request.id)}
+                    >
+                      <Ionicons name="close" size={16} color="#fff" />
+                      <Text style={styles.declineButtonText}>Decline</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Enhanced Action Buttons */}
         <View style={styles.actionContainer}>
@@ -1142,6 +1454,73 @@ const DrivingModeScreen = () => {
         </View>
       </Modal>
 
+      {/* New Pickup Request Notification */}
+      <Modal
+        visible={showPickupNotification}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowPickupNotification(false)}
+      >
+        <View style={styles.notificationOverlay}>
+          <View style={styles.notificationContainer}>
+            <View style={styles.notificationHeader}>
+              <View style={styles.notificationIconContainer}>
+                <Ionicons name="person-add" size={24} color="#fff" />
+              </View>
+              <Text style={styles.notificationTitle}>New Pickup Request!</Text>
+            </View>
+
+            {newPickupNotification && (
+              <>
+                <Text style={styles.notificationMessage}>
+                  {newPickupNotification.commuter_name || "Unknown passenger"}
+                  wants to be picked up
+                </Text>
+                <Text style={styles.notificationDetails}>
+                  Phone: {newPickupNotification.commuter_phone || "N/A"}
+                </Text>
+                {newPickupNotification.notes && (
+                  <Text style={styles.notificationNotes}>
+                    Note: {newPickupNotification.notes}
+                  </Text>
+                )}
+
+                <View style={styles.notificationActions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.notificationButton,
+                      styles.declineNotificationButton,
+                    ]}
+                    onPress={() => {
+                      setShowPickupNotification(false);
+                      setNewPickupNotification(null);
+                    }}
+                  >
+                    <Text style={styles.declineNotificationText}>Dismiss</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.notificationButton,
+                      styles.acceptNotificationButton,
+                    ]}
+                    onPress={() => {
+                      setShowPickupNotification(false);
+                      if (newPickupNotification) {
+                        acceptPickupRequest(newPickupNotification.id);
+                      }
+                      setNewPickupNotification(null);
+                    }}
+                  >
+                    <Text style={styles.acceptNotificationText}>Accept</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Custom Alert Modal */}
       <Modal
         visible={showCustomAlert}
@@ -1293,6 +1672,12 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "bold",
     marginTop: 2,
+  },
+  statusSubtext: {
+    fontSize: 10,
+    color: "#e6f0fa",
+    marginTop: 2,
+    fontWeight: "400",
   },
   departureSection: {
     flexDirection: "row",
@@ -1667,6 +2052,204 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   alertConfirmButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  // Pickup Request Styles
+  pickupMarker: {
+    backgroundColor: "#FF9500",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  pickupRequestsPanel: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E5E7",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  pickupRequestsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  pickupRequestsTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#333",
+    marginLeft: 8,
+  },
+  pickupRequestsScroll: {
+    maxHeight: 120,
+  },
+  pickupRequestCard: {
+    backgroundColor: "#F8F9FA",
+    borderRadius: 12,
+    padding: 12,
+    marginRight: 12,
+    minWidth: 200,
+    borderWidth: 1,
+    borderColor: "#E5E5E7",
+  },
+  pickupRequestInfo: {
+    marginBottom: 8,
+  },
+  pickupRequestName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 2,
+  },
+  pickupRequestPhone: {
+    fontSize: 12,
+    color: "#666",
+    marginBottom: 4,
+  },
+  pickupRequestNotes: {
+    fontSize: 11,
+    color: "#8e8e93",
+    fontStyle: "italic",
+  },
+  pickupRequestActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  pickupActionButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  acceptButton: {
+    backgroundColor: "#34C759",
+  },
+  declineButton: {
+    backgroundColor: "#FF3B30",
+  },
+  acceptButtonText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: 4,
+  },
+  declineButtonText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: 4,
+  },
+
+  // Notification Styles
+  notificationOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  notificationContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  notificationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  notificationIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#FF9500",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  notificationTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    flex: 1,
+  },
+  notificationMessage: {
+    fontSize: 16,
+    color: "#333",
+    marginBottom: 8,
+    lineHeight: 22,
+  },
+  notificationDetails: {
+    fontSize: 14,
+    color: "#666",
+    marginBottom: 8,
+  },
+  notificationNotes: {
+    fontSize: 14,
+    color: "#8e8e93",
+    fontStyle: "italic",
+    marginBottom: 20,
+  },
+  notificationActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  notificationButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  declineNotificationButton: {
+    backgroundColor: "#f2f2f7",
+    borderWidth: 1,
+    borderColor: "#e5e5e7",
+  },
+  acceptNotificationButton: {
+    backgroundColor: "#34C759",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  declineNotificationText: {
+    color: "#666",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  acceptNotificationText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",

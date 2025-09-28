@@ -4,7 +4,13 @@ import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +21,7 @@ import {
   View,
 } from "react-native";
 import MapView, { Camera, LatLng, Marker, Polyline } from "react-native-maps";
+import QRCode from "react-native-qrcode-svg";
 
 type BusLocation = LatLng;
 
@@ -70,17 +77,20 @@ export default function TripScreen() {
     longitude: parseFloat(params.destLng as string),
   };
   const routePath: [number, number][] = JSON.parse(params.routePath as string);
-  const polylineCoords = routePath.map(([lng, lat]) => ({
-    latitude: lat,
-    longitude: lng,
-  }));
+  const polylineCoords = useMemo(
+    () =>
+      routePath.map(([lng, lat]) => ({
+        latitude: lat,
+        longitude: lng,
+      })),
+    [routePath]
+  );
 
   const [busLocation, setBusLocation] = useState<BusLocation | null>(null);
   const [loading, setLoading] = useState(true);
   const [eta, setEta] = useState<string | null>("Calculating...");
 
-  // NEW: Trip status flow: 'waiting' until conductor scans, then 'picked_up'
-
+  // Trip status flow: 'waiting' until conductor scans QR, then 'picked_up'
   const [tripStatus, setTripStatus] = useState<"waiting" | "picked_up">(
     "waiting"
   );
@@ -96,6 +106,30 @@ export default function TripScreen() {
 
   // added: reverse geocoding with caching
   const geocodeCache = useRef<Map<string, string>>(new Map());
+
+  // Clear caches periodically to prevent memory buildup
+  useEffect(() => {
+    const cacheCleanupInterval = setInterval(() => {
+      if (geocodeCache.current.size > 50) {
+        geocodeCache.current.clear();
+      }
+      if (shownPickupAlerts.current.size > 20) {
+        shownPickupAlerts.current.clear();
+      }
+    }, 60000); // Clear every minute if caches are too large
+
+    return () => clearInterval(cacheCleanupInterval);
+  }, []);
+
+  // Track which pickup request alerts have been shown to prevent duplicates
+  const shownPickupAlerts = useRef<Set<string>>(new Set());
+
+  // Track if pickup request has been resolved (accepted/declined) to stop listening
+  const pickupRequestResolved = useRef<boolean>(false);
+
+  // Throttle ETA fetching to reduce memory usage
+  const lastEtaFetch = useRef<number>(0);
+  const ETA_FETCH_THROTTLE = 15000; // 15 seconds - increased to reduce API calls
 
   const reverseGeocode = async (coords: LatLng) => {
     if (!GOOGLE_MAPS_API_KEY) return null;
@@ -149,22 +183,22 @@ export default function TripScreen() {
   }, [tripStatus]);
 
   // QR payload the conductor can scan (adjust fields as backend expects)
-  const qrPayload = JSON.stringify({
-    type: "pickup_request",
-    busId,
-    commuterId: session?.user?.id, // added
-    tripId: params.tripId || "will-be-created", // Add tripId to QR payload
-    pickup: pickupCoords,
-    dest: destCoords,
-    ts: Date.now(),
-  });
+  const qrPayload = useMemo(
+    () =>
+      JSON.stringify({
+        type: "pickup_request",
+        busId,
+        commuterId: session?.user?.id, // added
+        tripId: params.tripId || "will-be-created", // Add tripId to QR payload
+        pickup: pickupCoords,
+        dest: destCoords,
+        ts: Date.now(),
+      }),
+    [busId, session?.user?.id, params.tripId, pickupCoords, destCoords]
+  );
 
-  // Debug: Log the QR payload to see what's being generated (remove in production)
-  console.log("Trip screen params:", params);
-  console.log("QR Payload tripId:", params.tripId);
   const fetchETA = async (origin: LatLng, destination: LatLng) => {
     if (!GOOGLE_MAPS_API_KEY) {
-      console.error("Google Maps API key is not configured.");
       setEta("Unavailable");
       return;
     }
@@ -180,63 +214,47 @@ export default function TripScreen() {
         setEta("ETA not found");
       }
     } catch (error) {
-      console.error("Error fetching ETA:", error);
       setEta("Error calculating ETA");
     }
   };
 
-  const finalizeTrip = async (
-    reason: "driver_ended" | "arrived" | "cancelled"
-  ) => {
-    if (tripFinalizedRef.current) return;
-    tripFinalizedRef.current = true;
-    if (!session?.user?.id) {
-      Alert.alert("Not signed in", "Please sign in to save your trip.");
-      return;
-    }
-
-    try {
-      setSaving(true);
-      // changed: do not use coordinates; prefer resolved names, fallback labels
-      const startName = pickupName || "Pickup location";
-      const endName = destinationName || "Destination";
-      const { error } = await supabase.from("travel_history_commuter").insert({
-        user_id: session.user.id,
-        start_location_name: startName,
-        end_location_name: endName,
-        travel_date: new Date().toISOString(),
-        route_name: `Bus ${busPlateNumber}`, // if you don’t want this, remove and also adjust history screen
-        status: reason === "cancelled" ? "cancelled" : "completed",
-      });
-      if (error) throw error;
-      router.replace("/(commuter)/history");
-    } catch (e) {
-      console.error("Failed to save trip:", e);
-      Alert.alert("Error", "Could not save your trip. Please try again.");
-      tripFinalizedRef.current = false;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const [QRCodeComponent, setQRCodeComponent] = useState<any>(null);
-  const [qrLoadError, setQrLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const mod = await import("react-native-qrcode-svg");
-        if (mounted) setQRCodeComponent(() => mod.default);
-      } catch (e: any) {
-        if (mounted) setQrLoadError("QR unavailable");
-        console.warn("Failed to load QR component:", e);
+  const finalizeTrip = useCallback(
+    async (reason: "driver_ended" | "arrived" | "cancelled") => {
+      if (tripFinalizedRef.current) return;
+      tripFinalizedRef.current = true;
+      if (!session?.user?.id) {
+        Alert.alert("Not signed in", "Please sign in to save your trip.");
+        return;
       }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+
+      try {
+        setSaving(true);
+        // changed: do not use coordinates; prefer resolved names, fallback labels
+        const startName = pickupName || "Pickup location";
+        const endName = destinationName || "Destination";
+        const { error } = await supabase
+          .from("travel_history_commuter")
+          .insert({
+            user_id: session.user.id,
+            start_location_name: startName,
+            end_location_name: endName,
+            travel_date: new Date().toISOString(),
+            route_name: `Bus ${busPlateNumber}`, // if you don't want this, remove and also adjust history screen
+            status: reason === "cancelled" ? "cancelled" : "completed",
+          });
+        if (error) throw error;
+        router.replace("/(commuter)/history");
+      } catch (e) {
+        Alert.alert("Error", "Could not save your trip. Please try again.");
+        tripFinalizedRef.current = false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [session?.user?.id, pickupName, destinationName, busPlateNumber]
+  );
+
+  // QR code is now imported directly, no need for dynamic loading
 
   useEffect(() => {
     const fetchInitialLocation = async () => {
@@ -246,26 +264,47 @@ export default function TripScreen() {
         // Check if passenger is already boarded or cancelled
         const { data: existingBoarding, error: boardingError } = await supabase
           .from("trip_passengers")
-          .select("id, status")
+          .select("id, status, boarded_at")
           .eq("passenger_id", session.user.id)
           .eq("bus_id", busId)
           .maybeSingle();
 
         if (existingBoarding && !boardingError) {
           if (existingBoarding.status === "boarded") {
-            console.log("Passenger already boarded:", existingBoarding);
             setTripStatus("picked_up");
           } else if (existingBoarding.status === "cancelled") {
-            console.log("Passenger trip was cancelled:", existingBoarding);
             Alert.alert(
               "Trip Cancelled",
               "Your trip has been cancelled. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
             return;
+          } else if (existingBoarding.status === "waiting") {
+            setTripStatus("waiting");
           }
         } else {
-          console.log("Passenger not yet boarded, checking trip status...");
+          // Create trip_passengers record if it doesn't exist
+          const { data: newTripPassenger, error: createError } = await supabase
+            .from("trip_passengers")
+            .insert({
+              bus_id: busId,
+              trip_id: params.tripId as string,
+              passenger_id: session.user.id,
+              pickup_lat: pickupCoords.latitude,
+              pickup_lng: pickupCoords.longitude,
+              dest_lat: destCoords.latitude,
+              dest_lng: destCoords.longitude,
+              status: "waiting",
+            })
+            .select("id, status")
+            .single();
+
+          if (createError) {
+            // If creation fails, still set status to waiting as the record might exist from route-details
+            setTripStatus("waiting");
+          } else {
+            setTripStatus("waiting");
+          }
         }
 
         // Location
@@ -305,8 +344,25 @@ export default function TripScreen() {
         } else if (!existingBoarding) {
           setTripStatus("waiting");
         }
+
+        // Check if pickup request has already been resolved
+        const { data: existingPickupRequest } = await supabase
+          .from("pickup_requests")
+          .select("id, status")
+          .eq("commuter_id", session.user.id)
+          .eq("bus_id", busId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (
+          existingPickupRequest &&
+          (existingPickupRequest.status === "accepted" ||
+            existingPickupRequest.status === "declined")
+        ) {
+          pickupRequestResolved.current = true;
+        }
       } catch (err) {
-        console.error("Failed to fetch initial bus location:", err);
         Alert.alert(
           "Error",
           "An error occurred while fetching the bus location."
@@ -321,56 +377,122 @@ export default function TripScreen() {
   useEffect(() => {
     if (!busId || !session?.user?.id) return;
 
+    // Only subscribe to real-time updates if passenger is still waiting for boarding
+    if (tripStatus !== "waiting") {
+      return;
+    }
+
     // Listen for trip_passengers table changes to detect boarding and cancellation
     const passengerChannel = supabase
-      .channel(`passenger-boarding-${session.user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "trip_passengers",
-          filter: `passenger_id=eq.${session.user.id}`,
-        },
-        async (payload) => {
-          console.log("Passenger boarding detected:", payload);
-          setTripStatus("picked_up");
-          setShowScanSuccess(true);
-          setTimeout(() => setShowScanSuccess(false), 2000);
-        }
-      )
+      .channel(`passenger-boarding-${session.user.id}-${busId}`)
       .on(
         "postgres_changes",
         {
           event: "UPDATE",
           schema: "public",
           table: "trip_passengers",
-          filter: `passenger_id=eq.${session.user.id}`,
+          filter: `passenger_id=eq.${session.user.id} AND bus_id=eq.${busId}`,
         },
         async (payload) => {
-          console.log("Passenger record updated:", payload);
-          if (payload.new.status === "cancelled") {
-            console.log("Trip cancelled by driver");
+          const newStatus = payload.new.status;
+
+          if (newStatus === "boarded") {
+            setTripStatus("picked_up");
+            setShowScanSuccess(true);
+            setTimeout(() => setShowScanSuccess(false), 2000);
+
+            // Unsubscribe from passenger channel since we're now boarded
+            supabase.removeChannel(passengerChannel);
+          } else if (newStatus === "cancelled") {
             Alert.alert(
               "Trip Cancelled",
-              "The driver has ended the trip. You will be redirected to the home screen."
+              "The driver has cancelled your trip. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
+          } else {
           }
         }
       )
-      .subscribe((status) => {
-        console.log("Passenger channel subscription status:", status);
-      });
+      .subscribe((status) => {});
 
-    // Fallback: Poll for boarding status every 2 seconds
+    // Return cleanup function
+    return () => {
+      supabase.removeChannel(passengerChannel);
+    };
+  }, [busId, session?.user?.id, tripStatus]);
+
+  useEffect(() => {
+    if (!busId || !session?.user?.id) return;
+
+    // Only listen for pickup request changes if we're still waiting and request not resolved
+    if (tripStatus === "waiting" && !pickupRequestResolved.current) {
+      const pickupRequestChannel = supabase
+        .channel(`pickup-request-${session.user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "pickup_requests",
+            filter: `commuter_id=eq.${session.user.id}`,
+          },
+          async (payload) => {
+            const newStatus = payload.new.status;
+            const requestId = payload.new.id;
+            const alertKey = `${requestId}-${newStatus}`;
+
+            // Check if pickup request has already been resolved
+            if (pickupRequestResolved.current) {
+              return;
+            }
+
+            // Check if we've already shown this alert
+            if (shownPickupAlerts.current.has(alertKey)) {
+              return;
+            }
+
+            if (newStatus === "declined") {
+              pickupRequestResolved.current = true; // Mark as resolved
+              shownPickupAlerts.current.add(alertKey);
+              Alert.alert(
+                "Pickup Request Declined",
+                "The driver has declined your pickup request. You will be redirected to find another bus.",
+                [
+                  {
+                    text: "OK",
+                    onPress: () => {
+                      router.replace("/(commuter)");
+                    },
+                  },
+                ]
+              );
+            } else if (newStatus === "accepted") {
+              pickupRequestResolved.current = true; // Mark as resolved
+              shownPickupAlerts.current.add(alertKey);
+              Alert.alert(
+                "Pickup Request Accepted! ✅",
+                "The driver has accepted your pickup request. Please wait for the bus to arrive at your pickup location.",
+                [{ text: "OK" }]
+              );
+            }
+          }
+        )
+        .subscribe((status) => {});
+
+      // Return cleanup function for pickup request channel
+      return () => {
+        supabase.removeChannel(pickupRequestChannel);
+      };
+    } else {
+    }
+
+    // Fallback: Poll for boarding status every 5 seconds
     const checkBoardingStatus = async () => {
       try {
-        console.log("Polling for boarding status...", {
-          passengerId: session.user.id,
-          busId,
-          currentTripStatus: tripStatus,
-        });
+        // Skip polling if trip is already completed
+        if (tripFinalizedRef.current) {
+          return;
+        }
 
         const { data: boardingRecord, error } = await supabase
           .from("trip_passengers")
@@ -379,31 +501,82 @@ export default function TripScreen() {
           .eq("bus_id", busId)
           .maybeSingle();
 
-        console.log("Polling result:", { boardingRecord, error });
-
         if (boardingRecord && !error) {
           if (boardingRecord.status === "boarded" && tripStatus === "waiting") {
-            console.log("Boarding status found via polling:", boardingRecord);
             setTripStatus("picked_up");
             setShowScanSuccess(true);
             setTimeout(() => setShowScanSuccess(false), 2000);
           } else if (boardingRecord.status === "cancelled") {
-            console.log("Trip cancelled detected via polling");
             Alert.alert(
               "Trip Cancelled",
-              "The driver has ended the trip. You will be redirected to the home screen."
+              "The driver has cancelled your trip. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
+          } else if (boardingRecord.status === "completed") {
+            await finalizeTrip("arrived");
           }
         }
-      } catch (err) {
-        console.error("Error checking boarding status:", err);
-      }
+      } catch (err) {}
     };
 
-    // Check immediately and then every 2 seconds
+    // Fallback: Poll for pickup request status every 10 seconds
+    const checkPickupRequestStatus = async () => {
+      try {
+        // Skip polling if pickup request has been resolved or trip is completed
+        if (pickupRequestResolved.current || tripFinalizedRef.current) {
+          return;
+        }
+
+        const { data: pickupRequest, error } = await supabase
+          .from("pickup_requests")
+          .select("id, status")
+          .eq("commuter_id", session.user.id)
+          .eq("bus_id", busId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (pickupRequest && !error) {
+          const alertKey = `${pickupRequest.id}-${pickupRequest.status}`;
+
+          // Check if we've already shown this alert
+          if (shownPickupAlerts.current.has(alertKey)) {
+            return;
+          }
+
+          if (pickupRequest.status === "declined") {
+            pickupRequestResolved.current = true; // Mark as resolved
+            shownPickupAlerts.current.add(alertKey);
+            Alert.alert(
+              "Pickup Request Declined",
+              "The driver has declined your pickup request. You will be redirected to find another bus.",
+              [
+                {
+                  text: "OK",
+                  onPress: () => {
+                    router.replace("/(commuter)");
+                  },
+                },
+              ]
+            );
+          } else if (pickupRequest.status === "accepted") {
+            pickupRequestResolved.current = true; // Mark as resolved
+            shownPickupAlerts.current.add(alertKey);
+            Alert.alert(
+              "Pickup Request Accepted! ✅",
+              "The driver has accepted your pickup request. Please wait for the bus to arrive at your pickup location.",
+              [{ text: "OK" }]
+            );
+          }
+        }
+      } catch (err) {}
+    };
+
+    // Check immediately and then every 8 seconds for boarding, every 15 seconds for pickup requests
     checkBoardingStatus();
-    const pollingInterval = setInterval(checkBoardingStatus, 2000);
+    checkPickupRequestStatus();
+    const boardingPollingInterval = setInterval(checkBoardingStatus, 8000); // Reduced frequency
+    const pickupPollingInterval = setInterval(checkPickupRequestStatus, 15000); // Reduced frequency
 
     // Listen for trip updates (location and status)
     const tripChannel = supabase
@@ -427,10 +600,15 @@ export default function TripScreen() {
             };
             setBusLocation(newLocation);
 
-            await fetchETA(
-              newLocation,
-              tripStatus === "picked_up" ? destCoords : pickupCoords
-            );
+            // Throttle ETA fetching to reduce memory usage
+            const now = Date.now();
+            if (now - lastEtaFetch.current > ETA_FETCH_THROTTLE) {
+              lastEtaFetch.current = now;
+              await fetchETA(
+                newLocation,
+                tripStatus === "picked_up" ? destCoords : pickupCoords
+              );
+            }
 
             const prevLocation = previousLocationRef.current;
             let heading = 0;
@@ -443,7 +621,8 @@ export default function TripScreen() {
               heading: heading,
               zoom: 18,
             };
-            mapRef.current?.animateCamera(camera, { duration: 1500 });
+            // Throttle camera animations to reduce memory usage
+            mapRef.current?.animateCamera(camera, { duration: 1000 });
             previousLocationRef.current = newLocation;
 
             // Auto-finish near destination
@@ -474,12 +653,12 @@ export default function TripScreen() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {});
 
     return () => {
-      supabase.removeChannel(passengerChannel);
       supabase.removeChannel(tripChannel);
-      clearInterval(pollingInterval);
+      clearInterval(boardingPollingInterval);
+      clearInterval(pickupPollingInterval);
     };
   }, [busId, session?.user?.id, tripStatus]);
 
@@ -487,8 +666,13 @@ export default function TripScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" />
-        <Text>Finding your bus...</Text>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingTitle}>Loading Trip Details</Text>
+          <Text style={styles.loadingSubtext}>
+            Getting your bus location and trip information...
+          </Text>
+        </View>
       </View>
     );
   }
@@ -612,6 +796,20 @@ export default function TripScreen() {
 
       <View style={styles.bottomPanel}>
         <View style={styles.etaContainer}>
+          <View style={styles.statusIndicator}>
+            <View
+              style={[
+                styles.statusDot,
+                {
+                  backgroundColor:
+                    tripStatus === "waiting" ? "#FF9500" : "#28a745",
+                },
+              ]}
+            />
+            <Text style={styles.statusText}>
+              {tripStatus === "waiting" ? "Waiting for Boarding" : "On Board"}
+            </Text>
+          </View>
           <Text style={styles.etaLabel}>
             {tripStatus === "waiting"
               ? "Bus arriving in"
@@ -620,23 +818,40 @@ export default function TripScreen() {
           <Text style={styles.etaText}>{eta}</Text>
         </View>
 
-        {/* QR section only while waiting */}
+        {/* QR section - show only while waiting for boarding */}
         {tripStatus === "waiting" && (
           <>
             <View style={styles.divider} />
             <View style={styles.qrContainer}>
-              {QRCodeComponent ? (
-                <>
-                  <QRCodeComponent value={qrPayload} size={160} />
-                  <Text style={styles.qrHelpText}>
-                    Show this QR to the conductor to be picked up
-                  </Text>
-                </>
-              ) : (
-                <Text style={styles.qrHelpText}>
-                  {qrLoadError ? "QR unavailable" : "Loading QR..."}
+              <Text style={styles.qrTitle}>Boarding QR Code</Text>
+              <QRCode value={qrPayload} size={160} />
+              <Text style={styles.qrHelpText}>
+                Show this QR code to the conductor for boarding
+              </Text>
+              <Text style={styles.qrSubText}>
+                The QR code will disappear once you're boarded
+              </Text>
+              {/* Fallback: Show payload as text if QR doesn't work
+              <View style={styles.fallbackContainer}>
+                <Text style={styles.fallbackText}>
+                  If QR doesn't work, show this to conductor:
                 </Text>
-              )}
+                <Text style={styles.fallbackPayload}>{qrPayload}</Text>
+              </View> */}
+            </View>
+          </>
+        )}
+
+        {/* Show boarding confirmation when QR is scanned */}
+        {tripStatus === "picked_up" && (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.boardingContainer}>
+              <Ionicons name="checkmark-circle" size={48} color="#28a745" />
+              <Text style={styles.boardingTitle}>Successfully Boarded! ✅</Text>
+              <Text style={styles.boardingText}>
+                You have been boarded on the bus. Enjoy your ride!
+              </Text>
             </View>
           </>
         )}
@@ -666,6 +881,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 30,
   },
+  loadingContainer: {
+    alignItems: "center",
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 32,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  loadingTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  loadingSubtext: {
+    fontSize: 16,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 22,
+  },
   // REMOVED: backButton
   cancelButtonTop: {
     position: "absolute",
@@ -693,40 +933,76 @@ const styles = StyleSheet.create({
     left: 20,
     right: 20,
     backgroundColor: "white",
-    borderRadius: 16,
-    padding: 16,
-    elevation: 10,
+    borderRadius: 24,
+    padding: 24,
+    elevation: 12,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.05)",
   },
   etaContainer: {
     alignItems: "center",
+    marginBottom: 8,
+  },
+  statusIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    backgroundColor: "#f8f9fa",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e9ecef",
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
   },
   etaLabel: {
-    fontSize: 14,
-    color: "#6c757d",
+    fontSize: 16,
+    color: "#666",
+    marginBottom: 8,
+    fontWeight: "500",
   },
   etaText: {
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: "bold",
     color: "#007AFF",
+    textAlign: "center",
   },
   divider: {
     height: 1,
     backgroundColor: "#e9ecef",
-    marginVertical: 12,
+    marginVertical: 16,
+    borderRadius: 1,
   },
   qrContainer: {
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    marginBottom: 16,
+    backgroundColor: "#f8f9fa",
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: "#e9ecef",
   },
   qrHelpText: {
-    marginTop: 8,
-    fontSize: 12,
-    color: "#6c757d",
+    marginTop: 16,
+    fontSize: 16,
+    color: "#666",
+    textAlign: "center",
+    fontWeight: "500",
   },
   tripInfoContainer: {
     flexDirection: "row",
@@ -754,6 +1030,30 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   busIcon: { width: 20, height: 20 },
+  boardingContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+    backgroundColor: "#f0f8f0",
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: "#28a745",
+  },
+  boardingTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    marginTop: 12,
+    marginBottom: 8,
+    color: "#28a745",
+    textAlign: "center",
+  },
+  boardingText: {
+    fontSize: 16,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 22,
+  },
   errorText: {
     marginTop: 16,
     fontSize: 18,
@@ -777,5 +1077,47 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 16,
     fontWeight: "600",
+  },
+  fallbackContainer: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: "#f8f9fa",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dee2e6",
+  },
+  fallbackText: {
+    fontSize: 14,
+    color: "#6c757d",
+    marginBottom: 8,
+    textAlign: "center",
+    fontWeight: "500",
+  },
+  fallbackPayload: {
+    fontSize: 12,
+    color: "#495057",
+    fontFamily: "monospace",
+    textAlign: "center",
+    lineHeight: 16,
+    backgroundColor: "#fff",
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e9ecef",
+  },
+  qrTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#007AFF",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  qrSubText: {
+    fontSize: 14,
+    color: "#999",
+    textAlign: "center",
+    marginTop: 8,
+    marginBottom: 12,
+    fontStyle: "italic",
   },
 });

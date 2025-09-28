@@ -1,7 +1,7 @@
-import { useAuth } from "@/contexts/AuthContext"; // Assuming you have an Auth context
+import { useAuth } from "@/contexts/AuthContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
-import { supabase } from "@/lib/supabase"; // Adjust if needed
+import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useState } from "react";
@@ -11,6 +11,7 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -27,10 +28,15 @@ type HistoryItem = {
 };
 
 export function TravelHistoryScreen() {
-  const { session } = useAuth(); // Get the current user session
+  const { session } = useAuth();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedFilter, setSelectedFilter] = useState<
+    "all" | "completed" | "cancelled"
+  >("all");
+
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
   const primaryColor = useThemeColor({}, "tint");
@@ -42,9 +48,9 @@ export function TravelHistoryScreen() {
     if (!session?.user) return;
 
     try {
-      // Read directly from the table you're inserting into
+      setError(null);
       const { data, error } = await supabase
-        .from("travel_history_commuter") // or "travel_history" if you used that name
+        .from("travel_history_commuter")
         .select(
           "id, start_location_name, end_location_name, travel_date, route_name, status"
         )
@@ -70,6 +76,7 @@ export function TravelHistoryScreen() {
       );
     } catch (error) {
       console.error("Error fetching travel history:", error);
+      setError("Failed to load travel history. Please try again.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -84,93 +91,307 @@ export function TravelHistoryScreen() {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Render a single history card
-  // Render a single history card
+  // Filter history based on selected filter
+  const filteredHistory = history.filter((item) => {
+    if (selectedFilter === "all") return true;
+    return item.status?.toLowerCase() === selectedFilter;
+  });
+
+  // Get statistics
+  const stats = {
+    total: history.length,
+    completed: history.filter(
+      (item) => item.status?.toLowerCase() === "completed"
+    ).length,
+    cancelled: history.filter(
+      (item) => item.status?.toLowerCase() === "cancelled"
+    ).length,
+  };
+
   const renderHistoryCard = ({ item }: { item: HistoryItem }) => {
     const routeName = item.route_name || "Unknown Route";
+    const isCompleted = item.status?.toLowerCase() === "completed";
+    const isCancelled = item.status?.toLowerCase() === "cancelled";
 
-    const getStatusStyle = (status?: string) => {
+    const getStatusConfig = (status?: string) => {
       const s = (status || "").toLowerCase();
       if (s === "completed") {
         return {
-          container: [
-            styles.statusPill,
-            { backgroundColor: "rgba(40,167,69,0.12)" },
-          ],
-          text: [styles.statusText, { color: "#28a745" }],
+          icon: "checkmark-circle" as const,
+          color: "#34C759",
+          backgroundColor: "rgba(52,199,89,0.1)",
           label: "Completed",
         };
       }
       if (s === "cancelled") {
         return {
-          container: [
-            styles.statusPill,
-            { backgroundColor: "rgba(220,53,69,0.12)" },
-          ],
-          text: [styles.statusText, { color: "#dc3545" }],
+          icon: "close-circle" as const,
+          color: "#FF3B30",
+          backgroundColor: "rgba(255,59,48,0.1)",
           label: "Cancelled",
         };
       }
       return {
-        container: [
-          styles.statusPill,
-          { backgroundColor: "rgba(0,122,255,0.12)" },
-        ],
-        text: [styles.statusText, { color: "#007AFF" }],
+        icon: "time" as const,
+        color: "#007AFF",
+        backgroundColor: "rgba(0,122,255,0.1)",
         label: s ? s.charAt(0).toUpperCase() + s.slice(1) : "Completed",
       };
     };
-    const statusStyle = getStatusStyle(item.status);
+
+    const statusConfig = getStatusConfig(item.status);
+    const travelDate = new Date(item.travel_date);
+    const formattedDate = travelDate.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const formattedTime = travelDate.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
     return (
-      <View
-        style={[styles.card, { backgroundColor, borderColor: separatorColor }]}
+      <TouchableOpacity
+        style={[styles.historyCard, { backgroundColor }]}
+        activeOpacity={0.7}
       >
-        <View
-          style={[styles.cardHeader, { borderBottomColor: separatorColor }]}
-        >
-          <Ionicons name="location-outline" size={24} color={primaryColor} />
-          <Text style={[styles.cardTitle, { color: textColor }]}>
-            {routeName}
-          </Text>
-          <View style={{ flex: 1 }} />
-          <View style={statusStyle.container}>
-            <Text style={statusStyle.text}>{statusStyle.label}</Text>
+        {/* Card Header */}
+        <View style={styles.cardHeader}>
+          <View style={styles.routeInfo}>
+            <View
+              style={[
+                styles.routeIconContainer,
+                { backgroundColor: statusConfig.backgroundColor },
+              ]}
+            >
+              <Ionicons name="bus" size={20} color={statusConfig.color} />
+            </View>
+            <View style={styles.routeDetails}>
+              <Text
+                style={[styles.routeName, { color: textColor }]}
+                numberOfLines={1}
+              >
+                {routeName}
+              </Text>
+              <Text
+                style={[styles.routeSubtitle, { color: placeholderTextColor }]}
+              >
+                {formattedDate} • {formattedTime}
+              </Text>
+            </View>
+          </View>
+          <View
+            style={[
+              styles.statusBadge,
+              { backgroundColor: statusConfig.backgroundColor },
+            ]}
+          >
+            <Ionicons
+              name={statusConfig.icon}
+              size={14}
+              color={statusConfig.color}
+            />
+            <Text style={[styles.statusText, { color: statusConfig.color }]}>
+              {statusConfig.label}
+            </Text>
           </View>
         </View>
-        <View style={styles.cardBody}>
-          <Text style={[styles.locationText, { color: textColor }]}>
-            From:{" "}
-            <Text style={{ color: placeholderTextColor }}>
-              {item.start_location_name || "N/A"}
-            </Text>
-          </Text>
-          <Text style={[styles.locationText, { color: textColor }]}>
-            To:{" "}
-            <Text style={{ color: placeholderTextColor }}>
-              {item.end_location_name || "N/A"}
-            </Text>
-          </Text>
+
+        {/* Route Details */}
+        <View style={styles.routeDetailsContainer}>
+          <View style={styles.locationRow}>
+            <View
+              style={[styles.locationDot, { backgroundColor: "#34C759" }]}
+            />
+            <View style={styles.locationInfo}>
+              <Text
+                style={[styles.locationLabel, { color: placeholderTextColor }]}
+              >
+                From
+              </Text>
+              <Text
+                style={[styles.locationText, { color: textColor }]}
+                numberOfLines={2}
+              >
+                {item.start_location_name || "Unknown location"}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.connectionLine} />
+
+          <View style={styles.locationRow}>
+            <View
+              style={[styles.locationDot, { backgroundColor: "#FF3B30" }]}
+            />
+            <View style={styles.locationInfo}>
+              <Text
+                style={[styles.locationLabel, { color: placeholderTextColor }]}
+              >
+                To
+              </Text>
+              <Text
+                style={[styles.locationText, { color: textColor }]}
+                numberOfLines={2}
+              >
+                {item.end_location_name || "Unknown location"}
+              </Text>
+            </View>
+          </View>
         </View>
-        <View style={styles.cardFooter}>
-          <Ionicons
-            name="calendar-outline"
-            size={16}
-            color={placeholderTextColor}
-          />
-          <Text style={[styles.dateText, { color: placeholderTextColor }]}>
-            {new Date(item.travel_date).toLocaleString()}
-          </Text>
+
+        {/* Card Footer */}
+        <View style={[styles.cardFooter, { borderTopColor: separatorColor }]}>
+          <View style={styles.footerLeft}>
+            <Ionicons
+              name="calendar-outline"
+              size={16}
+              color={placeholderTextColor}
+            />
+            <Text style={[styles.footerText, { color: placeholderTextColor }]}>
+              {formattedDate}
+            </Text>
+          </View>
+          <View style={styles.footerRight}>
+            <Ionicons
+              name="time-outline"
+              size={16}
+              color={placeholderTextColor}
+            />
+            <Text style={[styles.footerText, { color: placeholderTextColor }]}>
+              {formattedTime}
+            </Text>
+          </View>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
+  const renderFilterButton = (
+    filter: "all" | "completed" | "cancelled",
+    label: string,
+    count: number
+  ) => (
+    <TouchableOpacity
+      style={[
+        styles.filterButton,
+        selectedFilter === filter && styles.filterButtonActive,
+        {
+          borderColor:
+            selectedFilter === filter ? primaryColor : separatorColor,
+        },
+      ]}
+      onPress={() => setSelectedFilter(filter)}
+    >
+      <Text
+        style={[
+          styles.filterButtonText,
+          { color: selectedFilter === filter ? primaryColor : textColor },
+        ]}
+      >
+        {label}
+      </Text>
+      <View
+        style={[
+          styles.filterCount,
+          {
+            backgroundColor:
+              selectedFilter === filter ? primaryColor : separatorColor,
+          },
+        ]}
+      >
+        <Text
+          style={[
+            styles.filterCountText,
+            { color: selectedFilter === filter ? "#fff" : textColor },
+          ]}
+        >
+          {count}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderStatsCard = () => (
+    <View style={[styles.statsCard, { backgroundColor }]}>
+      <View style={styles.statsHeader}>
+        <Ionicons name="analytics-outline" size={24} color={primaryColor} />
+        <Text style={[styles.statsTitle, { color: textColor }]}>
+          Travel Summary
+        </Text>
+      </View>
+      <View style={styles.statsGrid}>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, { color: textColor }]}>
+            {stats.total}
+          </Text>
+          <Text style={[styles.statLabel, { color: placeholderTextColor }]}>
+            Total Trips
+          </Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, { color: "#34C759" }]}>
+            {stats.completed}
+          </Text>
+          <Text style={[styles.statLabel, { color: placeholderTextColor }]}>
+            Completed
+          </Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, { color: "#FF3B30" }]}>
+            {stats.cancelled}
+          </Text>
+          <Text style={[styles.statLabel, { color: placeholderTextColor }]}>
+            Cancelled
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" />
-      </View>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor }]}
+        edges={["top", "left", "right"]}
+      >
+        <StatusBar style={theme === "dark" ? "light" : "dark"} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={[styles.loadingText, { color: textColor }]}>
+            Loading your travel history...
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView
+        style={[styles.container, { backgroundColor }]}
+        edges={["top", "left", "right"]}
+      >
+        <StatusBar style={theme === "dark" ? "light" : "dark"} />
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={60} color="#FF3B30" />
+          <Text style={[styles.errorTitle, { color: textColor }]}>
+            Oops! Something went wrong
+          </Text>
+          <Text style={[styles.errorMessage, { color: placeholderTextColor }]}>
+            {error}
+          </Text>
+          <TouchableOpacity
+            style={[styles.retryButton, { backgroundColor: primaryColor }]}
+            onPress={fetchHistory}
+          >
+            <Ionicons name="refresh" size={20} color="#fff" />
+            <Text style={styles.retryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
@@ -180,28 +401,68 @@ export function TravelHistoryScreen() {
       edges={["top", "left", "right"]}
     >
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
+
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <View style={styles.headerIconContainer}>
+            <Ionicons name="time-outline" size={28} color="#007AFF" />
+          </View>
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.headerTitle}>Travel History</Text>
+            <Text style={styles.headerSubtitle}>
+              {refreshing
+                ? "Refreshing..."
+                : "Your completed trips and journeys"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
       <FlatList
-        data={history}
+        data={filteredHistory}
         renderItem={renderHistoryCard}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#007AFF"]}
+            tintColor="#007AFF"
+            title="Pull to refresh history"
+            titleColor="#8e8e93"
+            progressBackgroundColor="#ffffff"
+          />
         }
-        contentContainerStyle={{ paddingHorizontal: 20 }}
+        contentContainerStyle={styles.listContent}
         ListHeaderComponent={
-          <Text style={[styles.title, { color: textColor }]}>
-            Travel History
-          </Text>
+          <View>
+            {renderStatsCard()}
+            <View style={styles.filtersContainer}>
+              {renderFilterButton("all", "All", stats.total)}
+              {renderFilterButton("completed", "Completed", stats.completed)}
+              {renderFilterButton("cancelled", "Cancelled", stats.cancelled)}
+            </View>
+          </View>
         }
         ListEmptyComponent={
-          <View style={styles.centered}>
-            <Ionicons name="trail-sign-outline" size={60} color="#d1d1d6" />
-            <Text style={styles.emptyText}>No trips yet</Text>
-            <Text style={styles.emptySubtitle}>
-              Your completed trips will appear here.
+          <View style={styles.emptyContainer}>
+            <Ionicons name="trail-sign-outline" size={80} color="#d1d1d6" />
+            <Text style={[styles.emptyTitle, { color: textColor }]}>
+              {selectedFilter === "all"
+                ? "No trips yet"
+                : `No ${selectedFilter} trips`}
+            </Text>
+            <Text
+              style={[styles.emptySubtitle, { color: placeholderTextColor }]}
+            >
+              {selectedFilter === "all"
+                ? "Your completed trips will appear here."
+                : `You don't have any ${selectedFilter} trips yet.`}
             </Text>
           </View>
         }
+        showsVerticalScrollIndicator={false}
       />
     </SafeAreaView>
   );
@@ -210,93 +471,290 @@ export function TravelHistoryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: "#f8f9fa",
   },
-  centered: {
+  header: {
+    backgroundColor: "#007AFF",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+  },
+  headerContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  headerTextContainer: {
+    flex: 1,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.8)",
+    marginTop: 2,
+  },
+  listContent: {
+    paddingBottom: 100,
+  },
+  loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    marginTop: "40%",
+    paddingHorizontal: 20,
   },
-  button: {
+  loadingText: {
+    fontSize: 16,
+    marginTop: 16,
+    textAlign: "center",
+  },
+  errorContainer: {
     flex: 1,
-    paddingVertical: 15,
-    borderRadius: 24,
+    justifyContent: "center",
     alignItems: "center",
-    marginHorizontal: 4,
+    paddingHorizontal: 20,
   },
-  editButton: { backgroundColor: "#007AFF" },
-  signOutButton: { backgroundColor: "#dc3545" },
-  saveButton: { backgroundColor: "#28a745" },
-  cancelButton: { backgroundColor: "#6c757d" },
-  buttonText: {
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    marginTop: 16,
+    textAlign: "center",
+  },
+  errorMessage: {
+    fontSize: 16,
+    marginTop: 8,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  retryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+  retryButtonText: {
     color: "#fff",
     fontSize: 16,
-    fontWeight: "bold",
+    fontWeight: "600",
+    marginLeft: 8,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#1c1c1e",
-    paddingVertical: 20,
-  },
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
+  statsCard: {
+    margin: 20,
     padding: 20,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  statsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
     marginBottom: 16,
+  },
+  statsTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 12,
+  },
+  statsGrid: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  statItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+  statNumber: {
+    fontSize: 24,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  filtersContainer: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    marginBottom: 20,
+    gap: 12,
+  },
+  filterButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#e5e5ea",
+    backgroundColor: "#fff",
+  },
+  filterButtonActive: {
+    backgroundColor: "rgba(0, 122, 255, 0.1)",
+  },
+  filterButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginRight: 8,
+  },
+  filterCount: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 6,
+  },
+  filterCountText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  historyCard: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+    overflow: "hidden",
   },
   cardHeader: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    padding: 20,
+    paddingBottom: 16,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginLeft: 12,
-    color: "#1c1c1e",
-  },
-  cardBody: {
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e5ea",
-  },
-  locationText: {
-    fontSize: 16,
-    color: "#3c3c43",
-    marginBottom: 8,
-  },
-  cardFooter: {
+  routeInfo: {
     flexDirection: "row",
     alignItems: "center",
-    paddingTop: 12,
+    flex: 1,
   },
-  dateText: {
-    fontSize: 14,
-    color: "#8e8e93",
-    marginLeft: 8,
+  routeIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
   },
-  statusPill: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 999,
+  routeDetails: {
+    flex: 1,
+  },
+  routeName: {
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  routeSubtitle: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
   },
   statusText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "600",
+    marginLeft: 4,
   },
-  emptyText: {
+  routeDetailsContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  locationRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 12,
+  },
+  locationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 6,
+    marginRight: 12,
+  },
+  locationInfo: {
+    flex: 1,
+  },
+  locationLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    marginBottom: 2,
+  },
+  locationText: {
+    fontSize: 14,
+    fontWeight: "500",
+    lineHeight: 20,
+  },
+  connectionLine: {
+    width: 2,
+    height: 20,
+    backgroundColor: "#E5E5E7",
+    marginLeft: 3,
+    marginBottom: 12,
+  },
+  cardFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.02)",
+  },
+  footerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  footerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  footerText: {
+    fontSize: 12,
+    fontWeight: "500",
+    marginLeft: 6,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
     fontSize: 20,
     fontWeight: "600",
-    color: "#8e8e93",
     marginTop: 16,
+    textAlign: "center",
   },
   emptySubtitle: {
     fontSize: 16,
-    color: "#c7c7cc",
     marginTop: 8,
     textAlign: "center",
+    lineHeight: 22,
   },
 });
 
