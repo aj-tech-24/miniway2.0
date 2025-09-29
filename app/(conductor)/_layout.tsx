@@ -10,7 +10,6 @@ export default function ConductorLayout() {
   const { theme } = useAppTheme();
   const insets = useSafeAreaInsets();
   const hapticTabButton = (props: any) => <HapticTab {...props} />;
-
   return (
     <Tabs
       screenOptions={{
@@ -49,22 +48,6 @@ export default function ConductorLayout() {
               name={focused ? "time" : "time-outline"}
               color={color}
               size={20}
-            />
-          ),
-          tabBarButton: hapticTabButton,
-        }}
-      />
-      {/* QR Scanner Tab */}
-      <Tabs.Screen
-        name="qr-scanner"
-        options={{
-          headerShown: true,
-          title: "Scan",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? "qr-code" : "qr-code-outline"}
-              color={color}
-              size={22}
             />
           ),
           tabBarButton: hapticTabButton,
