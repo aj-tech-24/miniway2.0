@@ -175,6 +175,7 @@ export default function RouteDetailsScreen() {
     useState(false);
   const [showWaitingModal, setShowWaitingModal] = useState(false);
   const [waitingPickupRequest, setWaitingPickupRequest] = useState<any>(null);
+  const [passengerCount, setPassengerCount] = useState(1);
 
   const originCoords: LatLng = {
     latitude: parseFloat((params.originLat as string) || "0"),
@@ -744,6 +745,20 @@ export default function RouteDetailsScreen() {
         return;
       }
 
+      // Validate passenger count against bus capacity
+      if (
+        selectedBus.capacity &&
+        typeof selectedBus.passengers === "number" &&
+        passengerCount > selectedBus.capacity - selectedBus.passengers
+      ) {
+        setError(
+          `Cannot request ${passengerCount} seats. Only ${
+            selectedBus.capacity - selectedBus.passengers
+          } seats available.`
+        );
+        return;
+      }
+
       // Check if there's an active trip for this bus
       const { data: existingTrip, error: tripError } = await supabase
         .from("trips")
@@ -801,6 +816,7 @@ export default function RouteDetailsScreen() {
             dest_lat: destCoords.latitude,
             dest_lng: destCoords.longitude,
             status: "waiting",
+            passenger_count: passengerCount,
           })
           .eq("id", tripPassengerId);
 
@@ -824,6 +840,7 @@ export default function RouteDetailsScreen() {
               dest_lat: destCoords.latitude,
               dest_lng: destCoords.longitude,
               status: "waiting",
+              passenger_count: passengerCount,
             })
             .select("id")
             .single();
@@ -854,7 +871,11 @@ export default function RouteDetailsScreen() {
           status: "pending",
           commuter_name: userProfile.fullName || "Unknown",
           commuter_phone: userProfile.contact_number || null,
-          notes: null,
+          notes:
+            passengerCount > 1
+              ? `Group pickup - ${passengerCount} passengers`
+              : null,
+          passenger_count: passengerCount,
         })
         .select("id")
         .single();
@@ -948,6 +969,10 @@ export default function RouteDetailsScreen() {
             setWaitingPickupRequest(null);
 
             // Navigate directly to trip screen
+            console.log(
+              "Navigating to trip with passenger count:",
+              passengerCount
+            );
             router.push({
               pathname: "/trip",
               params: {
@@ -959,6 +984,7 @@ export default function RouteDetailsScreen() {
                 destLat: destCoords.latitude.toString(),
                 destLng: destCoords.longitude.toString(),
                 routePath: JSON.stringify(nearestRoute.path.coordinates),
+                passengerCount: passengerCount.toString(),
               },
             });
 
@@ -1019,6 +1045,7 @@ export default function RouteDetailsScreen() {
                 destLat: destCoords.latitude.toString(),
                 destLng: destCoords.longitude.toString(),
                 routePath: JSON.stringify(nearestRoute.path.coordinates),
+                passengerCount: passengerCount.toString(),
               },
             });
 
@@ -1092,6 +1119,10 @@ export default function RouteDetailsScreen() {
             setWaitingPickupRequest(null);
 
             // Navigate directly to trip screen
+            console.log(
+              "Navigating to trip with passenger count:",
+              passengerCount
+            );
             router.push({
               pathname: "/trip",
               params: {
@@ -1103,6 +1134,7 @@ export default function RouteDetailsScreen() {
                 destLat: destCoords.latitude.toString(),
                 destLng: destCoords.longitude.toString(),
                 routePath: JSON.stringify(nearestRoute.path.coordinates),
+                passengerCount: passengerCount.toString(),
               },
             });
 
@@ -1327,18 +1359,71 @@ export default function RouteDetailsScreen() {
             </Text>
 
             {pickupLocation && (
-              <View style={styles.pickupLocationInfo}>
-                <Ionicons name="location" size={16} color="#007AFF" />
-                <Text style={styles.pickupLocationText}>
-                  Pickup location selected
-                </Text>
-              </View>
+              <>
+                <View style={styles.pickupLocationInfo}>
+                  <Ionicons name="location" size={16} color="#007AFF" />
+                  <Text style={styles.pickupLocationText}>
+                    Pickup location selected
+                  </Text>
+                </View>
+
+                <View style={styles.passengerCountContainer}>
+                  <Text style={styles.passengerCountLabel}>
+                    Number of Passengers:
+                  </Text>
+                  <View style={styles.passengerCountControls}>
+                    <TouchableOpacity
+                      style={[
+                        styles.passengerCountButton,
+                        passengerCount <= 1 ? styles.disabledButton : undefined,
+                      ]}
+                      onPress={() =>
+                        setPassengerCount((prev) => Math.max(1, prev - 1))
+                      }
+                      disabled={passengerCount <= 1}
+                    >
+                      <Ionicons name="remove" size={20} color="#fff" />
+                    </TouchableOpacity>
+                    <Text style={styles.passengerCountText}>
+                      {passengerCount}
+                    </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.passengerCountButton,
+                        selectedBus &&
+                        typeof selectedBus.capacity === "number" &&
+                        passengerCount >=
+                          selectedBus.capacity - (selectedBus.passengers || 0)
+                          ? styles.disabledButton
+                          : undefined,
+                      ]}
+                      onPress={() => setPassengerCount((prev) => prev + 1)}
+                      disabled={
+                        !!(
+                          selectedBus &&
+                          typeof selectedBus.capacity === "number" &&
+                          passengerCount >=
+                            selectedBus.capacity - (selectedBus.passengers || 0)
+                        )
+                      }
+                    >
+                      <Ionicons name="add" size={20} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                  {selectedBus && typeof selectedBus.capacity === "number" && (
+                    <Text style={styles.availableSeatsText}>
+                      Available seats:{" "}
+                      {selectedBus.capacity - (selectedBus.passengers || 0)}
+                    </Text>
+                  )}
+                </View>
+              </>
             )}
 
             <TouchableOpacity
               style={[
                 styles.currentLocationButton,
-                locationLoading && styles.disabledButton,
+                locationLoading ? styles.disabledButton : undefined,
               ]}
               onPress={handleUseCurrentLocation}
               disabled={locationLoading}
@@ -1403,7 +1488,7 @@ export default function RouteDetailsScreen() {
                   typeof bus.capacity === "number" &&
                   typeof bus.passengers === "number"
                     ? Math.max(bus.capacity - bus.passengers, 0)
-                    : "N/A";
+                    : 0;
                 const isActive = bus.status === "active";
                 const isSelected = selectedBus?.id === bus.id;
 
@@ -1436,15 +1521,40 @@ export default function RouteDetailsScreen() {
                     </View>
                     <View style={styles.busInfoRow}>
                       <Ionicons
-                        name="checkmark-circle"
+                        name="people"
                         size={16}
-                        color="#28a745"
+                        color={availableSeats > 0 ? "#28a745" : "#dc3545"}
                       />
-                      <Text style={styles.seatText}>
-                        {availableSeats} seat{availableSeats === 1 ? "" : "s"}
-                        available
+                      <Text
+                        style={[
+                          styles.seatText,
+                          { color: availableSeats > 0 ? "#28a745" : "#dc3545" },
+                        ]}
+                      >
+                        {availableSeats} / {bus.capacity || "?"} seats
                       </Text>
                     </View>
+                    {availableSeats > 0 && (
+                      <View style={styles.capacityBar}>
+                        <View
+                          style={[
+                            styles.capacityFill,
+                            {
+                              width: `${
+                                ((bus.passengers || 0) / (bus.capacity || 1)) *
+                                100
+                              }%`,
+                              backgroundColor:
+                                availableSeats > 5
+                                  ? "#28a745"
+                                  : availableSeats > 2
+                                  ? "#ffc107"
+                                  : "#dc3545",
+                            },
+                          ]}
+                        />
+                      </View>
+                    )}
                     <Text
                       style={{
                         color: isActive ? "#28a745" : "#dc3545",
@@ -1993,6 +2103,59 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#8e8e93",
     textAlign: "center",
+    fontStyle: "italic",
+  },
+  capacityBar: {
+    height: 4,
+    backgroundColor: "#e9ecef",
+    borderRadius: 2,
+    marginTop: 8,
+    marginBottom: 8,
+    width: "100%",
+    overflow: "hidden",
+  },
+  capacityFill: {
+    height: "100%",
+    borderRadius: 2,
+  },
+  passengerCountContainer: {
+    backgroundColor: "#f8f9fa",
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 15,
+  },
+  passengerCountLabel: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 10,
+  },
+  passengerCountControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 15,
+  },
+  passengerCountButton: {
+    backgroundColor: "#007AFF",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  passengerCountText: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
+    minWidth: 30,
+    textAlign: "center",
+  },
+  availableSeatsText: {
+    fontSize: 14,
+    color: "#6c757d",
+    textAlign: "center",
+    marginTop: 10,
     fontStyle: "italic",
   },
 });

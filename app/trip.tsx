@@ -58,6 +58,12 @@ const calculateBearing = (start: LatLng, end: LatLng) => {
   return bearing;
 };
 
+// Helper: Find minimum distance from bus to route
+const getMinDistanceToRoute = (busLocation: LatLng, route: LatLng[]) => {
+  if (!busLocation || !route.length) return Infinity;
+  return Math.min(...route.map((pt) => haversineMeters(busLocation, pt)));
+};
+
 export default function TripScreen() {
   const { theme } = useAppTheme();
   const { session } = useAuth();
@@ -68,6 +74,14 @@ export default function TripScreen() {
 
   const busId = params.busId as string;
   const busPlateNumber = params.busPlateNumber as string;
+  const passengerCount = parseInt(params.passengerCount as string) || 1;
+  console.log(
+    "Trip screen - Passenger count from params:",
+    passengerCount,
+    "Raw param:",
+    params.passengerCount
+  );
+  console.log("🗺️ All trip params:", params);
   const pickupCoords: LatLng = {
     latitude: parseFloat(params.pickupLat as string),
     longitude: parseFloat(params.pickupLng as string),
@@ -76,15 +90,33 @@ export default function TripScreen() {
     latitude: parseFloat(params.destLat as string),
     longitude: parseFloat(params.destLng as string),
   };
-  const routePath: [number, number][] = JSON.parse(params.routePath as string);
-  const polylineCoords = useMemo(
-    () =>
-      routePath.map(([lng, lat]) => ({
+  // Parse the complete route path (same approach as DrivingModeScreen)
+  let completeRoutePath: LatLng[] = [];
+  try {
+    const routePathParam = params.routePath as string;
+    console.log("🗺️ Route path parameter:", routePathParam);
+
+    if (routePathParam && routePathParam !== "[]") {
+      const routePath: [number, number][] = JSON.parse(routePathParam);
+      completeRoutePath = routePath.map(([lng, lat]) => ({
         latitude: lat,
         longitude: lng,
-      })),
-    [routePath]
-  );
+      }));
+      console.log(
+        `🗺️ Complete route path has ${completeRoutePath.length} points`
+      );
+    } else {
+      console.log(
+        "🗺️ Route path is empty or missing, will fetch from database"
+      );
+    }
+  } catch (e) {
+    console.log("Error parsing route path:", e);
+    completeRoutePath = [];
+  }
+
+  // Keep the original polylineCoords for backward compatibility
+  const polylineCoords = useMemo(() => completeRoutePath, [completeRoutePath]);
 
   const [busLocation, setBusLocation] = useState<BusLocation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -95,6 +127,15 @@ export default function TripScreen() {
     "waiting"
   );
   const [saving, setSaving] = useState(false);
+  const [showQRCode, setShowQRCode] = useState(true);
+
+  // Enhanced route display
+  const [completeRoute, setCompleteRoute] =
+    useState<LatLng[]>(completeRoutePath);
+  const [pickupToDestinationRoute, setPickupToDestinationRoute] = useState<
+    LatLng[]
+  >([]);
+  const [routeLoading, setRouteLoading] = useState(false);
 
   // transient overlay after successful scan
   const [showScanSuccess, setShowScanSuccess] = useState(false);
@@ -103,6 +144,15 @@ export default function TripScreen() {
   // added: resolved location names
   const [pickupName, setPickupName] = useState<string | null>(null);
   const [destinationName, setDestinationName] = useState<string | null>(null);
+
+  // added: bottom panel minimize state
+  const [isPanelMinimized, setIsPanelMinimized] = useState(false);
+
+  // added: track if scan success has been shown
+  const scanSuccessShownRef = useRef(false);
+
+  // added: off-route warning state
+  const [offRouteWarning, setOffRouteWarning] = useState(false);
 
   // added: reverse geocoding with caching
   const geocodeCache = useRef<Map<string, string>>(new Map());
@@ -161,7 +211,7 @@ export default function TripScreen() {
     }
   };
 
-  // added: resolve names once
+  // added: resolve names once and fetch routes
   useEffect(() => {
     (async () => {
       const [start, end] = await Promise.all([
@@ -170,6 +220,17 @@ export default function TripScreen() {
       ]);
       setPickupName(start);
       setDestinationName(end);
+
+      // Fetch complete route from database if missing
+      if (completeRoutePath.length === 0) {
+        console.log("🗺️ Calling fetchCompleteRouteFromDatabase...");
+        await fetchCompleteRouteFromDatabase();
+      } else {
+        console.log("🗺️ Route path already available, skipping database fetch");
+      }
+
+      // Fetch pickup-to-destination route so user can see the route they'll take
+      await fetchPickupToDestinationRoute(pickupCoords, destCoords);
     })();
   }, []);
 
@@ -182,20 +243,35 @@ export default function TripScreen() {
     prevStatusRef.current = tripStatus;
   }, [tripStatus]);
 
+  // Check if bus is off route
+  useEffect(() => {
+    if (!busLocation || !completeRoute.length) return;
+    const minDist = getMinDistanceToRoute(busLocation, completeRoute);
+    setOffRouteWarning(minDist > 100); // 100 meters threshold
+  }, [busLocation, completeRoute]);
+
   // QR payload the conductor can scan (adjust fields as backend expects)
-  const qrPayload = useMemo(
-    () =>
-      JSON.stringify({
-        type: "pickup_request",
-        busId,
-        commuterId: session?.user?.id, // added
-        tripId: params.tripId || "will-be-created", // Add tripId to QR payload
-        pickup: pickupCoords,
-        dest: destCoords,
-        ts: Date.now(),
-      }),
-    [busId, session?.user?.id, params.tripId, pickupCoords, destCoords]
-  );
+  const qrPayload = useMemo(() => {
+    const payload = {
+      type: "pickup_request",
+      busId,
+      commuterId: session?.user?.id,
+      tripId: params.tripId || "will-be-created",
+      pickup: pickupCoords,
+      dest: destCoords,
+      passengerCount: passengerCount,
+      ts: Date.now(),
+    };
+    console.log("QR Payload generated:", payload);
+    return JSON.stringify(payload);
+  }, [
+    busId,
+    session?.user?.id,
+    params.tripId,
+    pickupCoords,
+    destCoords,
+    passengerCount,
+  ]);
 
   const fetchETA = async (origin: LatLng, destination: LatLng) => {
     if (!GOOGLE_MAPS_API_KEY) {
@@ -216,6 +292,157 @@ export default function TripScreen() {
     } catch (error) {
       setEta("Error calculating ETA");
     }
+  };
+
+  // Fetch complete route from database when missing (same approach as route-details.tsx)
+  const fetchCompleteRouteFromDatabase = async () => {
+    if (!busId) return;
+
+    try {
+      console.log("🗺️ Fetching complete route from database for bus:", busId);
+
+      // First get the route_id from the bus
+      const { data: busData, error: busError } = await supabase
+        .from("buses")
+        .select("id, route_id")
+        .eq("id", busId)
+        .single();
+
+      if (busError || !busData) {
+        console.error("Error fetching bus data:", busError);
+        console.log("🗺️ Bus data received:", busData);
+        return;
+      }
+
+      console.log("🗺️ Bus data fetched successfully:", busData);
+
+      // Now fetch the route using the same RPC function as route-details.tsx
+      const { data: routeData, error: routeError } = await supabase.rpc(
+        "get_route_geojson",
+        { route_id: busData.route_id }
+      );
+
+      if (routeError) {
+        console.error("Error fetching route data:", routeError);
+        return;
+      }
+
+      if (!routeData || !routeData[0]) {
+        console.log("🗺️ No route data found for route_id:", busData.route_id);
+        return;
+      }
+
+      const rawRoute = routeData[0];
+      console.log("🗺️ Route data fetched successfully:", rawRoute);
+
+      // Use the same logic as route-details.tsx
+      if (rawRoute && rawRoute.geojson) {
+        console.log("🗺️ Using stored route geojson from database");
+        const routeCoordinates = rawRoute.geojson.coordinates;
+        const routePath: LatLng[] = routeCoordinates.map(
+          ([lng, lat]: [number, number]) => ({
+            latitude: lat,
+            longitude: lng,
+          })
+        );
+
+        setCompleteRoute(routePath);
+        console.log(
+          `🗺️ Fetched complete route from database with ${routePath.length} points`
+        );
+      } else {
+        console.log("🗺️ No geojson data found in route, using fallback");
+        // Fallback to direct line from pickup to destination
+        const fallbackRoute: LatLng[] = [pickupCoords, destCoords];
+        setCompleteRoute(fallbackRoute);
+        console.log("🗺️ Using fallback route with 2 points");
+      }
+    } catch (error) {
+      console.error("Error fetching complete route from database:", error);
+    }
+  };
+
+  // Fetch pickup to destination route using Google Directions
+  const fetchPickupToDestinationRoute = async (start: LatLng, end: LatLng) => {
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.log("No Google Maps API key available for route fetching");
+      return;
+    }
+
+    setRouteLoading(true);
+    try {
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+      const response = await fetch(url);
+      const json = await response.json();
+
+      if (json.routes && json.routes.length > 0) {
+        const route = json.routes[0];
+        const routePoints: LatLng[] = [];
+
+        // Decode the polyline to get all route points
+        if (route.overview_polyline && route.overview_polyline.points) {
+          const decodedPoints = decodePolyline(route.overview_polyline.points);
+          routePoints.push(...decodedPoints);
+        }
+
+        setPickupToDestinationRoute(routePoints);
+        console.log(
+          `✅ Fetched pickup-to-destination route with ${routePoints.length} points`
+        );
+        console.log(
+          "🗺️ Pickup-to-destination route points:",
+          routePoints.slice(0, 3),
+          "..."
+        );
+      } else {
+        console.log(
+          "No pickup-to-destination route found from Google Directions API"
+        );
+      }
+    } catch (error) {
+      console.error("Error fetching pickup-to-destination route:", error);
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
+  // Decode Google Maps polyline
+  const decodePolyline = (encoded: string): LatLng[] => {
+    const points: LatLng[] = [];
+    let index = 0;
+    const len = encoded.length;
+    let lat = 0;
+    let lng = 0;
+
+    while (index < len) {
+      let b: number;
+      let shift = 0;
+      let result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const dlat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const dlng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+      lng += dlng;
+
+      points.push({
+        latitude: lat / 1e5,
+        longitude: lng / 1e5,
+      });
+    }
+
+    return points;
   };
 
   const finalizeTrip = useCallback(
@@ -262,16 +489,26 @@ export default function TripScreen() {
       setLoading(true);
       try {
         // Check if passenger is already boarded or cancelled
-        const { data: existingBoarding, error: boardingError } = await supabase
-          .from("trip_passengers")
-          .select("id, status, boarded_at")
-          .eq("passenger_id", session.user.id)
-          .eq("bus_id", busId)
-          .maybeSingle();
+        // Use limit(1) and order by created_at desc to get the most recent record
+        const { data: existingBoardingRecords, error: boardingError } =
+          await supabase
+            .from("trip_passengers")
+            .select("id, status, boarded_at")
+            .eq("passenger_id", session.user.id)
+            .eq("bus_id", busId)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        const existingBoarding = existingBoardingRecords?.[0];
 
         if (existingBoarding && !boardingError) {
           if (existingBoarding.status === "boarded") {
             setTripStatus("picked_up");
+            setShowQRCode(false);
+            // Don't show scan success on initial load if already boarded
+            scanSuccessShownRef.current = true;
+            // Fetch complete route since user is already boarded
+            await fetchPickupToDestinationRoute(pickupCoords, destCoords);
           } else if (existingBoarding.status === "cancelled") {
             Alert.alert(
               "Trip Cancelled",
@@ -330,19 +567,29 @@ export default function TripScreen() {
         }
 
         // NEW: Fetch initial trip status (assumes trips.status reflects pickup)
-        const { data: tripRow } = await supabase
+        // Use limit(1) and order by created_at desc to get the most recent trip
+        const { data: tripRows } = await supabase
           .from("trips")
           .select("status")
           .eq("bus_id", busId)
-          .maybeSingle();
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        const tripRow = tripRows?.[0];
 
         if (
           tripRow?.status &&
           `${tripRow.status}`.toLowerCase().includes("picked")
         ) {
           setTripStatus("picked_up");
+          setShowQRCode(false);
+          // Don't show scan success on initial load if already picked up
+          scanSuccessShownRef.current = true;
+          // Fetch complete route since user is already picked up
+          await fetchPickupToDestinationRoute(pickupCoords, destCoords);
         } else if (!existingBoarding) {
           setTripStatus("waiting");
+          setShowQRCode(true);
         }
 
         // Check if pickup request has already been resolved
@@ -377,12 +624,10 @@ export default function TripScreen() {
   useEffect(() => {
     if (!busId || !session?.user?.id) return;
 
-    // Only subscribe to real-time updates if passenger is still waiting for boarding
-    if (tripStatus !== "waiting") {
-      return;
-    }
-
     // Listen for trip_passengers table changes to detect boarding and cancellation
+    console.log(
+      `🔔 Setting up passenger channel for user ${session.user.id} on bus ${busId}`
+    );
     const passengerChannel = supabase
       .channel(`passenger-boarding-${session.user.id}-${busId}`)
       .on(
@@ -391,41 +636,86 @@ export default function TripScreen() {
           event: "UPDATE",
           schema: "public",
           table: "trip_passengers",
-          filter: `passenger_id=eq.${session.user.id} AND bus_id=eq.${busId}`,
+          filter: `passenger_id=eq.${session.user.id}`,
         },
         async (payload) => {
+          console.log("🔔 Real-time trip_passengers update received:", {
+            eventType: payload.eventType,
+            new: payload.new,
+            old: payload.old,
+            table: payload.table,
+            schema: payload.schema,
+          });
+
           const newStatus = payload.new.status;
+          const recordId = payload.new.id;
+          const recordBusId = payload.new.bus_id;
+
+          // Only process updates for the current bus
+          if (recordBusId !== busId) {
+            console.log(
+              `🚫 Ignoring update for different bus: ${recordBusId} (current: ${busId})`
+            );
+            return;
+          }
+
+          console.log(
+            `📊 Status change detected: ${newStatus} for record ${recordId} on bus ${recordBusId}`
+          );
 
           if (newStatus === "boarded") {
+            console.log("✅ Boarding detected! Updating UI...");
+            // Immediately update UI to show boarded status
             setTripStatus("picked_up");
-            setShowScanSuccess(true);
-            setTimeout(() => setShowScanSuccess(false), 2000);
+            setShowQRCode(false); // Hide QR code immediately
 
-            // Unsubscribe from passenger channel since we're now boarded
-            supabase.removeChannel(passengerChannel);
+            // Fetch pickup to destination route
+            await fetchPickupToDestinationRoute(pickupCoords, destCoords);
+
+            // Only show scan success once
+            if (!scanSuccessShownRef.current) {
+              setShowScanSuccess(true);
+              setTimeout(() => setShowScanSuccess(false), 2000);
+              scanSuccessShownRef.current = true;
+            }
+
+            // Don't unsubscribe from passenger channel - we still need to listen for "completed" status
+            // Only mark pickup request as resolved
+            pickupRequestResolved.current = true;
           } else if (newStatus === "cancelled") {
+            console.log("❌ Trip cancelled detected!");
             Alert.alert(
               "Trip Cancelled",
               "The driver has cancelled your trip. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
-          } else {
+          } else if (newStatus === "completed") {
+            console.log("🏁 Trip completed detected!");
+            // Unsubscribe from passenger channel since trip is now complete
+            supabase.removeChannel(passengerChannel);
+            Alert.alert(
+              "Trip Completed! 🎉",
+              "You have reached your destination. Thank you for using our service!",
+              [{ text: "OK", onPress: () => finalizeTrip("arrived") }]
+            );
           }
         }
       )
-      .subscribe((status) => {});
+      .subscribe((status) => {
+        console.log("📡 Passenger channel subscription status:", status);
+      });
 
     // Return cleanup function
     return () => {
       supabase.removeChannel(passengerChannel);
     };
-  }, [busId, session?.user?.id, tripStatus]);
+  }, [busId, session?.user?.id]);
 
   useEffect(() => {
     if (!busId || !session?.user?.id) return;
 
-    // Only listen for pickup request changes if we're still waiting and request not resolved
-    if (tripStatus === "waiting" && !pickupRequestResolved.current) {
+    // Only listen for pickup request changes if request not resolved
+    if (!pickupRequestResolved.current) {
       const pickupRequestChannel = supabase
         .channel(`pickup-request-${session.user.id}`)
         .on(
@@ -494,27 +784,60 @@ export default function TripScreen() {
           return;
         }
 
-        const { data: boardingRecord, error } = await supabase
+        // Use limit(1) and order by created_at desc to get the most recent record
+        const { data: boardingRecords, error } = await supabase
           .from("trip_passengers")
           .select("id, status, boarded_at")
           .eq("passenger_id", session.user.id)
           .eq("bus_id", busId)
-          .maybeSingle();
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        const boardingRecord = boardingRecords?.[0];
 
         if (boardingRecord && !error) {
-          if (boardingRecord.status === "boarded" && tripStatus === "waiting") {
+          console.log(
+            "🔄 Polling check - Current status:",
+            boardingRecord.status,
+            "for record:",
+            boardingRecord.id
+          );
+
+          if (boardingRecord.status === "boarded") {
+            console.log("✅ Polling detected boarding! Updating UI...");
             setTripStatus("picked_up");
-            setShowScanSuccess(true);
-            setTimeout(() => setShowScanSuccess(false), 2000);
+            setShowQRCode(false); // Hide QR code immediately
+
+            // Fetch pickup to destination route
+            await fetchPickupToDestinationRoute(pickupCoords, destCoords);
+
+            // Only show scan success once
+            if (!scanSuccessShownRef.current) {
+              setShowScanSuccess(true);
+              setTimeout(() => setShowScanSuccess(false), 2000);
+              scanSuccessShownRef.current = true;
+            }
+
+            pickupRequestResolved.current = true; // Mark pickup request as resolved
           } else if (boardingRecord.status === "cancelled") {
+            console.log("❌ Polling detected cancellation!");
             Alert.alert(
               "Trip Cancelled",
               "The driver has cancelled your trip. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
           } else if (boardingRecord.status === "completed") {
-            await finalizeTrip("arrived");
+            console.log("🏁 Polling detected completion!");
+            Alert.alert(
+              "Trip Completed! 🎉",
+              "You have reached your destination. Thank you for using our service!",
+              [{ text: "OK", onPress: () => finalizeTrip("arrived") }]
+            );
           }
+        } else if (error) {
+          console.error("❌ Polling error:", error);
+        } else {
+          console.log("🔄 Polling - No boarding record found");
         }
       } catch (err) {}
     };
@@ -615,14 +938,17 @@ export default function TripScreen() {
             if (prevLocation) {
               heading = calculateBearing(prevLocation, newLocation);
             }
+
+            // Enhanced camera animations for better driving mode experience
             const camera: Partial<Camera> = {
               center: newLocation,
-              pitch: 75,
+              pitch: tripStatus === "picked_up" ? 60 : 75, // Lower pitch when boarded for better route view
               heading: heading,
-              zoom: 18,
+              zoom: tripStatus === "picked_up" ? 16 : 18, // Slightly zoomed out when boarded to see more route
             };
-            // Throttle camera animations to reduce memory usage
-            mapRef.current?.animateCamera(camera, { duration: 1000 });
+
+            // Smooth camera animation with shorter duration for more responsive feel
+            mapRef.current?.animateCamera(camera, { duration: 800 });
             previousLocationRef.current = newLocation;
 
             // Auto-finish near destination
@@ -660,7 +986,7 @@ export default function TripScreen() {
       clearInterval(boardingPollingInterval);
       clearInterval(pickupPollingInterval);
     };
-  }, [busId, session?.user?.id, tripStatus]);
+  }, [busId, session?.user?.id]);
 
   // Loading state remains the same
   if (loading) {
@@ -710,31 +1036,76 @@ export default function TripScreen() {
           heading: 0,
           zoom: 18,
         }}
-        showsUserLocation
+        showsUserLocation={false}
         showsMyLocationButton={false}
+        followsUserLocation={false}
       >
-        <Polyline
-          coordinates={polylineCoords}
-          strokeColor="#007AFF"
-          strokeWidth={5}
-        />
-        <Marker
-          coordinate={destCoords}
-          title="Your Destination"
-          pinColor="red"
-        />
+        {/* Show complete route from start to end (same as DrivingModeScreen) */}
+        {completeRoute.length > 0 && (
+          <Polyline
+            coordinates={completeRoute}
+            strokeColor="#007AFF"
+            strokeWidth={4}
+            lineCap="round"
+            lineJoin="round"
+          />
+        )}
+
+        {/* Show pickup to destination route */}
+        {pickupToDestinationRoute.length > 0 && (
+          <Polyline
+            coordinates={pickupToDestinationRoute}
+            strokeColor={tripStatus === "picked_up" ? "#28a745" : "#FF9500"}
+            strokeWidth={tripStatus === "picked_up" ? 6 : 4}
+            lineDashPattern={tripStatus === "picked_up" ? [8, 4] : [5, 5]}
+            lineCap="round"
+            lineJoin="round"
+          />
+        )}
+
+        {/* Fallback: Show direct line from pickup to destination if no routes available */}
+        {completeRoute.length === 0 && (
+          <Polyline
+            coordinates={[pickupCoords, destCoords]}
+            strokeColor="#6c757d"
+            strokeWidth={3}
+            lineDashPattern={[10, 10]}
+            lineCap="round"
+            lineJoin="round"
+          />
+        )}
+
+        {/* Pickup point marker */}
         <Marker
           coordinate={pickupCoords}
-          title="Your Pickup Spot"
+          title="Pickup Location"
           pinColor="blue"
-        />
+        >
+          <View style={styles.pickupMarker}>
+            <Ionicons name="location" size={24} color="#007AFF" />
+          </View>
+        </Marker>
+
+        {/* Destination marker */}
+        <Marker coordinate={destCoords} title="Your Destination" pinColor="red">
+          <View style={styles.destinationMarker}>
+            <Ionicons name="flag" size={24} color="#dc3545" />
+          </View>
+        </Marker>
+
+        {/* Bus marker with enhanced styling */}
         {busLocation && (
           <Marker
             coordinate={busLocation}
             title={busPlateNumber}
             anchor={{ x: 0.5, y: 0.5 }}
           >
-            <View style={styles.busMarker}>
+            <View
+              style={[
+                styles.busMarker,
+                tripStatus === "picked_up" && styles.busMarkerBoarded,
+              ]}
+            >
               <Image
                 source={require("@/assets/images/bus-icon.png")}
                 style={styles.busIcon}
@@ -761,7 +1132,150 @@ export default function TripScreen() {
         </View>
       )}
 
-      {/* REPLACED: Back button -> Cancel/Exit or End Trip */}
+      {/* Off Route Warning */}
+      {offRouteWarning && (
+        <View style={styles.offRouteWarning}>
+          <Ionicons name="warning" size={20} color="#fff" />
+          <Text style={styles.offRouteWarningText}>Bus is off the route!</Text>
+        </View>
+      )}
+
+      <View
+        style={[
+          styles.bottomPanel,
+          isPanelMinimized && styles.bottomPanelMinimized,
+        ]}
+      >
+        {/* Minimize/Expand Button */}
+        <TouchableOpacity
+          style={styles.minimizeButton}
+          onPress={() => setIsPanelMinimized(!isPanelMinimized)}
+        >
+          <Ionicons
+            name={isPanelMinimized ? "chevron-up" : "chevron-down"}
+            size={24}
+            color="#666"
+          />
+        </TouchableOpacity>
+
+        {!isPanelMinimized && (
+          <>
+            <View style={styles.etaContainer}>
+              <View style={styles.statusIndicator}>
+                <View
+                  style={[
+                    styles.statusDot,
+                    {
+                      backgroundColor:
+                        tripStatus === "waiting" ? "#FF9500" : "#28a745",
+                    },
+                  ]}
+                />
+                <Text style={styles.statusText}>
+                  {tripStatus === "waiting"
+                    ? "Waiting for Boarding"
+                    : "On Board"}
+                </Text>
+              </View>
+              <Text style={styles.etaLabel}>
+                {tripStatus === "waiting"
+                  ? "Bus arriving in"
+                  : "Arriving at destination in"}
+              </Text>
+              <Text style={styles.etaText}>{eta}</Text>
+              {routeLoading && tripStatus === "picked_up" && (
+                <View style={styles.routeLoadingIndicator}>
+                  <ActivityIndicator size="small" color="#28a745" />
+                  <Text style={styles.routeLoadingText}>Loading route...</Text>
+                </View>
+              )}
+            </View>
+          </>
+        )}
+
+        {/* Minimized view - show only essential info */}
+        {isPanelMinimized && (
+          <View style={styles.minimizedContent}>
+            <View style={styles.statusIndicator}>
+              <View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor:
+                      tripStatus === "waiting" ? "#FF9500" : "#28a745",
+                  },
+                ]}
+              />
+              <Text style={styles.statusText}>
+                {tripStatus === "waiting" ? "Waiting for Boarding" : "On Board"}
+              </Text>
+            </View>
+            <Text style={styles.etaTextMinimized}>{eta}</Text>
+            {/* Empty space to push minimize button to the right */}
+            <View style={styles.minimizeButtonSpacer} />
+          </View>
+        )}
+
+        {!isPanelMinimized && (
+          <>
+            {/* QR section - show only while waiting for boarding */}
+            {showQRCode && tripStatus === "waiting" && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.qrContainer}>
+                  <Text style={styles.qrTitle}>Boarding QR Code</Text>
+                  <QRCode value={qrPayload} size={160} />
+                  <Text style={styles.qrHelpText}>
+                    Show this QR code to the conductor for boarding
+                  </Text>
+                  <Text style={styles.qrSubText}>
+                    The QR code will disappear once you're boarded
+                  </Text>
+                  {/* Fallback: Show payload as text if QR doesn't work
+                  <View style={styles.fallbackContainer}>
+                    <Text style={styles.fallbackText}>
+                      If QR doesn't work, show this to conductor:
+                    </Text>
+                    <Text style={styles.fallbackPayload}>{qrPayload}</Text>
+                  </View> */}
+                </View>
+              </>
+            )}
+
+            {/* Show boarding confirmation when QR is scanned */}
+            {tripStatus === "picked_up" && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.boardingContainer}>
+                  <Ionicons name="checkmark-circle" size={48} color="#28a745" />
+                  <Text style={styles.boardingTitle}>
+                    Successfully Boarded! ✅
+                  </Text>
+                  <Text style={styles.boardingText}>
+                    You have been boarded on the bus. Enjoy your ride!
+                  </Text>
+                </View>
+              </>
+            )}
+
+            <View style={styles.tripInfoContainer}>
+              <FontAwesome5 name="bus-alt" size={20} color="#333" />
+              <Text style={styles.dots}>········</Text>
+              <Ionicons name="location-sharp" size={20} color="#007AFF" />
+              <Text style={styles.dots}>········</Text>
+              <FontAwesome5 name="flag-checkered" size={20} color="#28a745" />
+            </View>
+            <Text style={styles.destinationText}>
+              Bus {busPlateNumber}{" "}
+              {tripStatus === "waiting"
+                ? "to your pickup"
+                : "to your destination"}
+            </Text>
+          </>
+        )}
+      </View>
+
+      {/* End Trip Button - Centered below bottom panel */}
       <TouchableOpacity
         onPress={() => {
           if (tripStatus === "picked_up") {
@@ -785,89 +1299,19 @@ export default function TripScreen() {
           }
         }}
         style={[
-          styles.cancelButtonTop,
-          tripStatus === "picked_up" && styles.endTripButtonTop,
+          styles.endTripButton,
+          tripStatus === "picked_up" && styles.endTripButtonActive,
         ]}
       >
-        <Text style={styles.cancelButtonTopText}>
-          {tripStatus === "picked_up" ? "End Trip" : "Cancel"}
+        <Ionicons
+          name={tripStatus === "picked_up" ? "stop-circle" : "close-circle"}
+          size={20}
+          color="#fff"
+        />
+        <Text style={styles.endTripButtonText}>
+          {tripStatus === "picked_up" ? "End Trip" : "Cancel Trip"}
         </Text>
       </TouchableOpacity>
-
-      <View style={styles.bottomPanel}>
-        <View style={styles.etaContainer}>
-          <View style={styles.statusIndicator}>
-            <View
-              style={[
-                styles.statusDot,
-                {
-                  backgroundColor:
-                    tripStatus === "waiting" ? "#FF9500" : "#28a745",
-                },
-              ]}
-            />
-            <Text style={styles.statusText}>
-              {tripStatus === "waiting" ? "Waiting for Boarding" : "On Board"}
-            </Text>
-          </View>
-          <Text style={styles.etaLabel}>
-            {tripStatus === "waiting"
-              ? "Bus arriving in"
-              : "Arriving at destination in"}
-          </Text>
-          <Text style={styles.etaText}>{eta}</Text>
-        </View>
-
-        {/* QR section - show only while waiting for boarding */}
-        {tripStatus === "waiting" && (
-          <>
-            <View style={styles.divider} />
-            <View style={styles.qrContainer}>
-              <Text style={styles.qrTitle}>Boarding QR Code</Text>
-              <QRCode value={qrPayload} size={160} />
-              <Text style={styles.qrHelpText}>
-                Show this QR code to the conductor for boarding
-              </Text>
-              <Text style={styles.qrSubText}>
-                The QR code will disappear once you're boarded
-              </Text>
-              {/* Fallback: Show payload as text if QR doesn't work
-              <View style={styles.fallbackContainer}>
-                <Text style={styles.fallbackText}>
-                  If QR doesn't work, show this to conductor:
-                </Text>
-                <Text style={styles.fallbackPayload}>{qrPayload}</Text>
-              </View> */}
-            </View>
-          </>
-        )}
-
-        {/* Show boarding confirmation when QR is scanned */}
-        {tripStatus === "picked_up" && (
-          <>
-            <View style={styles.divider} />
-            <View style={styles.boardingContainer}>
-              <Ionicons name="checkmark-circle" size={48} color="#28a745" />
-              <Text style={styles.boardingTitle}>Successfully Boarded! ✅</Text>
-              <Text style={styles.boardingText}>
-                You have been boarded on the bus. Enjoy your ride!
-              </Text>
-            </View>
-          </>
-        )}
-
-        <View style={styles.tripInfoContainer}>
-          <FontAwesome5 name="bus-alt" size={20} color="#333" />
-          <Text style={styles.dots}>········</Text>
-          <Ionicons name="location-sharp" size={20} color="#007AFF" />
-          <Text style={styles.dots}>········</Text>
-          <FontAwesome5 name="flag-checkered" size={20} color="#28a745" />
-        </View>
-        <Text style={styles.destinationText}>
-          Bus {busPlateNumber}{" "}
-          {tripStatus === "waiting" ? "to your pickup" : "to your destination"}
-        </Text>
-      </View>
     </View>
   );
 }
@@ -906,30 +1350,37 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 22,
   },
-  // REMOVED: backButton
-  cancelButtonTop: {
+  // End Trip Button Styles
+  endTripButton: {
     position: "absolute",
-    top: 60,
+    bottom: 20,
     left: 20,
+    right: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: "rgba(220,53,69,0.95)",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    elevation: 5,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 25,
+    elevation: 8,
     shadowColor: "#000",
     shadowOpacity: 0.2,
-    shadowRadius: 4,
+    shadowRadius: 6,
+    zIndex: 1000,
   },
-  endTripButtonTop: {
-    backgroundColor: "rgba(40,167,69,0.95)", // Green color for end trip
+  endTripButtonActive: {
+    backgroundColor: "#ff4d4f", // Green color for end trip
   },
-  cancelButtonTopText: {
+  endTripButtonText: {
     color: "white",
     fontWeight: "600",
+    fontSize: 16,
+    marginLeft: 8,
   },
   bottomPanel: {
     position: "absolute",
-    bottom: 40,
+    bottom: 100, // Increased from 40 to make room for End Trip button
     left: 20,
     right: 20,
     backgroundColor: "white",
@@ -942,6 +1393,35 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     borderWidth: 1,
     borderColor: "rgba(0,0,0,0.05)",
+  },
+  bottomPanelMinimized: {
+    padding: 16,
+  },
+  minimizeButton: {
+    position: "absolute",
+    top: 20,
+    right: 18,
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: "rgba(0,0,0,0.05)",
+    zIndex: 1,
+  },
+  minimizedContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: 8,
+    paddingRight: 60, // Make space for the minimize button
+  },
+  etaTextMinimized: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#007AFF",
+    marginLeft: 16,
+    flex: 1,
+    marginBottom: 12,
+  },
+  minimizeButtonSpacer: {
+    width: 20, // Space for the minimize button
   },
   etaContainer: {
     alignItems: "center",
@@ -980,6 +1460,24 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#007AFF",
     textAlign: "center",
+  },
+  routeLoadingIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "#f0f8f0",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#28a745",
+  },
+  routeLoadingText: {
+    fontSize: 12,
+    color: "#28a745",
+    marginLeft: 6,
+    fontWeight: "500",
   },
   divider: {
     height: 1,
@@ -1029,7 +1527,31 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffc107",
     elevation: 5,
   },
+  busMarkerBoarded: {
+    backgroundColor: "#28a745",
+    borderColor: "#1e7e34",
+    elevation: 8,
+    shadowColor: "#28a745",
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
   busIcon: { width: 20, height: 20 },
+  pickupMarker: {
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 4,
+    borderWidth: 2,
+    borderColor: "#007AFF",
+    elevation: 3,
+  },
+  destinationMarker: {
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 4,
+    borderWidth: 2,
+    borderColor: "#dc3545",
+    elevation: 3,
+  },
   boardingContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -1119,5 +1641,30 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 12,
     fontStyle: "italic",
+  },
+  offRouteWarning: {
+    position: "absolute",
+    top: 100,
+    left: 20,
+    right: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ff4d4f",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    elevation: 8,
+    shadowColor: "#ff4d4f",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    zIndex: 1000,
+  },
+  offRouteWarningText: {
+    color: "#fff",
+    marginLeft: 8,
+    fontWeight: "bold",
+    fontSize: 16,
+    flex: 1,
   },
 });

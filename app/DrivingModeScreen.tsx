@@ -95,8 +95,8 @@ const DrivingModeScreen = () => {
   const [canStartNow, setCanStartNow] = useState(false);
   const [oppositeRouteBuses, setOppositeRouteBuses] = useState<any[]>([]);
 
-  // NEW: Collapsible header state
-  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
+  // NEW: Collapsible header state - initially collapsed
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(true);
 
   // Pickup Request Management
   const [pickupRequests, setPickupRequests] = useState<any[]>([]);
@@ -233,6 +233,29 @@ const DrivingModeScreen = () => {
     setNewPickupNotification(request);
     setShowPickupNotification(true);
 
+    // Focus camera on pickup request location
+    if (request.pickup_lat && request.pickup_lng) {
+      const pickupLocation = {
+        latitude: request.pickup_lat,
+        longitude: request.pickup_lng,
+      };
+
+      console.log(
+        "📍 Focusing camera on new pickup request location:",
+        pickupLocation
+      );
+
+      // Animate camera to pickup location with appropriate zoom
+      mapRef.current?.animateCamera(
+        {
+          center: pickupLocation,
+          zoom: 16, // Closer zoom to see the pickup location clearly
+          pitch: 60, // Slight 3D angle for better view
+        },
+        { duration: 1500 } // Smooth 1.5 second animation
+      );
+    }
+
     // Auto-hide notification after 10 seconds
     setTimeout(() => {
       setShowPickupNotification(false);
@@ -264,6 +287,36 @@ const DrivingModeScreen = () => {
       // Refresh pickup requests
       await fetchPickupRequests();
 
+      // Focus camera on the accepted pickup request location
+      const acceptedRequest = pickupRequests.find(
+        (req) => req.id === requestId
+      );
+      if (
+        acceptedRequest &&
+        acceptedRequest.pickup_lat &&
+        acceptedRequest.pickup_lng
+      ) {
+        const pickupLocation = {
+          latitude: acceptedRequest.pickup_lat,
+          longitude: acceptedRequest.pickup_lng,
+        };
+
+        console.log(
+          "📍 Focusing camera on accepted pickup request location:",
+          pickupLocation
+        );
+
+        // Animate camera to accepted pickup location
+        mapRef.current?.animateCamera(
+          {
+            center: pickupLocation,
+            zoom: 16,
+            pitch: 60,
+          },
+          { duration: 1500 }
+        );
+      }
+
       showAlert(
         "Pickup Request Accepted! ✅",
         "You have accepted the pickup request. The passenger will be notified.",
@@ -275,6 +328,31 @@ const DrivingModeScreen = () => {
         "Unexpected Error",
         "An unexpected error occurred. Please try again.",
         "error"
+      );
+    }
+  };
+
+  // Function to focus camera on pickup request location
+  const focusOnPickupRequest = (request: any) => {
+    if (request.pickup_lat && request.pickup_lng) {
+      const pickupLocation = {
+        latitude: request.pickup_lat,
+        longitude: request.pickup_lng,
+      };
+
+      console.log(
+        "📍 Focusing camera on pickup request location:",
+        pickupLocation
+      );
+
+      // Animate camera to pickup location
+      mapRef.current?.animateCamera(
+        {
+          center: pickupLocation,
+          zoom: 16,
+          pitch: 60,
+        },
+        { duration: 1500 }
       );
     }
   };
@@ -471,38 +549,6 @@ const DrivingModeScreen = () => {
     }
   }, [busId]);
 
-  // Initialize scanned passengers from database
-  useEffect(() => {
-    const initializeScannedPassengers = async () => {
-      if (!busId || !tripId) return;
-
-      try {
-        const { data: boardedPassengers, error } = await supabase
-          .from("trip_passengers")
-          .select("passenger_id")
-          .eq("bus_id", busId)
-          .eq("trip_id", tripId)
-          .eq("status", "boarded");
-
-        if (error) {
-          console.error("Error fetching boarded passengers:", error);
-          return;
-        }
-
-        if (boardedPassengers && boardedPassengers.length > 0) {
-          const passengerIds = new Set(
-            boardedPassengers.map((p) => p.passenger_id)
-          );
-          setScannedPassengers(passengerIds);
-        }
-      } catch (error) {
-        console.error("Error initializing scanned passengers:", error);
-      }
-    };
-
-    initializeScannedPassengers();
-  }, [busId, tripId]);
-
   // Set up real-time subscription for pickup requests
   useEffect(() => {
     if (!busId) return;
@@ -548,12 +594,13 @@ const DrivingModeScreen = () => {
     calculateDynamicDepartureTime();
   }, [passengerCount, oppositeRouteBuses, parsedCapacity]);
 
-  // NEW: Initialize trip status from database
+  // NEW: Initialize trip status and passenger data from database
   useEffect(() => {
     const fetchTripStatus = async () => {
-      if (!tripId) return;
+      if (!tripId || !busId) return;
 
       try {
+        // Fetch trip status
         const { data: tripData, error } = await supabase
           .from("trips")
           .select("status")
@@ -570,13 +617,46 @@ const DrivingModeScreen = () => {
             tripData.status as "waiting" | "ongoing" | "completed" | "cancelled"
           );
         }
+
+        // Fetch current passenger count and scanned passengers from database
+        const { data: boardedPassengers, error: passengersError } =
+          await supabase
+            .from("trip_passengers")
+            .select("passenger_id, passenger_count")
+            .eq("bus_id", busId)
+            .eq("trip_id", tripId)
+            .eq("status", "boarded");
+
+        if (passengersError) {
+          console.error("Error fetching boarded passengers:", passengersError);
+          return;
+        }
+
+        if (boardedPassengers && boardedPassengers.length > 0) {
+          // Set scanned passengers
+          const passengerIds = new Set(
+            boardedPassengers.map((p) => p.passenger_id)
+          );
+          setScannedPassengers(passengerIds);
+
+          // Calculate total passenger count
+          const totalPassengers = boardedPassengers.reduce(
+            (sum, p) => sum + (p.passenger_count || 1),
+            0
+          );
+          setPassengerCount(totalPassengers);
+
+          console.log(
+            `🔄 Restored ${boardedPassengers.length} boarded passengers (${totalPassengers} total) from database`
+          );
+        }
       } catch (error) {
         console.error("Error in fetchTripStatus:", error);
       }
     };
 
     fetchTripStatus();
-  }, [tripId]);
+  }, [tripId, busId]);
 
   // NEW: Request camera permissions for QR scanner
   useEffect(() => {
@@ -629,11 +709,15 @@ const DrivingModeScreen = () => {
         let tripId = payload.tripId;
 
         if (!tripId || tripId === "will-be-created") {
+          // Get passenger count from the payload or default to 1
+          const groupSize = payload.passengerCount || 1;
+
           const { data: newTrip, error: createError } = await supabase
             .from("trips")
             .insert({
               bus_id: busId,
               status: "waiting",
+              passenger_count: groupSize,
             })
             .select("id")
             .single();
@@ -651,13 +735,17 @@ const DrivingModeScreen = () => {
         }
 
         // Check if trip_passengers record already exists
-        const { data: existingRecord, error: checkError } = await supabase
+        // Use limit(1) and order by created_at desc to get the most recent record
+        const { data: existingRecords, error: checkError } = await supabase
           .from("trip_passengers")
           .select("id, status")
           .eq("bus_id", busId)
           .eq("passenger_id", payload.commuterId)
           .eq("trip_id", tripId)
-          .maybeSingle();
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        const existingRecord = existingRecords?.[0];
 
         if (!existingRecord || checkError) {
           console.error("No trip_passengers record found for this passenger:", {
@@ -665,6 +753,7 @@ const DrivingModeScreen = () => {
             passengerId: payload.commuterId,
             tripId,
             error: checkError,
+            recordsFound: existingRecords?.length || 0,
           });
           showAlert(
             "Boarding Failed",
@@ -695,7 +784,6 @@ const DrivingModeScreen = () => {
         }
 
         // Update existing record to boarded status
-
         const { data: updatedRecord, error: updateError } = await supabase
           .from("trip_passengers")
           .update({
@@ -705,6 +793,7 @@ const DrivingModeScreen = () => {
             dest_lng: payload.dest.longitude,
             status: "boarded",
             boarded_at: new Date().toISOString(),
+            passenger_count: payload.passengerCount || 1,
           })
           .eq("id", existingRecord.id)
           .select()
@@ -720,69 +809,68 @@ const DrivingModeScreen = () => {
           return;
         }
 
-        // Check current trip status and update to 'ongoing' if 'waiting'
-        const { data: currentTrip, error: fetchError } = await supabase
-          .from("trips")
-          .select("status")
-          .eq("id", tripId)
-          .single();
-
-        if (fetchError) {
-          console.error("Error fetching trip status:", fetchError);
-          showAlert(
-            "Status Check Failed",
-            "Unable to verify trip status. The passenger has been boarded but trip status could not be updated.",
-            "warning"
-          );
-          return;
-        }
-
-        if (currentTrip.status === "waiting") {
-          const { error: updateError } = await supabase
-            .from("trips")
-            .update({ status: "ongoing" })
-            .eq("id", tripId)
-            .eq("bus_id", busId);
-
-          if (updateError) {
-            console.error(
-              "Error updating trip status to ongoing:",
-              updateError
-            );
-            showAlert(
-              "Status Update Failed",
-              "Unable to update trip status to ongoing. The passenger has been boarded successfully.",
-              "warning"
-            );
-          }
-        }
+        // Note: Trip status remains "waiting" until driver explicitly starts the trip
+        // This allows multiple passengers to be scanned before the trip officially begins
 
         // Add passenger to scanned passengers set
         setScannedPassengers((prev) => new Set(prev).add(payload.commuterId));
 
-        // Increment passenger count and show success
-        setPassengerCount((p) => Math.min(p + 1, parsedCapacity));
+        let newPassengerCount = 0;
+        try {
+          // Get passenger count from the payload or default to 1
+          const groupSize = payload.passengerCount || 1;
+          console.log(
+            "QR Code scanned - Group size:",
+            groupSize,
+            "Payload:",
+            payload
+          );
 
-        // Update bus passenger count in database
-        const { error: busUpdateError } = await supabase
-          .from("buses")
-          .update({ passengers: Math.min(passengerCount + 1, parsedCapacity) })
-          .eq("id", busId);
+          // Update bus passenger count in database
+          const { data: currentBus, error: getBusError } = await supabase
+            .from("buses")
+            .select("passengers")
+            .eq("id", busId)
+            .single();
 
-        if (busUpdateError) {
-          console.error("Error updating bus passenger count:", busUpdateError);
-        }
+          if (getBusError) {
+            console.error("Error getting current bus passengers:", getBusError);
+            return;
+          }
 
-        showAlert(
-          "Passenger Boarded Successfully! 🎉",
-          `Commuter ${
-            payload.commuterId
-          } has been added to your trip. Current passengers: ${Math.min(
-            passengerCount + 1,
+          const currentPassengers = currentBus?.passengers || 0;
+          newPassengerCount = Math.min(
+            currentPassengers + groupSize,
             parsedCapacity
-          )}/${parsedCapacity}`,
-          "success"
-        );
+          );
+
+          const { error: busUpdateError } = await supabase
+            .from("buses")
+            .update({
+              passengers: newPassengerCount,
+            })
+            .eq("id", busId);
+
+          // Update local state after successful database update
+          if (!busUpdateError) {
+            setPassengerCount(newPassengerCount);
+          }
+
+          const passengerText =
+            groupSize > 1 ? `${groupSize} passengers` : "1 passenger";
+          showAlert(
+            "Boarding Successful! 🎉",
+            `Added ${passengerText} to your trip. Current total: ${newPassengerCount}/${parsedCapacity}`,
+            "success"
+          );
+        } catch (error) {
+          console.error("Error updating passenger count:", error);
+          showAlert(
+            "Error",
+            "Failed to update passenger count. Please try again.",
+            "error"
+          );
+        }
       } else {
         showAlert(
           "Invalid QR Code",
@@ -909,11 +997,18 @@ const DrivingModeScreen = () => {
           const passengerStatus = isTripOfficiallyStarted
             ? "completed"
             : "cancelled";
-          const { error: passengersError } = await supabase
+
+          console.log(
+            `🚌 Driver ending trip - Updating passenger status to: ${passengerStatus}`
+          );
+          console.log(`🚌 Trip ID: ${tripId}, Bus ID: ${busId}`);
+
+          const { data: updateResult, error: passengersError } = await supabase
             .from("trip_passengers")
             .update({ status: passengerStatus })
             .eq("trip_id", tripId)
-            .eq("bus_id", busId);
+            .eq("bus_id", busId)
+            .select("id, passenger_id, status");
 
           if (passengersError) {
             console.error("Error updating passengers:", passengersError);
@@ -931,7 +1026,8 @@ const DrivingModeScreen = () => {
           console.log(
             `Successfully ${
               isTripOfficiallyStarted ? "completed" : "cancelled"
-            } all passenger bookings`
+            } ${updateResult?.length || 0} passenger bookings:`,
+            updateResult
           );
 
           // 2. Update trip status
@@ -1239,7 +1335,12 @@ const DrivingModeScreen = () => {
               style={styles.pickupRequestsScroll}
             >
               {pickupRequests.map((request) => (
-                <View key={request.id} style={styles.pickupRequestCard}>
+                <TouchableOpacity
+                  key={request.id}
+                  style={styles.pickupRequestCard}
+                  onPress={() => focusOnPickupRequest(request)}
+                  activeOpacity={0.7}
+                >
                   <View style={styles.pickupRequestInfo}>
                     <Text style={styles.pickupRequestName}>
                       {request.commuter_name || "Unknown"}
@@ -1269,7 +1370,7 @@ const DrivingModeScreen = () => {
                       <Text style={styles.declineButtonText}>Decline</Text>
                     </TouchableOpacity>
                   </View>
-                </View>
+                </TouchableOpacity>
               ))}
             </ScrollView>
           </View>

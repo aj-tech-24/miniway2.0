@@ -95,6 +95,7 @@ export function CommuterHomeScreen() {
   );
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [isMapExpanded, setIsMapExpanded] = useState(false);
+  const [isCheckingExistingTrip, setIsCheckingExistingTrip] = useState(true);
 
   // Animation values
   const headerOpacity = useRef(new Animated.Value(1)).current;
@@ -187,6 +188,135 @@ export function CommuterHomeScreen() {
     },
     []
   );
+
+  // Function to check for existing waiting trips (for app crash recovery)
+  const checkForExistingTrip = useCallback(async () => {
+    if (!session?.user?.id) {
+      setIsCheckingExistingTrip(false);
+      return;
+    }
+
+    try {
+      console.log("🔍 Checking for existing waiting trips...");
+
+      // Check for trip_passengers records with waiting status
+      const { data: existingTrips, error } = await supabase
+        .from("trip_passengers")
+        .select(
+          `
+            id,
+            bus_id,
+            trip_id,
+            status,
+            pickup_lat,
+            pickup_lng,
+            dest_lat,
+            dest_lng,
+            passenger_count,
+            created_at,
+            buses!inner(plate_number),
+            trips!inner(status)
+          `
+        )
+        .eq("passenger_id", session.user.id)
+        .eq("status", "boarded")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (error) {
+        console.error("Error checking for existing trips:", error);
+        setIsCheckingExistingTrip(false);
+        return;
+      }
+
+      if (existingTrips && existingTrips.length > 0) {
+        const existingTrip = existingTrips[0];
+        console.log("✅ Found existing waiting trip:", existingTrip);
+
+        // Show alert to continue trip
+        Alert.alert(
+          "Continue Your Trip? 🚌",
+          `You have an ongoing trip on Bus ${
+            existingTrip.buses[0]?.plate_number || "Unknown"
+          }. Would you like to continue where you left off?`,
+          [
+            {
+              text: "Start New Trip",
+              style: "cancel",
+              onPress: () => {
+                // Cancel the existing trip
+                cancelExistingTrip(existingTrip.id);
+              },
+            },
+            {
+              text: "Continue Trip",
+              onPress: () => {
+                // Navigate to trip screen with existing trip data
+                continueExistingTrip(existingTrip);
+              },
+            },
+          ]
+        );
+      } else {
+        console.log("ℹ️ No existing waiting trips found");
+      }
+    } catch (error) {
+      console.error("Error in checkForExistingTrip:", error);
+    } finally {
+      setIsCheckingExistingTrip(false);
+    }
+  }, [session?.user?.id]);
+
+  // Function to cancel existing trip
+  const cancelExistingTrip = async (tripPassengerId: string) => {
+    try {
+      const { error } = await supabase
+        .from("trip_passengers")
+        .update({ status: "cancelled" })
+        .eq("id", tripPassengerId);
+
+      if (error) {
+        console.error("Error cancelling existing trip:", error);
+        Alert.alert(
+          "Error",
+          "Could not cancel the existing trip. Please try again."
+        );
+      } else {
+        console.log("✅ Existing trip cancelled successfully");
+      }
+    } catch (error) {
+      console.error("Error cancelling trip:", error);
+    }
+  };
+
+  // Function to continue existing trip
+  const continueExistingTrip = (existingTrip: any) => {
+    try {
+      console.log("🚀 Continuing existing trip:", existingTrip);
+
+      // Navigate to trip screen with the existing trip data
+      const tripParams = {
+        busId: existingTrip.bus_id,
+        busPlateNumber: existingTrip.buses[0]?.plate_number || "Unknown",
+        tripId: existingTrip.trip_id,
+        passengerCount: existingTrip.passenger_count || 1,
+        pickupLat: existingTrip.pickup_lat.toString(),
+        pickupLng: existingTrip.pickup_lng.toString(),
+        destLat: existingTrip.dest_lat.toString(),
+        destLng: existingTrip.dest_lng.toString(),
+        routePath: "[]", // Will be fetched in trip screen
+      };
+
+      console.log("Navigating to trip with params:", tripParams);
+      router.push({
+        pathname: "/trip",
+        params: tripParams,
+      });
+    } catch (error) {
+      console.error("Error continuing trip:", error);
+      Alert.alert("Error", "Could not continue the trip. Please try again.");
+    }
+  };
 
   // Fetch nearby buses on routes
   const fetchActiveMinibuses = useCallback(async () => {
@@ -328,6 +458,10 @@ export function CommuterHomeScreen() {
       });
       updateLocationWithDebounce(location);
       await fetchActiveMinibuses();
+
+      // Check for existing waiting trips (for app crash recovery)
+      await checkForExistingTrip();
+
       setInitialLoading(false);
     };
     initialize();
@@ -342,7 +476,7 @@ export function CommuterHomeScreen() {
     return () => {
       supabase.removeChannel(subscription);
     };
-  }, [fetchActiveMinibuses]);
+  }, [fetchActiveMinibuses, checkForExistingTrip]);
 
   // Refetch buses when user location changes
   useEffect(() => {
@@ -706,6 +840,21 @@ export function CommuterHomeScreen() {
   return (
     <View style={styles.container}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
+
+      {/* Loading screen for checking existing trips */}
+      {isCheckingExistingTrip && (
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={styles.loadingTitle}>
+              Checking for ongoing trips...
+            </Text>
+            <Text style={styles.loadingSubtext}>
+              Looking for any trips that may have been interrupted
+            </Text>
+          </View>
+        </View>
+      )}
 
       {/* Safe Area for normal mode */}
       {!isPinDroppingMode && (
@@ -2075,7 +2224,7 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   destinationText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: "600",
     marginBottom: 3,
     lineHeight: 22,
@@ -2350,6 +2499,31 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.6)",
     justifyContent: "center",
     alignItems: "center",
+  },
+  loadingContainer: {
+    alignItems: "center",
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 32,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  loadingTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  loadingSubtext: {
+    fontSize: 16,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 22,
   },
   loadingText: {
     marginTop: 10,
