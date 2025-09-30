@@ -120,6 +120,9 @@ export default function LoginScreen() {
         footerLinkText="Sign Up"
         onFooterLinkPress={() => router.push("/signup")}
         textColor={textColor}
+        additionalFooterText="Want to join our team?"
+        additionalFooterLinkText="Apply as Driver/Conductor"
+        onAdditionalFooterLinkPress={() => router.push("/role-request")}
       />
     </AuthLayout>
   );

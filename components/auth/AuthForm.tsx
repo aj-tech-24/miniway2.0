@@ -2,6 +2,8 @@ import { Ionicons } from "@expo/vector-icons"; // Import Ionicons
 import React from "react";
 import {
   ActivityIndicator,
+  Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,11 +23,14 @@ interface AuthFormProps {
     value: string;
     onChangeText: (text: string) => void;
     secureTextEntry?: boolean;
-    keyboardType?: "default" | "email-address" | "number-pad";
-    autoCapitalize?: "none" | "words" | "sentences";
+    keyboardType?: "default" | "email-address" | "number-pad" | "phone-pad";
+    autoCapitalize?: "none" | "words" | "sentences" | "characters";
     error?: string;
     note?: string;
-    isPasswordField?: boolean; // Add this new property to identify password fields
+    isPasswordField?: boolean;
+    isSelectField?: boolean;
+    isTextArea?: boolean;
+    options?: { label: string; value: string }[];
   }[];
   buttonText: string;
   onButtonPress: () => void;
@@ -38,6 +43,10 @@ interface AuthFormProps {
   footerLinkText: string;
   onFooterLinkPress: () => void;
   textColor: string;
+  additionalFooterText?: string;
+  additionalFooterLinkText?: string;
+  onAdditionalFooterLinkPress?: () => void;
+  customContent?: React.ReactNode;
 }
 
 export default function AuthForm({
@@ -52,10 +61,16 @@ export default function AuthForm({
   footerLinkText,
   onFooterLinkPress,
   textColor,
+  additionalFooterText,
+  additionalFooterLinkText,
+  onAdditionalFooterLinkPress,
+  customContent,
 }: AuthFormProps) {
   const [showErrorModal, setShowErrorModal] = React.useState(false);
   const [showSuccessModal, setShowSuccessModal] = React.useState(false);
-  const [showPassword, setShowPassword] = React.useState(false); // New state for password visibility
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [showSelectModal, setShowSelectModal] = React.useState(false);
+  const [currentSelectField, setCurrentSelectField] = React.useState<any>(null);
 
   React.useEffect(() => {
     if (message) {
@@ -68,28 +83,79 @@ export default function AuthForm({
   }, [message]);
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.scrollContainer}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={[styles.title, { color: textColor }]}>{title}</Text>
       <Text style={[styles.subtitle, { color: textColor }]}>{subtitle}</Text>
+
+      {customContent && (
+        <View style={styles.customContentContainer}>{customContent}</View>
+      )}
 
       {fields.map((field) => (
         <View key={field.name} style={styles.inputContainer}>
           <Text style={[styles.label, { color: textColor }]}>
             {field.label}
           </Text>
-          {field.isPasswordField ? ( // Conditionally render based on isPasswordField
+          {field.isSelectField ? (
+            <TouchableOpacity
+              style={[
+                styles.input,
+                styles.selectInput,
+                field.error && styles.inputError,
+              ]}
+              onPress={() => {
+                setCurrentSelectField(field);
+                setShowSelectModal(true);
+              }}
+            >
+              <Text
+                style={[
+                  styles.selectText,
+                  !field.value && styles.placeholderText,
+                ]}
+              >
+                {field.value
+                  ? field.options?.find((opt) => opt.value === field.value)
+                      ?.label || field.value
+                  : field.placeholder}
+              </Text>
+              <Ionicons name="chevron-down" size={20} color="#A0A3BD" />
+            </TouchableOpacity>
+          ) : field.isTextArea ? (
+            <TextInput
+              style={[
+                styles.input,
+                styles.textAreaInput,
+                field.error && styles.inputError,
+              ]}
+              placeholder={field.placeholder}
+              placeholderTextColor="#A0A3BD"
+              value={field.value}
+              onChangeText={field.onChangeText}
+              keyboardType={field.keyboardType}
+              autoCapitalize={field.autoCapitalize}
+              multiline={true}
+              numberOfLines={4}
+              textAlignVertical="top"
+            />
+          ) : field.isPasswordField ? (
             <View style={styles.passwordInputContainer}>
               <TextInput
                 style={[
                   styles.input,
                   field.error && styles.inputError,
-                  styles.passwordInput, // Apply passwordInput style for password fields
+                  styles.passwordInput,
                 ]}
                 placeholder={field.placeholder}
                 placeholderTextColor="#A0A3BD"
                 value={field.value}
                 onChangeText={field.onChangeText}
-                secureTextEntry={!showPassword} // Use !showPassword directly
+                secureTextEntry={!showPassword}
                 keyboardType={field.keyboardType}
                 autoCapitalize={field.autoCapitalize}
               />
@@ -105,13 +171,13 @@ export default function AuthForm({
               </TouchableOpacity>
             </View>
           ) : (
-            <TextInput // Render normal TextInput for non-password fields
+            <TextInput
               style={[styles.input, field.error && styles.inputError]}
               placeholder={field.placeholder}
               placeholderTextColor="#A0A3BD"
               value={field.value}
               onChangeText={field.onChangeText}
-              secureTextEntry={field.secureTextEntry} // Use original secureTextEntry for non-password fields
+              secureTextEntry={field.secureTextEntry}
               keyboardType={field.keyboardType}
               autoCapitalize={field.autoCapitalize}
             />
@@ -142,6 +208,22 @@ export default function AuthForm({
         </TouchableOpacity>
       </View>
 
+      {additionalFooterText &&
+        additionalFooterLinkText &&
+        onAdditionalFooterLinkPress && (
+          <View style={styles.additionalFooter}>
+            <Text style={[styles.footerText, { color: textColor }]}>
+              {additionalFooterText}{" "}
+            </Text>
+            <TouchableOpacity
+              onPress={onAdditionalFooterLinkPress}
+              disabled={isLoading}
+            >
+              <Text style={styles.link}>{additionalFooterLinkText}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
       {/* Error Modal */}
       <ErrorModal
         visible={showErrorModal}
@@ -161,13 +243,68 @@ export default function AuthForm({
         icon="checkmark-circle"
         iconColor="#34C759"
       />
-    </View>
+
+      {/* Select Options Modal */}
+      <Modal
+        visible={showSelectModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSelectModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>
+              Select {currentSelectField?.label}
+            </Text>
+            <ScrollView style={styles.optionsContainer}>
+              {currentSelectField?.options?.map((option: any) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[
+                    styles.optionItem,
+                    currentSelectField?.value === option.value &&
+                      styles.selectedOption,
+                  ]}
+                  onPress={() => {
+                    currentSelectField?.onChangeText(option.value);
+                    setShowSelectModal(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.optionText,
+                      currentSelectField?.value === option.value &&
+                        styles.selectedOptionText,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                  {currentSelectField?.value === option.value && (
+                    <Ionicons name="checkmark" size={20} color="#007AFF" />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => setShowSelectModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollContainer: {
+    flex: 1,
+  },
   container: {
     paddingHorizontal: 30,
+    paddingBottom: 20,
   },
   title: {
     fontSize: 32,
@@ -251,6 +388,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexWrap: "wrap",
   },
+  additionalFooter: {
+    marginTop: 15,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
   footerText: {
     fontSize: 16,
     color: "#666",
@@ -273,5 +417,80 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 15,
     padding: 10,
+  },
+  selectInput: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  selectText: {
+    fontSize: 16,
+    color: "#333",
+    flex: 1,
+  },
+  placeholderText: {
+    color: "#A0A3BD",
+  },
+  textAreaInput: {
+    height: 100,
+    paddingTop: 15,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 20,
+    width: "80%",
+    maxHeight: "70%",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 15,
+    textAlign: "center",
+    color: "#333",
+  },
+  optionsContainer: {
+    maxHeight: 300,
+  },
+  optionItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 15,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E1E5E9",
+  },
+  selectedOption: {
+    backgroundColor: "#F0F8FF",
+  },
+  optionText: {
+    fontSize: 16,
+    color: "#333",
+  },
+  selectedOptionText: {
+    color: "#007AFF",
+    fontWeight: "600",
+  },
+  cancelButton: {
+    marginTop: 15,
+    paddingVertical: 12,
+    backgroundColor: "#6C757D",
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  cancelButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  customContentContainer: {
+    marginBottom: 15,
   },
 });

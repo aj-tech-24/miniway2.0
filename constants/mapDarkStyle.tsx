@@ -25,32 +25,62 @@ export const mapDarkStyle = Object.freeze([
   {
     featureType: "road",
     elementType: "geometry",
-    stylers: [{ color: "#38414e" }],
+    stylers: [{ color: "#4a5568" }],
   },
   {
     featureType: "road",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#212a37" }],
+    stylers: [{ color: "#2d3748" }],
   },
   {
     featureType: "road",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#9ca5b3" }],
+    stylers: [{ color: "#e2e8f0" }],
+  },
+  {
+    featureType: "road.arterial",
+    elementType: "geometry",
+    stylers: [{ color: "#5a6578" }],
+  },
+  {
+    featureType: "road.arterial",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#4a5568" }],
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry",
+    stylers: [{ color: "#4a5568" }],
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#2d3748" }],
   },
   {
     featureType: "road.highway",
     elementType: "geometry",
-    stylers: [{ color: "#746855" }],
+    stylers: [{ color: "#f7fafc" }],
   },
   {
     featureType: "road.highway",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#1f2835" }],
+    stylers: [{ color: "#e2e8f0" }],
   },
   {
     featureType: "road.highway",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#f3d19c" }],
+    stylers: [{ color: "#1a202c" }],
+  },
+  {
+    featureType: "road.highway.controlled_access",
+    elementType: "geometry",
+    stylers: [{ color: "#ffffff" }],
+  },
+  {
+    featureType: "road.highway.controlled_access",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#e2e8f0" }],
   },
   {
     featureType: "transit",

@@ -77,6 +77,6 @@ const styles = StyleSheet.create({
     height: 100,
     alignSelf: "center",
     marginBottom: 20,
-    marginTop: -20,
+    marginTop: 50,
   },
 });

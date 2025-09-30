@@ -5,12 +5,13 @@ import {
   DefaultTheme,
   ThemeProvider as NavigationThemeProvider,
 } from "@react-navigation/native";
+import * as Font from "expo-font";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 
 import * as Notifications from "expo-notifications";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { ImageBackground, Platform, StyleSheet } from "react-native";
 import "react-native-reanimated";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -45,12 +46,29 @@ function RootLayoutNav() {
   const { session, isLoading, role } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const [fontsLoaded, setFontsLoaded] = useState(false);
 
   useEffect(() => {
-    if (!isLoading) {
+    const loadFonts = async () => {
+      try {
+        await Font.loadAsync({
+          SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
+        });
+        setFontsLoaded(true);
+      } catch (error) {
+        console.warn("Font loading failed:", error);
+        setFontsLoaded(true); // Continue even if fonts fail to load
+      }
+    };
+
+    loadFonts();
+  }, []);
+
+  useEffect(() => {
+    if (!isLoading && fontsLoaded) {
       SplashScreen.hideAsync();
     }
-  }, [isLoading]);
+  }, [isLoading, fontsLoaded]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -65,7 +83,7 @@ function RootLayoutNav() {
     }
   }, [session, role, segments, isLoading, router]);
 
-  if (isLoading) {
+  if (isLoading || !fontsLoaded) {
     return (
       <ImageBackground
         // IMPORTANT: Make sure this path matches your actual splash screen image.

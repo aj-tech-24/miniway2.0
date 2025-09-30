@@ -1,3 +1,4 @@
+import SafeText from "@/components/SafeText";
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
@@ -288,7 +289,7 @@ export default function RouteDetailsScreen() {
               capacity,
               passengers,
               driver_id,
-              driver:users (
+              driver:users!fk_driver (
                 id,
                 fullName
               )
@@ -428,7 +429,7 @@ export default function RouteDetailsScreen() {
             capacity,
             passengers,
             driver_id,
-            driver:users (
+            driver:users!fk_driver (
               id,
               fullName
             )
@@ -550,7 +551,7 @@ export default function RouteDetailsScreen() {
               capacity,
               passengers,
               driver_id,
-              driver:users (
+              driver:users!fk_driver (
                 id,
                 fullName
               )
@@ -1350,13 +1351,15 @@ export default function RouteDetailsScreen() {
       <View style={styles.bottomPanel}>
         {showPickupSelection ? (
           <View>
-            <Text style={styles.panelTitle}>Set Your Pickup Location</Text>
-            <Text style={styles.panelSubtitle}>
-              Selected Bus: {selectedBus?.plate_number}
-            </Text>
-            <Text style={styles.panelInstruction}>
+            <SafeText style={styles.panelTitle}>
+              Set Your Pickup Location
+            </SafeText>
+            <SafeText style={styles.panelSubtitle}>
+              Selected Bus: {selectedBus?.plate_number || "Unknown"}
+            </SafeText>
+            <SafeText style={styles.panelInstruction}>
               Tap on the map or use your current location.
-            </Text>
+            </SafeText>
 
             {pickupLocation && (
               <>
@@ -1465,7 +1468,9 @@ export default function RouteDetailsScreen() {
         ) : (
           <>
             <View style={styles.routeHeader}>
-              <Text style={styles.routeName}>Route: {nearestRoute.name}</Text>
+              <SafeText style={styles.routeName}>
+                Route: {nearestRoute?.name || "Unknown Route"}
+              </SafeText>
               <TouchableOpacity
                 onPress={onRefresh}
                 style={styles.refreshButtonSmall}
@@ -1478,10 +1483,10 @@ export default function RouteDetailsScreen() {
                 />
               </TouchableOpacity>
             </View>
-            <Text style={styles.panelTitle}>
+            <SafeText style={styles.panelTitle}>
               Available Buses (
-              {buses.filter((bus) => bus.status === "active").length})
-            </Text>
+              {buses.filter((bus) => bus.status === "active").length || 0})
+            </SafeText>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               {buses.map((bus) => {
                 const availableSeats =
@@ -1512,11 +1517,13 @@ export default function RouteDetailsScreen() {
                     }}
                     disabled={!isActive}
                   >
-                    <Text style={styles.busPlate}>{bus.plate_number}</Text>
+                    <Text style={styles.busPlate}>
+                      {bus.plate_number || "N/A"}
+                    </Text>
                     <View style={styles.busInfoRow}>
                       <Ionicons name="person" size={16} color="#007AFF" />
                       <Text style={styles.driverName}>
-                        {bus.driver ? bus.driver.fullName : "No driver"}
+                        {bus.driver?.fullName || "No driver"}
                       </Text>
                     </View>
                     <View style={styles.busInfoRow}>

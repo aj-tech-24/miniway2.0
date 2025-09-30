@@ -1,5 +1,6 @@
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAppTheme } from "@/contexts/ThemeContext";
+import { useThemeColor } from "@/hooks/useThemeColor";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { router, useLocalSearchParams } from "expo-router";
@@ -33,6 +34,14 @@ export default function SelectDestinationScreen() {
 
   const selectedRouteId = params.selectedRouteId as string;
   const selectedRouteName = params.selectedRouteName as string;
+
+  const backgroundColor = useThemeColor({}, "background");
+  const textColor = useThemeColor({}, "text");
+  const primaryColor = useThemeColor({}, "tint");
+  const buttonColor = useThemeColor({}, "buttonBackground");
+  const buttonTextColor = useThemeColor({}, "buttonText");
+  const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
+  const separatorColor = useThemeColor({}, "separatorColor");
 
   // Get user location
   useEffect(() => {
@@ -137,7 +146,7 @@ export default function SelectDestinationScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor }]}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
 
       {/* Header */}

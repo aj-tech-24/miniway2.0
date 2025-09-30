@@ -115,6 +115,9 @@ android {
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
+            
+            // Ensure text rendering is not optimized away
+            buildConfigField "boolean", "ENABLE_TEXT_RENDERING", "true"
         }
     }
     packagingOptions {

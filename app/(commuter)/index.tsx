@@ -106,6 +106,8 @@ export function CommuterHomeScreen() {
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
   const primaryColor = useThemeColor({}, "tint");
+  const buttonColor = useThemeColor({}, "buttonBackground");
+  const buttonTextColor = useThemeColor({}, "buttonText");
   const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
   const separatorColor = useThemeColor({}, "separatorColor");
 
@@ -838,7 +840,7 @@ export function CommuterHomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor }]}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
 
       {/* Loading screen for checking existing trips */}
@@ -858,7 +860,10 @@ export function CommuterHomeScreen() {
 
       {/* Safe Area for normal mode */}
       {!isPinDroppingMode && (
-        <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
+        <SafeAreaView
+          style={[styles.safeArea, { backgroundColor }]}
+          edges={["top", "left", "right"]}
+        >
           {/* Enhanced Header Section */}
           <Animated.View
             style={[
@@ -907,7 +912,7 @@ export function CommuterHomeScreen() {
         </View>
       )}
 
-      <View style={styles.contentContainer}>
+      <View style={[styles.contentContainer, { backgroundColor }]}>
         <TouchableWithoutFeedback onPress={() => Keyboard.dismiss()}>
           <ScrollView
             contentContainerStyle={styles.scrollContent}
@@ -917,7 +922,7 @@ export function CommuterHomeScreen() {
             nestedScrollEnabled={true}
             keyboardShouldPersistTaps="handled"
             removeClippedSubviews={false}
-            style={styles.scrollView}
+            style={[styles.scrollView, { backgroundColor }]}
           >
             {/* Enhanced Status Cards */}
             <Animated.View
@@ -930,10 +935,12 @@ export function CommuterHomeScreen() {
               ]}
             >
               {/* Location Status Card */}
-              <View style={styles.statusCard}>
+              <View style={[styles.statusCard, { backgroundColor }]}>
                 <View style={styles.statusCardHeader}>
                   <Ionicons name="location" size={24} color="#007AFF" />
-                  <Text style={styles.statusCardTitle}>Location Status</Text>
+                  <Text style={[styles.statusCardTitle, { color: textColor }]}>
+                    Location Status
+                  </Text>
                 </View>
                 <View style={styles.statusCardContent}>
                   <View style={styles.gpsStatusContainer}>
@@ -980,10 +987,12 @@ export function CommuterHomeScreen() {
               </View>
 
               {/* Bus Status Card */}
-              <View style={styles.statusCard}>
+              <View style={[styles.statusCard, { backgroundColor }]}>
                 <View style={styles.statusCardHeader}>
                   <Ionicons name="bus-outline" size={24} color="#007AFF" />
-                  <Text style={styles.statusCardTitle}>Nearby Buses</Text>
+                  <Text style={[styles.statusCardTitle, { color: textColor }]}>
+                    Nearby Buses
+                  </Text>
                 </View>
                 <View style={styles.statusCardContent}>
                   <View style={styles.statusItem}>
@@ -1024,17 +1033,20 @@ export function CommuterHomeScreen() {
 
             {/* Enhanced Map Card - Only show in normal mode */}
             {!isPinDroppingMode && (
-              <View style={styles.mapCard}>
+              <View style={[styles.mapCard, { backgroundColor }]}>
                 <View style={styles.mapHeader}>
                   <View style={styles.mapHeaderLeft}>
                     <Ionicons name="map" size={20} color="#007AFF" />
-                    <Text style={styles.mapTitle}>Current Location</Text>
+                    <Text style={[styles.mapTitle, { color: textColor }]}>
+                      Current Location
+                    </Text>
                   </View>
                   <View style={styles.mapHeaderRight}>
                     <TouchableOpacity
                       style={[
                         styles.mapActionButton,
                         locationLoading && styles.mapActionButtonDisabled,
+                        { backgroundColor: buttonColor },
                       ]}
                       onPress={trackUserLocation}
                       disabled={locationLoading}
@@ -1042,7 +1054,7 @@ export function CommuterHomeScreen() {
                       <Ionicons
                         name="refresh"
                         size={16}
-                        color={locationLoading ? "#8e8e93" : "#007AFF"}
+                        color={locationLoading ? "#8e8e93" : buttonTextColor}
                       />
                     </TouchableOpacity>
                   </View>
@@ -1056,8 +1068,8 @@ export function CommuterHomeScreen() {
                   initialRegion={{
                     latitude: 6.7536,
                     longitude: 125.356,
-                    latitudeDelta: 0.0922,
-                    longitudeDelta: 0.0421,
+                    latitudeDelta: 0.01,
+                    longitudeDelta: 0.01,
                   }}
                   showsUserLocation
                   showsMyLocationButton={false}
@@ -1144,12 +1156,15 @@ export function CommuterHomeScreen() {
                   opacity: cardsOpacity,
                   transform: [{ translateY: cardsTranslateY }],
                 },
+                { backgroundColor },
               ]}
             >
-              <View style={styles.routeHeader}>
+              <View style={[styles.routeHeader, { backgroundColor }]}>
                 <View style={styles.routeHeaderLeft}>
                   <Ionicons name="map" size={24} color="#007AFF" />
-                  <Text style={styles.routeTitle}>Plan Your Journey</Text>
+                  <Text style={[styles.routeTitle, { color: textColor }]}>
+                    Plan Your Journey
+                  </Text>
                 </View>
                 {selectedRouteId && (
                   <View style={styles.routeStatusBadge}>
@@ -1404,8 +1419,8 @@ export function CommuterHomeScreen() {
               initialRegion={{
                 latitude: 6.7536,
                 longitude: 125.356,
-                latitudeDelta: 0.0922,
-                longitudeDelta: 0.0421,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
               }}
               onPress={(e) => {
                 if (isPinDroppingMode) {
