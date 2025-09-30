@@ -488,7 +488,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    backgroundColor: "rgb(255, 255, 255)",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -564,7 +564,7 @@ const styles = StyleSheet.create({
   statsHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: 12,
   },
   statsTitle: {
     fontSize: 18,
@@ -580,7 +580,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   statNumber: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "700",
     marginBottom: 4,
   },

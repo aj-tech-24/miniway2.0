@@ -351,7 +351,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    backgroundColor: "rgb(255, 255, 255)",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -504,7 +504,7 @@ const styles = StyleSheet.create({
   locationRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    marginBottom: 12,
+    marginBottom: 8,
   },
   locationDot: {
     width: 8,
@@ -522,13 +522,13 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   locationText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "500",
     lineHeight: 20,
   },
   connectionLine: {
     width: 2,
-    height: 20,
+    height: 16,
     backgroundColor: "#E5E5E7",
     marginLeft: 3,
     marginBottom: 12,
@@ -538,7 +538,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingVertical: 11,
     borderTopWidth: 1,
     backgroundColor: "rgba(0, 0, 0, 0.02)",
   },

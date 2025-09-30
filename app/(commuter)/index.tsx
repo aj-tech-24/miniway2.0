@@ -871,7 +871,7 @@ export function CommuterHomeScreen() {
           >
             <View style={styles.headerContent}>
               <View style={styles.headerIconContainer}>
-                <Ionicons name="bus" size={28} color="#fff" />
+                <Ionicons name="bus" size={28} color="#007AFF" />
               </View>
               <View style={styles.headerTextContainer}>
                 <Text style={styles.title}>Commuter Dashboard</Text>
@@ -1768,7 +1768,7 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    backgroundColor: "rgb(255, 255, 255)",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 16,

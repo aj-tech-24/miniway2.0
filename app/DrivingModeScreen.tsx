@@ -8,6 +8,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Image,
   Modal,
   ScrollView,
   StyleSheet,
@@ -17,10 +18,37 @@ import {
 } from "react-native";
 import MapView, { Marker, Polyline, Region } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { G, Path } from "react-native-svg";
 
 type LatLng = { latitude: number; longitude: number };
 
 const LOCATION_UPDATE_INTERVAL = 2000; // ms
+
+// Custom SVG Map Marker Component
+const CustomMapMarker = ({
+  size = 40,
+  color = "#FF9500",
+}: {
+  size?: number;
+  color?: string;
+}) => {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <G transform="translate(0 -1028.4)">
+        <Path
+          d="m12 0c-4.4183 2.3685e-15 -8 3.5817-8 8 0 1.421 0.3816 2.75 1.0312 3.906 0.1079 0.192 0.221 0.381 0.3438 0.563l6.625 11.531 6.625-11.531c0.102-0.151 0.19-0.311 0.281-0.469l0.063-0.094c0.649-1.156 1.031-2.485 1.031-3.906 0-4.4183-3.582-8-8-8zm0 4c2.209 0 4 1.7909 4 4 0 2.209-1.791 4-4 4-2.2091 0-4-1.791-4-4 0-2.2091 1.7909-4 4-4z"
+          transform="translate(0 1028.4)"
+          fill={color}
+        />
+        <Path
+          d="m12 3c-2.7614 0-5 2.2386-5 5 0 2.761 2.2386 5 5 5 2.761 0 5-2.239 5-5 0-2.7614-2.239-5-5-5zm0 2c1.657 0 3 1.3431 3 3s-1.343 3-3 3-3-1.3431-3-3 1.343-3 3-3z"
+          transform="translate(0 1028.4)"
+          fill="#c0392b"
+        />
+      </G>
+    </Svg>
+  );
+};
 
 // Helper: Calculate distance between two LatLng points (Haversine formula)
 function getDistance(a: LatLng, b: LatLng) {
@@ -1287,6 +1315,7 @@ const DrivingModeScreen = () => {
           showsUserLocation
           showsMyLocationButton
           showsBuildings={true}
+          googleRenderer="LEGACY"
         >
           {polylineCoords.length > 0 && (
             <Polyline
@@ -1297,7 +1326,14 @@ const DrivingModeScreen = () => {
           )}
           {driverLocation && (
             <Marker coordinate={driverLocation} title="You (Driver)">
-              <Ionicons name="bus" size={32} color="#007AFF" />
+              <View style={styles.driverMarkerContainer}>
+                <Image
+                  source={require("../assets/images/bus-icon.png")}
+                  style={styles.driverMarkerIcon}
+                  resizeMode="contain"
+                />
+                <View style={styles.driverMarkerPointer} />
+              </View>
             </Marker>
           )}
 
@@ -1309,12 +1345,14 @@ const DrivingModeScreen = () => {
                 latitude: request.pickup_lat,
                 longitude: request.pickup_lng,
               }}
-              title={`Pickup Request - ${request.commuter_name || "Unknown"}`}
-              description={`Phone: ${request.commuter_phone || "N/A"}`}
-              pinColor="#FF9500"
+              tracksViewChanges={false}
+              anchor={{ x: 0.5, y: 1 }}
             >
-              <View style={styles.pickupMarker}>
-                <Ionicons name="person" size={20} color="#fff" />
+              <View style={styles.pickupMarkerContainer}>
+                <View style={styles.pickupMarkerLabel}>
+                  <Text style={styles.pickupMarkerText}>Pick me here!</Text>
+                </View>
+                <CustomMapMarker size={40} color="#FF9500" />
               </View>
             </Marker>
           ))}
@@ -1335,12 +1373,7 @@ const DrivingModeScreen = () => {
               style={styles.pickupRequestsScroll}
             >
               {pickupRequests.map((request) => (
-                <TouchableOpacity
-                  key={request.id}
-                  style={styles.pickupRequestCard}
-                  onPress={() => focusOnPickupRequest(request)}
-                  activeOpacity={0.7}
-                >
+                <View key={request.id} style={styles.pickupRequestCard}>
                   <View style={styles.pickupRequestInfo}>
                     <Text style={styles.pickupRequestName}>
                       {request.commuter_name || "Unknown"}
@@ -1370,7 +1403,7 @@ const DrivingModeScreen = () => {
                       <Text style={styles.declineButtonText}>Decline</Text>
                     </TouchableOpacity>
                   </View>
-                </TouchableOpacity>
+                </View>
               ))}
             </ScrollView>
           </View>
@@ -2158,21 +2191,52 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  // Pickup Request Styles
-  pickupMarker: {
-    backgroundColor: "#FF9500",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: "center",
+  // Driver Marker Styles
+  driverMarkerContainer: {
     alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
+    justifyContent: "center",
+  },
+  driverMarkerIcon: {
+    width: 48,
+    height: 48,
+  },
+  driverMarkerPointer: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 8,
+    borderRightWidth: 8,
+    borderTopWidth: 12,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: "#007AFF",
+    borderStyle: "solid",
+    marginTop: -2,
+  },
+
+  // Pickup Request Styles
+  pickupMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pickupMarkerLabel: {
+    backgroundColor: "rgba(0, 0, 0, 0.56)",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.3,
     shadowRadius: 4,
-    elevation: 4,
+    elevation: 5,
+  },
+  pickupMarkerText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+    textAlign: "center",
   },
   pickupRequestsPanel: {
     backgroundColor: "#fff",
