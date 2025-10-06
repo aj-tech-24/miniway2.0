@@ -59,7 +59,7 @@ export const checkEmailExists = async (email: string): Promise<boolean> => {
 
     // If we get an error about invalid credentials, the email exists
     // If we get an error about user not found, the email doesn't exist
-    return (
+    return !!(
       error?.message?.includes("Invalid login credentials") ||
       error?.message?.includes("Invalid email or password")
     );

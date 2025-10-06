@@ -15,6 +15,7 @@ import {
   Animated,
   Dimensions,
   FlatList,
+  Image,
   Keyboard,
   Linking,
   Modal,
@@ -821,6 +822,17 @@ export function CommuterHomeScreen() {
       if (lastKnownPosition) {
         updateLocationWithDebounce(lastKnownPosition);
         setLocationLoading(false);
+
+        // Force center the map on cached location
+        mapRef.current?.animateToRegion(
+          {
+            latitude: lastKnownPosition.coords.latitude,
+            longitude: lastKnownPosition.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          },
+          1000
+        );
       }
 
       // Get more accurate current position
@@ -830,6 +842,17 @@ export function CommuterHomeScreen() {
 
       updateLocationWithDebounce(location);
       setLocationError(false);
+
+      // Force center the map on user location when manually tracking
+      mapRef.current?.animateToRegion(
+        {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        },
+        1000
+      );
     } catch (error) {
       console.error("Failed to track user location:", error);
       setLocationError(true);
@@ -1071,9 +1094,29 @@ export function CommuterHomeScreen() {
                     latitudeDelta: 0.01,
                     longitudeDelta: 0.01,
                   }}
-                  showsUserLocation
+                  showsUserLocation={false}
                   showsMyLocationButton={false}
                 >
+                  {/* Custom User Location Marker */}
+                  {userLocation && (
+                    <Marker
+                      coordinate={{
+                        latitude: userLocation.coords.latitude,
+                        longitude: userLocation.coords.longitude,
+                      }}
+                      title="Your Location"
+                      anchor={{ x: 0.5, y: 0.5 }}
+                    >
+                      <View style={styles.userMarkerContainer}>
+                        <Image
+                          source={require("../../assets/images/user-pin.png")}
+                          style={styles.userMarkerIcon}
+                          resizeMode="contain"
+                        />
+                      </View>
+                    </Marker>
+                  )}
+
                   {selectedPlace && (
                     <Marker
                       coordinate={selectedPlace.coordinate}
@@ -1427,9 +1470,29 @@ export function CommuterHomeScreen() {
                   setDroppedPinLocation(e.nativeEvent.coordinate);
                 }
               }}
-              showsUserLocation
+              showsUserLocation={false}
               showsMyLocationButton={false}
             >
+              {/* Custom User Location Marker */}
+              {userLocation && (
+                <Marker
+                  coordinate={{
+                    latitude: userLocation.coords.latitude,
+                    longitude: userLocation.coords.longitude,
+                  }}
+                  title="Your Location"
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={styles.userMarkerContainer}>
+                    <Image
+                      source={require("../../assets/images/user-pin.png")}
+                      style={styles.userMarkerIcon}
+                      resizeMode="contain"
+                    />
+                  </View>
+                </Marker>
+              )}
+
               {selectedPlace && (
                 <Marker
                   coordinate={selectedPlace.coordinate}
@@ -1664,11 +1727,13 @@ export function CommuterHomeScreen() {
               </View>
             </View>
             <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: primaryColor }]}
+              style={[styles.modalButton, { backgroundColor }]}
               onPress={handleModalDismiss}
             >
               <Ionicons name="arrow-forward" size={20} color="#fff" />
-              <Text style={styles.modalButtonText}>Let's Get Started!</Text>
+              <Text style={[styles.modalButtonText, { color: textColor }]}>
+                Let's Get Started!
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2553,6 +2618,16 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderColor: "#fff",
     borderWidth: 2,
+  },
+
+  // User Marker Styles
+  userMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  userMarkerIcon: {
+    width: 32,
+    height: 32,
   },
 
   // Welcome Modal Styles

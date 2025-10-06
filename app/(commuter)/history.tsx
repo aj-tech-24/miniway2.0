@@ -38,8 +38,10 @@ export function TravelHistoryScreen() {
   >("all");
 
   const backgroundColor = useThemeColor({}, "background");
+  const borderColor = useThemeColor({}, "borderColor");
   const textColor = useThemeColor({}, "text");
   const primaryColor = useThemeColor({}, "tint");
+  const tabIconDefault = useThemeColor({}, "tabIconDefault");
   const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
   const separatorColor = useThemeColor({}, "separatorColor");
   const { theme } = useAppTheme();
@@ -279,9 +281,9 @@ export function TravelHistoryScreen() {
         styles.filterButton,
         selectedFilter === filter && styles.filterButtonActive,
         {
-          borderColor:
-            selectedFilter === filter ? primaryColor : separatorColor,
+          borderColor: selectedFilter === filter ? primaryColor : borderColor,
         },
+        { backgroundColor },
       ]}
       onPress={() => setSelectedFilter(filter)}
     >
@@ -300,12 +302,14 @@ export function TravelHistoryScreen() {
             backgroundColor:
               selectedFilter === filter ? primaryColor : separatorColor,
           },
+          { backgroundColor },
         ]}
       >
         <Text
           style={[
             styles.filterCountText,
             { color: selectedFilter === filter ? "#fff" : textColor },
+            { color: textColor },
           ]}
         >
           {count}
@@ -606,7 +610,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   filterButtonActive: {
-    backgroundColor: "rgba(0, 122, 255, 0.1)",
+    backgroundColor: "rgb(0, 123, 255)",
   },
   filterButtonText: {
     fontSize: 14,

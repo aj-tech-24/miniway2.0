@@ -2,6 +2,7 @@ import SafeText from "@/components/SafeText";
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
+import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
@@ -167,6 +168,8 @@ export default function RouteDetailsScreen() {
   const mapRef = useRef<MapView>(null);
   const [showBusModal, setShowBusModal] = useState(false);
   const [modalBus, setModalBus] = useState<Bus | null>(null);
+
+  const textColor = useThemeColor({}, "text");
 
   // Enhanced UX states
   const [isSubmittingPickup, setIsSubmittingPickup] = useState(false);
@@ -680,13 +683,72 @@ export default function RouteDetailsScreen() {
     setShowPickupSelection(true);
     setPickupLocation(null);
     setCurrentLocation(null);
-    if (bus.location) {
-      mapRef.current?.animateToRegion({
-        ...bus.location,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      });
-    }
+
+    // Focus camera on the selected bus
+    setTimeout(() => {
+      console.log("MapRef current:", mapRef.current);
+
+      if (bus.location) {
+        // If bus has live location, focus on it
+        console.log("Focusing on bus location:", bus.location);
+
+        // Try multiple methods for better compatibility
+        if (mapRef.current) {
+          // Method 1: fitToCoordinates
+          mapRef.current.fitToCoordinates([bus.location], {
+            edgePadding: { top: 100, right: 50, bottom: 100, left: 50 },
+            animated: true,
+          });
+
+          // Method 2: animateToRegion as backup
+          setTimeout(() => {
+            if (bus.location) {
+              mapRef.current?.animateToRegion(
+                {
+                  latitude: bus.location.latitude,
+                  longitude: bus.location.longitude,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                },
+                1000
+              );
+            }
+          }, 500);
+        }
+      } else if (
+        nearestRoute?.path?.coordinates &&
+        nearestRoute.path.coordinates.length > 0
+      ) {
+        // If no live location, focus on the route start point as fallback
+        const startCoord = nearestRoute.path.coordinates[0];
+        const fallbackLocation = {
+          latitude: startCoord[1],
+          longitude: startCoord[0],
+        };
+        console.log("Focusing on fallback location:", fallbackLocation);
+
+        if (mapRef.current) {
+          // Method 1: fitToCoordinates
+          mapRef.current.fitToCoordinates([fallbackLocation], {
+            edgePadding: { top: 100, right: 50, bottom: 100, left: 50 },
+            animated: true,
+          });
+
+          // Method 2: animateToRegion as backup
+          setTimeout(() => {
+            mapRef.current?.animateToRegion(
+              {
+                latitude: fallbackLocation.latitude,
+                longitude: fallbackLocation.longitude,
+                latitudeDelta: 0.02,
+                longitudeDelta: 0.02,
+              },
+              1000
+            );
+          }, 500);
+        }
+      }
+    }, 300);
   };
 
   const handleUseCurrentLocation = () => {
@@ -1244,7 +1306,7 @@ export default function RouteDetailsScreen() {
     <View style={styles.container}>
       <MapView
         ref={mapRef}
-        provider="google"
+        googleRenderer="LEGACY"
         customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
         style={StyleSheet.absoluteFill}
         pitchEnabled={true}
@@ -1271,6 +1333,23 @@ export default function RouteDetailsScreen() {
           />
         )}
 
+        {/* Custom User Location Marker */}
+        {currentLocation && (
+          <Marker
+            coordinate={currentLocation}
+            title="Your Location"
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={styles.userMarkerContainer}>
+              <Image
+                source={require("../assets/images/user-pin.png")}
+                style={styles.userMarkerIcon}
+                resizeMode="contain"
+              />
+            </View>
+          </Marker>
+        )}
+
         {buses.map((bus) => {
           const isActive = bus.status === "active";
           const isSelected = selectedBus?.id === bus.id;
@@ -1279,6 +1358,11 @@ export default function RouteDetailsScreen() {
             ? { latitude: startCoord[1], longitude: startCoord[0] }
             : null;
           const markerCoordinate = bus.location || fallbackLocation;
+          const availableSeats =
+            typeof bus.capacity === "number" &&
+            typeof bus.passengers === "number"
+              ? Math.max(bus.capacity - bus.passengers, 0)
+              : 0;
 
           if (!markerCoordinate) return null;
 
@@ -1286,29 +1370,25 @@ export default function RouteDetailsScreen() {
             <Marker
               key={bus.id}
               coordinate={markerCoordinate}
-              title={bus.plate_number}
+              title={`Bus ${bus.plate_number}`}
               description={
                 bus.location
-                  ? `Driver: ${bus.driver?.fullName || "N/A"}`
+                  ? `${availableSeats} seats available • Tap to select`
                   : "No live location"
               }
               onPress={() => handleBusSelect(bus)}
             >
-              <View
-                style={[
-                  styles.busMarker,
-                  {
-                    backgroundColor: isSelected
-                      ? "#ffc107"
-                      : isActive
-                      ? "#28a745"
-                      : "#6c757d",
-                  },
-                ]}
-              >
+              <View style={styles.busMarkerContainer}>
                 <Image
-                  source={require("@/assets/images/bus-icon.png")}
-                  style={styles.busIcon}
+                  source={require("../assets/images/bus-icon.png")}
+                  style={styles.busMarkerIcon}
+                  resizeMode="contain"
+                />
+                <View
+                  style={[
+                    styles.busMarkerPointer,
+                    { borderTopColor: isActive ? "#28a745" : "#dc3545" },
+                  ]}
                 />
               </View>
             </Marker>
@@ -1468,7 +1548,7 @@ export default function RouteDetailsScreen() {
         ) : (
           <>
             <View style={styles.routeHeader}>
-              <SafeText style={styles.routeName}>
+              <SafeText style={[styles.routeName, { color: textColor }]}>
                 Route: {nearestRoute?.name || "Unknown Route"}
               </SafeText>
               <TouchableOpacity
@@ -1517,7 +1597,7 @@ export default function RouteDetailsScreen() {
                     }}
                     disabled={!isActive}
                   >
-                    <Text style={styles.busPlate}>
+                    <Text style={[styles.busPlate, { color: textColor }]}>
                       {bus.plate_number || "N/A"}
                     </Text>
                     <View style={styles.busInfoRow}>
@@ -1635,19 +1715,8 @@ export default function RouteDetailsScreen() {
                 ]}
                 onPress={() => {
                   if (modalBus?.status === "active") {
-                    setSelectedBus(modalBus);
-                    setShowPickupSelection(true);
                     setShowBusModal(false);
-                    if (modalBus.location) {
-                      mapRef.current?.animateToRegion(
-                        {
-                          ...modalBus.location,
-                          latitudeDelta: 0.01,
-                          longitudeDelta: 0.01,
-                        },
-                        1000
-                      );
-                    }
+                    handleBusSelect(modalBus);
                   }
                 }}
                 disabled={modalBus?.status !== "active"}
@@ -1934,13 +2003,38 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 8,
   },
-  busMarker: {
-    padding: 5,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "white",
+  busStatusIndicator: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#fff",
   },
-  busIcon: { width: 20, height: 20 },
+  seatsBadge: {
+    position: "absolute",
+    bottom: -8,
+    right: -8,
+    backgroundColor: "#007AFF",
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  seatsBadgeText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
   pickupLocationInfo: {
     flexDirection: "row",
     alignItems: "center",
@@ -2164,5 +2258,34 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 10,
     fontStyle: "italic",
+  },
+
+  // Bus Marker Styles
+  busMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  busMarkerIcon: {
+    width: 32,
+    height: 32,
+  },
+  busMarkerPointer: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 10,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+  },
+
+  // Custom User Marker Styles
+  userMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  userMarkerIcon: {
+    width: 32,
+    height: 32,
   },
 });

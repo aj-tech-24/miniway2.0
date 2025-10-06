@@ -1309,7 +1309,6 @@ const DrivingModeScreen = () => {
       <View style={styles.container}>
         {/* Map */}
         <MapView
-          ref={mapRef}
           style={styles.map}
           initialRegion={initialRegion}
           showsUserLocation
@@ -1340,7 +1339,6 @@ const DrivingModeScreen = () => {
           {/* Pickup Request Markers */}
           {pickupRequests.map((request) => (
             <Marker
-              key={request.id}
               coordinate={{
                 latitude: request.pickup_lat,
                 longitude: request.pickup_lng,
@@ -1373,7 +1371,7 @@ const DrivingModeScreen = () => {
               style={styles.pickupRequestsScroll}
             >
               {pickupRequests.map((request) => (
-                <View key={request.id} style={styles.pickupRequestCard}>
+                <View style={styles.pickupRequestCard}>
                   <View style={styles.pickupRequestInfo}>
                     <Text style={styles.pickupRequestName}>
                       {request.commuter_name || "Unknown"}

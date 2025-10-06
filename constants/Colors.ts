@@ -32,13 +32,14 @@ export const Colors = {
     modalBackground: "#FFFFFF",
     headerBackground: "#FFFFFF",
     tabBarBackground: "#FFFFFF",
+    borderColor: "#E5E7EB",
   },
   dark: {
     text: "#ECEDEE",
     background: "#212A37",
     tint: tintColorDark,
-    icon: "#9BA1A6",
-    tabIconDefault: "#9BA1A6",
+    icon: "#007AFF",
+    tabIconDefault: "#555",
     tabIconSelected: tintColorDark,
     placeholderTextColor: "#AAA",
     separatorColor: "#555",
@@ -58,5 +59,6 @@ export const Colors = {
     modalBackground: "#2D3748",
     headerBackground: "#1A202C",
     tabBarBackground: "#1A202C",
+    borderColor: "#296dff",
   },
 };
