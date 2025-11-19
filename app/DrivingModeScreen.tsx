@@ -16,7 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import MapView, { Marker, Polyline, Region } from "react-native-maps";
+import MapView, { Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { G, Path } from "react-native-svg";
 
@@ -277,8 +277,8 @@ const DrivingModeScreen = () => {
       mapRef.current?.animateCamera(
         {
           center: pickupLocation,
-          zoom: 16, // Closer zoom to see the pickup location clearly
-          pitch: 60, // Slight 3D angle for better view
+          zoom: 14, // Closer zoom to see the pickup location clearly
+          pitch: 85, // Slight 3D angle for better view
         },
         { duration: 1500 } // Smooth 1.5 second animation
       );
@@ -338,8 +338,8 @@ const DrivingModeScreen = () => {
         mapRef.current?.animateCamera(
           {
             center: pickupLocation,
-            zoom: 16,
-            pitch: 60,
+            zoom: 14,
+            pitch: 85,
           },
           { duration: 1500 }
         );
@@ -377,8 +377,8 @@ const DrivingModeScreen = () => {
       mapRef.current?.animateCamera(
         {
           center: pickupLocation,
-          zoom: 16,
-          pitch: 60,
+          zoom: 14,
+          pitch: 85,
         },
         { duration: 1500 }
       );
@@ -542,8 +542,8 @@ const DrivingModeScreen = () => {
           mapRef.current?.animateCamera(
             {
               center: coords,
-              pitch: 80, // Increase pitch for 3D
-              zoom: 17, // Higher zoom for closer view
+              pitch: 85, // Slight 3D angle for better view
+              zoom: 14, // Higher zoom for closer view
               heading: location.coords.heading || 0, // Use device heading if available
             },
             { duration: 800 }
@@ -1154,12 +1154,13 @@ const DrivingModeScreen = () => {
     );
   }
 
-  const initialRegion: Region = {
-    ...driverLocation,
-    latitudeDelta: 0.005, // smaller value = more zoom
-    longitudeDelta: 0.005,
+  const initialCamera = {
+    center: driverLocation,
+    pitch: 85, // 3D tilted view
+    heading: 0,
+    zoom: 17, // Adjust zoom as needed (higher = closer)
+    altitude: 1000, // Optional: camera altitude in meters
   };
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f2f2f7" }}>
       {/* Collapsible Top Header */}
@@ -1310,8 +1311,8 @@ const DrivingModeScreen = () => {
         {/* Map */}
         <MapView
           style={styles.map}
-          initialRegion={initialRegion}
-          showsUserLocation
+          initialCamera={initialCamera}
+          showsUserLocation={false}
           showsMyLocationButton
           showsBuildings={true}
           googleRenderer="LEGACY"
@@ -1339,6 +1340,7 @@ const DrivingModeScreen = () => {
           {/* Pickup Request Markers */}
           {pickupRequests.map((request) => (
             <Marker
+              key={request.id}
               coordinate={{
                 latitude: request.pickup_lat,
                 longitude: request.pickup_lng,
@@ -1371,7 +1373,7 @@ const DrivingModeScreen = () => {
               style={styles.pickupRequestsScroll}
             >
               {pickupRequests.map((request) => (
-                <View style={styles.pickupRequestCard}>
+                <View key={request.id} style={styles.pickupRequestCard}>
                   <View style={styles.pickupRequestInfo}>
                     <Text style={styles.pickupRequestName}>
                       {request.commuter_name || "Unknown"}

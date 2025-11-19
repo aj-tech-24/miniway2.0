@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import AuthForm from "../../components/auth/AuthForm";
 import AuthLayout from "../../components/auth/AuthLayout";
+import TermsAndConditions from "../../components/auth/TermsAndConditions";
 import { useThemeColor } from "../../hooks/useThemeColor";
 import { validateSignupForm } from "../../utils/authValidation";
 
@@ -12,6 +13,7 @@ export default function SignupScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{
     type: "success" | "error";
@@ -20,10 +22,17 @@ export default function SignupScreen() {
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
   const textColor = useThemeColor({}, "text");
-
   async function handleSignup() {
     setMessage(null);
     setErrors({});
+
+    // Check if terms are accepted
+    if (!acceptedTerms) {
+      setErrors({
+        terms: "You must accept the Terms and Conditions to continue",
+      });
+      return;
+    }
 
     // Validate form with email duplicate check
     const validation = await validateSignupForm(
@@ -165,12 +174,11 @@ export default function SignupScreen() {
       error: errors.confirmPassword,
     },
   ];
-
   return (
     <AuthLayout>
       <AuthForm
-        title="Create Account"
-        subtitle="Join the Miniway community"
+        title={typeof "Create Account" === 'string' ? "Create Account" : "Invalid Title"}
+        subtitle={typeof "Join the Miniway community" === 'string' ? "Join the Miniway community" : "Invalid Subtitle"}
         fields={fields}
         buttonText="Sign Up"
         onButtonPress={handleSignup}
@@ -180,6 +188,13 @@ export default function SignupScreen() {
         footerLinkText="Log In"
         onFooterLinkPress={() => router.push("/login")}
         textColor={textColor}
+        customContent={
+          <TermsAndConditions
+            accepted={acceptedTerms}
+            onAcceptChange={setAcceptedTerms}
+            error={errors.terms}
+          />
+        }
       />
     </AuthLayout>
   );

@@ -10,14 +10,14 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
-  Image,
   Keyboard,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import MapView, { Marker, Polyline } from "react-native-maps";
 
@@ -72,12 +72,44 @@ export default function SelectDestinationScreen() {
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [showInstruction, setShowInstruction] = useState(true);
 
+  // Animation states
+  const [searchBarFocused, setSearchBarFocused] = useState(false);
+  const [mapInteracted, setMapInteracted] = useState(false);
+  
+  // Animation values
+  const searchBarScale = useRef(new Animated.Value(1)).current;
+  const instructionOpacity = useRef(new Animated.Value(1)).current;
+  const buttonScale = useRef(new Animated.Value(0.95)).current;
+  const pinBounce = useRef(new Animated.Value(0)).current;
+  const targetPulse = useRef(new Animated.Value(1)).current;
+  const cancelButtonScale = useRef(new Animated.Value(1)).current;
+  const confirmButtonScale = useRef(new Animated.Value(1)).current;
+  const confirmButtonGlow = useRef(new Animated.Value(0)).current;
+  const userLocationPulse = useRef(new Animated.Value(1)).current;
+  
+
   // Debounced location update to prevent excessive map animations
   const updateLocationWithDebounce = useCallback(
     (location: Location.LocationObject) => {
       setUserLocation(location);
+      
+      // Start pulsing animation for user location marker
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(userLocationPulse, {
+            toValue: 1.3,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(userLocationPulse, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
     },
-    []
+    [userLocationPulse]
   );
 
   // Timeout ref to prevent excessive map animations
@@ -121,13 +153,16 @@ export default function SelectDestinationScreen() {
           updateLocationWithDebounce(lastKnownPosition);
           setLocationLoading(false);
 
-          // Animate map to cached location immediately
-          mapRef.current?.animateToRegion({
-            latitude: lastKnownPosition.coords.latitude,
-            longitude: lastKnownPosition.coords.longitude,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
-          });
+          // Animate map to cached location with nice 3D view
+          mapRef.current?.animateCamera({
+            center: {
+              latitude: lastKnownPosition.coords.latitude,
+              longitude: lastKnownPosition.coords.longitude,
+            },
+            zoom: 15,
+            pitch: 20, // Slight 3D angle for better perspective
+            heading: 0,
+          }, { duration: 800 });
         }
 
         // Get more accurate current position in background
@@ -141,12 +176,15 @@ export default function SelectDestinationScreen() {
           clearTimeout(mapAnimationTimeoutRef.current);
         }
         mapAnimationTimeoutRef.current = setTimeout(() => {
-          mapRef.current?.animateToRegion({
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
-          });
+          mapRef.current?.animateCamera({
+            center: {
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+            },
+            zoom: 15,
+            pitch: 20, // Slight 3D angle
+            heading: 0,
+          }, { duration: 600 });
         }, 100);
       } catch (error) {
         console.error("Error getting location:", error);
@@ -159,12 +197,19 @@ export default function SelectDestinationScreen() {
     getCurrentLocation();
   }, []);
 
-  // Cleanup timeout on unmount
+  // Cleanup timeout and animations on unmount
   useEffect(() => {
     return () => {
       if (mapAnimationTimeoutRef.current) {
         clearTimeout(mapAnimationTimeoutRef.current);
       }
+      // Stop all running animations
+      targetPulse.stopAnimation();
+      pinBounce.stopAnimation();
+      cancelButtonScale.stopAnimation();
+      confirmButtonScale.stopAnimation();
+      confirmButtonGlow.stopAnimation();
+      userLocationPulse.stopAnimation();
     };
   }, []);
 
@@ -176,6 +221,8 @@ export default function SelectDestinationScreen() {
 
     return () => clearTimeout(timer);
   }, []);
+
+
 
   // Fetch route data
   useEffect(() => {
@@ -318,16 +365,45 @@ export default function SelectDestinationScreen() {
           longitude: location.lng,
         });
 
-        // Animate map to the selected place
-        mapRef.current?.animateToRegion(
-          {
-            latitude: location.lat,
-            longitude: location.lng,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          },
-          1000
-        );
+        // Auto-focus on the selected destination with 3D view
+        autoFocusOnDestination(location.lat, location.lng);
+
+        // Animate confirm button glow when place is selected
+        Animated.timing(confirmButtonGlow, {
+          toValue: 1,
+          duration: 500,
+          useNativeDriver: true,
+        }).start();
+
+        // Animate pin bounce for selected place
+        Animated.sequence([
+          Animated.timing(pinBounce, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pinBounce, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]).start();
+
+        // Start pulsing animation for target circle
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(targetPulse, {
+              toValue: 1.2,
+              duration: 800,
+              useNativeDriver: true,
+            }),
+            Animated.timing(targetPulse, {
+              toValue: 1,
+              duration: 800,
+              useNativeDriver: true,
+            }),
+          ])
+        ).start();
       }
     } catch (error) {
       console.error("Failed to fetch place details:", error);
@@ -337,7 +413,58 @@ export default function SelectDestinationScreen() {
   };
 
   const handleMapPress = (e: any) => {
-    setDroppedPinLocation(e.nativeEvent.coordinate);
+    const coordinate = e.nativeEvent.coordinate;
+    setDroppedPinLocation(coordinate);
+    setMapInteracted(true);
+    
+    // Auto-focus on the tapped location with 3D view
+    autoFocusOnDestination(coordinate.latitude, coordinate.longitude);
+    
+    // Animate confirm button glow when pin is dropped
+    Animated.timing(confirmButtonGlow, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+    
+    // Animate pin bounce effect
+    Animated.sequence([
+      Animated.timing(pinBounce, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pinBounce, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // Start pulsing animation for target circle
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(targetPulse, {
+          toValue: 1.2,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(targetPulse, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+
+    // Animate instruction fade out
+    if (showInstruction) {
+      Animated.timing(instructionOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => setShowInstruction(false));
+    }
   };
 
   const handleConfirmDestination = async () => {
@@ -391,6 +518,90 @@ export default function SelectDestinationScreen() {
     router.back();
   };
 
+  // Auto-zoom and pitch functions
+  const autoFitMapToRoute = useCallback(() => {
+    if (!mapRef.current || !routeData?.path?.coordinates || !userLocation) return;
+
+    const coordinates = routeData.path.coordinates;
+    if (coordinates.length === 0) return;
+
+    // Calculate bounds for the route
+    const lats = coordinates.map(([lng, lat]) => lat);
+    const lngs = coordinates.map(([lng, lat]) => lng);
+    
+    const minLat = Math.min(...lats, userLocation.coords.latitude);
+    const maxLat = Math.max(...lats, userLocation.coords.latitude);
+    const minLng = Math.min(...lngs, userLocation.coords.longitude);
+    const maxLng = Math.max(...lngs, userLocation.coords.longitude);
+
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLng = (minLng + maxLng) / 2;
+    const latDelta = (maxLat - minLat) * 1.4; // Add padding
+    const lngDelta = (maxLng - minLng) * 1.4;
+
+    // Animate to fit the route with a nice 3D view
+    mapRef.current.animateCamera({
+      center: { latitude: centerLat, longitude: centerLng },
+      zoom: 17, // Good zoom level for route overview
+      pitch: 70, // Nice 3D angle
+      heading: 0,
+    }, { duration: 1000 });
+  }, [routeData, userLocation]);
+
+  const autoFocusOnDestination = useCallback((latitude: number, longitude: number) => {
+    if (!mapRef.current || !userLocation) return;
+
+    // If destination is far from user, show both in view
+    const userLat = userLocation.coords.latitude;
+    const userLng = userLocation.coords.longitude;
+    const distance = Math.sqrt(Math.pow(latitude - userLat, 2) + Math.pow(longitude - userLng, 2));
+
+    if (distance > 0.01) { // If more than ~1km apart, show both
+      const centerLat = (userLat + latitude) / 2;
+      const centerLng = (userLng + longitude) / 2;
+      const latDelta = Math.abs(userLat - latitude) * 1.5;
+      const lngDelta = Math.abs(userLng - longitude) * 1.5;
+
+      mapRef.current.animateCamera({
+        center: { latitude: centerLat, longitude: centerLng },
+        zoom: 17, // Show both points
+        pitch: 70, // Nice overview angle
+        heading: 0,
+      }, { duration: 1000 });
+    } else {
+      // Close destination - zoom in with elevated pitch for better view
+      mapRef.current.animateCamera({
+        center: { latitude, longitude },
+        zoom: 17, // Close zoom for destination
+        pitch: 70, // Higher pitch for destination view
+        heading: 0,
+      }, { duration: 800 });
+    }
+  }, [userLocation]);
+
+  const resetToUserLocation = useCallback(() => {
+    if (!mapRef.current || !userLocation) return;
+    
+    mapRef.current.animateCamera({
+      center: {
+        latitude: userLocation.coords.latitude,
+        longitude: userLocation.coords.longitude,
+      },
+      zoom: 17,
+      pitch: 70, // Flat view for user location
+      heading: 0,
+    }, { duration: 600 });
+  }, [userLocation]);
+
+  // Auto-fit map when route data changes
+  useEffect(() => {
+    if (routeData && userLocation) {
+      setTimeout(() => {
+        autoFitMapToRoute();
+      }, 500); // Small delay to ensure map is ready
+    }
+  }, [routeData, userLocation, autoFitMapToRoute]);
+
   if (locationLoading || routeLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -406,7 +617,7 @@ export default function SelectDestinationScreen() {
     <View style={[styles.container, { backgroundColor }]}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
 
-      {/* Header */}
+      {/* Enhanced Header */}
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerIconContainer}>
@@ -414,17 +625,21 @@ export default function SelectDestinationScreen() {
           </View>
           <View style={styles.headerTextContainer}>
             <Text style={styles.title}>
-              Set Destination for {selectedRouteName}
+              🎯 Set Destination for {selectedRouteName}
             </Text>
             <Text style={styles.subtitle}>
               {routeData
                 ? `Route: ${routeData.start_address || "Start"} → ${
                     routeData.end_address || "End"
                   }`
-                : "Tap on the map to drop a pin"}
+                : "Search or tap on the map to set your destination"}
             </Text>
           </View>
-          <TouchableOpacity style={styles.closeButton} onPress={handleCancel}>
+          <TouchableOpacity 
+            style={styles.closeButton} 
+            onPress={handleCancel}
+            activeOpacity={0.7}
+          >
             <Ionicons name="close" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -433,8 +648,8 @@ export default function SelectDestinationScreen() {
       {/* Map */}
       <MapView
         ref={mapRef}
-        style={styles.map}
-        provider="google"
+        style={styles.map}  
+        googleRenderer="LEGACY"
         customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
         initialRegion={{
           latitude: 6.7536,
@@ -443,8 +658,15 @@ export default function SelectDestinationScreen() {
           longitudeDelta: 0.0421,
         }}
         onPress={handleMapPress}
-        showsUserLocation
+        showsUserLocation={false}
         showsMyLocationButton={false}
+        showsBuildings={true}
+        showsIndoors={true}
+        pitchEnabled={true}
+        rotateEnabled={true}
+        zoomEnabled={true}
+        scrollEnabled={true}
+        mapPadding={{ top: 0, right: 0, bottom: 100, left: 0 }}
       >
         {/* Route Line */}
         {routeData?.path?.coordinates && (
@@ -472,10 +694,20 @@ export default function SelectDestinationScreen() {
             anchor={{ x: 0.5, y: 0.5 }}
           >
             <View style={styles.userMarkerContainer}>
-              <Image
-                source={require("../assets/images/user-pin.png")}
-                style={styles.userMarkerIcon}
-                resizeMode="contain"
+              <View style={styles.userLocationDot}>
+                <Ionicons name="person" size={16} color="#fff" />
+              </View>
+              <Animated.View 
+                style={[
+                  styles.userLocationRipple,
+                  {
+                    transform: [{ scale: userLocationPulse }],
+                    opacity: userLocationPulse.interpolate({
+                      inputRange: [1, 1.3],
+                      outputRange: [0.6, 0.1],
+                    }),
+                  }
+                ]} 
               />
             </View>
           </Marker>
@@ -509,29 +741,87 @@ export default function SelectDestinationScreen() {
           />
         )}
 
-        {/* Destination Pin */}
+        {/* Enhanced Destination Pin with Clear Point Indicator */}
         {droppedPinLocation && (
           <Marker
             coordinate={droppedPinLocation}
             draggable
             onDragEnd={(e) => setDroppedPinLocation(e.nativeEvent.coordinate)}
-            pinColor="tomato"
-            title="Destination"
-          />
+            title="📍 Your Destination"
+            description="Drag to adjust location"
+            anchor={{ x: 0.5, y: 1 }} // Anchor at the bottom point of the pin
+          >
+            <Animated.View 
+              style={[
+                styles.destinationPin,
+                { 
+                  transform: [
+                    { scale: pinBounce.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [1, 1.15]
+                    }) }
+                  ]
+                }
+              ]}
+            >
+              <View style={styles.customPinContainer}>
+                {/* Simple pin design */}
+                <View style={styles.pinHead}>
+                  <Ionicons name="location" size={20} color="#fff" />
+                </View>
+                <View style={styles.pinPoint} />
+                {/* Simple pulsing circle */}
+                <Animated.View 
+                  style={[
+                    styles.targetCircle,
+                    {
+                      transform: [{ scale: targetPulse }]
+                    }
+                  ]}
+                />
+              </View>
+            </Animated.View>
+          </Marker>
         )}
       </MapView>
 
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
+      {/* Enhanced Search Bar */}
+      <Animated.View 
+        style={[
+          styles.searchContainer, 
+          { 
+            transform: [{ scale: searchBarScale }],
+            opacity: searchBarFocused ? 1 : 0.95 
+          }
+        ]}
+      >
         <View style={[styles.searchInputContainer, { backgroundColor }]}>
-          <Ionicons name="search" size={20} color={placeholderTextColor} />
+          <Ionicons 
+            name="search" 
+            size={20} 
+            color={searchBarFocused ? primaryColor : placeholderTextColor} 
+          />
           <TextInput
             style={[styles.searchInput, { color: textColor }]}
-            placeholder="Search for a place..."
+            placeholder="🔍 Search places nearby..."
             placeholderTextColor={placeholderTextColor}
             value={searchQuery}
             onChangeText={setSearchQuery}
-            onFocus={() => setShowSearchResults(true)}
+            onFocus={() => {
+              setShowSearchResults(true);
+              setSearchBarFocused(true);
+              Animated.spring(searchBarScale, {
+                toValue: 1.02,
+                useNativeDriver: true,
+              }).start();
+            }}
+            onBlur={() => {
+              setSearchBarFocused(false);
+              Animated.spring(searchBarScale, {
+                toValue: 1,
+                useNativeDriver: true,
+              }).start();
+            }}
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
@@ -540,6 +830,8 @@ export default function SelectDestinationScreen() {
                 setSelectedPlace(null);
                 setShowSearchResults(false);
               }}
+              style={styles.clearButton}
+              activeOpacity={0.7}
             >
               <Ionicons
                 name="close-circle"
@@ -553,9 +845,18 @@ export default function SelectDestinationScreen() {
           )}
         </View>
 
-        {/* Search Results */}
+        {/* Enhanced Search Results */}
         {showSearchResults && predictions.length > 0 && (
-          <View style={[styles.searchResultsContainer, { backgroundColor }]}>
+          <Animated.View 
+            style={[
+              styles.searchResultsContainer, 
+              { backgroundColor },
+              { 
+                opacity: searchBarFocused ? 1 : 0.95,
+                transform: [{ translateY: searchBarFocused ? 0 : 5 }]
+              }
+            ]}
+          >
             <FlatList
               data={predictions}
               keyExtractor={(item) => item.place_id}
@@ -566,8 +867,11 @@ export default function SelectDestinationScreen() {
                     { borderBottomColor: separatorColor },
                   ]}
                   onPress={() => handlePredictionSelect(item.place_id)}
+                  activeOpacity={0.8}
                 >
-                  <Ionicons name="location" size={16} color={primaryColor} />
+                  <View style={styles.searchResultIcon}>
+                    <Ionicons name="location" size={18} color={primaryColor} />
+                  </View>
                   <Text
                     style={[styles.searchResultText, { color: textColor }]}
                     numberOfLines={2}
@@ -584,52 +888,155 @@ export default function SelectDestinationScreen() {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             />
-          </View>
+          </Animated.View>
         )}
-      </View>
+      </Animated.View>
 
-      {/* Instruction */}
+      {/* Enhanced Floating Instruction */}
       {showInstruction && (
-        <View
+        <Animated.View
           style={[
             styles.instructionContainer,
             droppedPinLocation && styles.instructionContainerWithPin,
+            { opacity: instructionOpacity }
           ]}
         >
-          <Text style={styles.instructionText}>
-            {droppedPinLocation
-              ? "📍 Drag the pin to adjust destination location"
-              : "📍 Tap on the map to set your destination along the route"}
-          </Text>
-        </View>
+          <View style={styles.instructionContent}>
+            <Ionicons 
+              name={droppedPinLocation ? "move" : "hand-left"} 
+              size={18} 
+              color="#fff" 
+              style={styles.instructionIcon}
+            />
+            <Text style={styles.instructionText}>
+              {droppedPinLocation
+                ? "Drag the pin to adjust destination"
+                : "Tap anywhere on the map to set destination"}
+            </Text>
+          </View>
+        </Animated.View>
       )}
 
-      {/* Action Buttons */}
+      {/* Floating Reset View Button */}
+      <TouchableOpacity
+        style={styles.resetViewButton}
+        onPress={resetToUserLocation}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="locate" size={20} color="#fff" />
+      </TouchableOpacity>
+
+
+
+      {/* Enhanced Action Buttons */}
       <View style={styles.actionContainer}>
-        <TouchableOpacity
-          style={[styles.actionButton, styles.cancelButton]}
-          onPress={handleCancel}
+        {/* Cancel Button */}
+        <Animated.View 
+          style={{ 
+            flex: 0.8, 
+            transform: [{ scale: cancelButtonScale }] 
+          }}
         >
-          <Text style={styles.actionButtonText}>Cancel</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.actionButton,
-            styles.confirmButton,
-            droppedPinLocation && styles.confirmButtonActive,
-            (!droppedPinLocation || isGeocoding) && styles.disabledButton,
-          ]}
-          onPress={handleConfirmDestination}
-          disabled={!droppedPinLocation || isGeocoding}
+          <TouchableOpacity
+            style={[styles.actionButton, styles.cancelButton]}
+            onPress={handleCancel}
+            onPressIn={() => {
+              Animated.spring(cancelButtonScale, {
+                toValue: 0.95,
+                useNativeDriver: true,
+              }).start();
+            }}
+            onPressOut={() => {
+              Animated.spring(cancelButtonScale, {
+                toValue: 1,
+                useNativeDriver: true,
+              }).start();
+            }}
+            activeOpacity={0.9}
+          >
+            <Ionicons name="close" size={20} color="#fff" style={{ marginRight: 6 }} />
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </Animated.View>
+        
+        {/* Confirm Button */}
+        <Animated.View 
+          style={{ 
+            flex: 1.5, 
+            marginLeft: 12,
+            transform: [{ scale: confirmButtonScale }] 
+          }}
         >
-          {isGeocoding ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.actionButtonText}>
-              {droppedPinLocation ? "✓ Confirm" : "Confirm Pin"}
-            </Text>
-          )}
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              styles.confirmButton,
+              droppedPinLocation && styles.confirmButtonActive,
+              (!droppedPinLocation || isGeocoding) && styles.disabledButton,
+            ]}
+            onPress={handleConfirmDestination}
+            onPressIn={() => {
+              if (droppedPinLocation && !isGeocoding) {
+                Animated.spring(confirmButtonScale, {
+                  toValue: 0.97,
+                  useNativeDriver: true,
+                }).start();
+              }
+            }}
+            onPressOut={() => {
+              Animated.spring(confirmButtonScale, {
+                toValue: 1,
+                useNativeDriver: true,
+              }).start();
+            }}
+            disabled={!droppedPinLocation || isGeocoding}
+            activeOpacity={0.9}
+          >
+            {isGeocoding ? (
+              <View style={styles.buttonContent}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={[styles.confirmButtonText, { marginLeft: 10 }]}>
+                  Processing...
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.buttonContent}>
+                <Ionicons 
+                  name={droppedPinLocation ? "checkmark-circle-outline" : "navigate-circle-outline"} 
+                  size={22} 
+                  color="#fff" 
+                  style={{ marginRight: 8 }} 
+                />
+                <Text style={styles.confirmButtonText}>
+                  {droppedPinLocation ? "Confirm Destination" : "Drop Pin to Continue"}
+                </Text>
+              </View>
+            )}
+            
+            {/* Progress Indicator when pin is selected */}
+            {droppedPinLocation && !isGeocoding && (
+              <Animated.View 
+                style={[
+                  styles.readyIndicator,
+                  {
+                    opacity: confirmButtonGlow.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, 1],
+                    }),
+                    transform: [{
+                      scale: confirmButtonGlow.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.5, 1],
+                      })
+                    }]
+                  }
+                ]}
+              >
+                <View style={styles.readyDot} />
+              </Animated.View>
+            )}
+          </TouchableOpacity>
+        </Animated.View>
       </View>
     </View>
   );
@@ -659,6 +1066,11 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
     zIndex: 1001,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 12,
   },
   headerContent: {
     flexDirection: "row",
@@ -696,29 +1108,39 @@ const styles = StyleSheet.create({
   },
   instructionContainer: {
     position: "absolute",
-    top: 170, // Position below the header
+    top: 280, // Position below the search bar
     alignSelf: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 25,
+    backgroundColor: "rgba(0, 0, 0, 0.85)",
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    borderRadius: 30,
     zIndex: 1002,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 8,
+    shadowRadius: 8,
+    elevation: 12,
+    maxWidth: "85%",
   },
   instructionContainerWithPin: {
-    backgroundColor: "rgba(0, 122, 255, 0.9)",
+    backgroundColor: "rgba(52, 199, 89, 0.95)",
     borderWidth: 2,
-    borderColor: "#007AFF",
+    borderColor: "#34C759",
+  },
+  instructionContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  instructionIcon: {
+    marginRight: 8,
   },
   instructionText: {
     color: "#fff",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
     textAlign: "center",
+    lineHeight: 20,
   },
   actionContainer: {
     position: "absolute",
@@ -730,37 +1152,69 @@ const styles = StyleSheet.create({
     zIndex: 1002,
   },
   actionButton: {
-    flex: 1,
-    paddingVertical: 16,
-    borderRadius: 25,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
-    marginHorizontal: 8,
-    elevation: 8,
+    flexDirection: "row",
+    elevation: 12,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    position: "relative",
+    overflow: "hidden",
   },
   confirmButton: {
     backgroundColor: "#007AFF",
+    borderWidth: 0,
   },
   confirmButtonActive: {
     backgroundColor: "#34C759",
-    transform: [{ scale: 1.05 }],
+    shadowColor: "#34C759",
+    shadowOpacity: 0.4,
+    elevation: 16,
   },
   cancelButton: {
-    backgroundColor: "#6c757d",
+    backgroundColor: "rgba(108, 117, 125, 0.9)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
   },
   disabledButton: {
-    backgroundColor: "#8E8E93",
-    opacity: 0.6,
+    backgroundColor: "rgba(142, 142, 147, 0.6)",
+    shadowOpacity: 0.1,
+    elevation: 4,
   },
-  actionButtonText: {
+  cancelButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+  confirmButtonText: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "700",
     letterSpacing: 0.5,
+    textAlign: "center",
+  },
+  readyIndicator: {
+    position: "absolute",
+    top: 8,
+    right: 12,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  readyDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#fff",
   },
 
   // Search Styles
@@ -825,9 +1279,156 @@ const styles = StyleSheet.create({
   userMarkerContainer: {
     alignItems: "center",
     justifyContent: "center",
+    width: 40,
+    height: 40,
+  },
+  userLocationDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#007AFF",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  userLocationRipple: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(0, 122, 255, 0.3)",
+    borderWidth: 2,
+    borderColor: "rgba(0, 122, 255, 0.5)",
   },
   userMarkerIcon: {
     width: 32,
     height: 32,
   },
+
+  // Enhanced UI Styles
+  clearButton: {
+    padding: 4,
+    borderRadius: 15,
+    backgroundColor: "rgba(0, 0, 0, 0.05)",
+  },
+  searchResultIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(0, 122, 255, 0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  destinationPin: {
+    alignItems: "center",
+    justifyContent: "flex-end", // Align to bottom for proper anchoring
+    height: 50,
+    width: 40,
+  },
+  pinContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  customPinContainer: {
+    alignItems: "center",
+    justifyContent: "flex-end",
+    height: 40,
+    width: 40,
+  },
+  pinHead: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#FF4B4B",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  pinPoint: {
+    width: 0,
+    height: 0,
+    backgroundColor: "transparent",
+    borderStyle: "solid",
+    borderTopWidth: 8,
+    borderRightWidth: 4,
+    borderBottomWidth: 0,
+    borderLeftWidth: 4,
+    borderTopColor: "#FF4B4B",
+    borderRightColor: "transparent",
+    borderBottomColor: "transparent",
+    borderLeftColor: "transparent",
+    marginTop: -2,
+  },
+  targetCircle: {
+    position: "absolute",
+    bottom: -12,
+    alignSelf: "center",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 75, 75, 0.3)",
+    borderWidth: 2,
+    borderColor: "rgba(255, 75, 75, 0.7)",
+  },
+  pinShadow: {
+    position: "absolute",
+    bottom: -5,
+    width: 30,
+    height: 8,
+    backgroundColor: "rgba(0, 0, 0, 0.2)",
+    borderRadius: 15,
+    transform: [{ scaleX: 0.8 }],
+  },
+  buttonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingButtonContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Floating Reset Button
+  resetViewButton: {
+    position: "absolute",
+    top: 250,
+    right: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(0, 122, 255, 0.9)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1001,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 8,
+  },
+
+
 });

@@ -34,8 +34,197 @@ Here’s a glimpse of the Miniway app in action.
   * **Frontend**: [React Native](https://reactnative.dev/) with [Expo](https://expo.dev/)
   * **Backend & Database**: [Supabase](https://supabase.io/) (PostgreSQL with PostGIS)
   * **Mapping**: [Google Maps Platform](https://maps.googleapis.com/) (Directions API, Geocoding API)
-  * **Geolocation**: `expo-location`
-  * **Map Rendering**: `react-native-maps`
+  * **Geolocation**: `expo-location`  * **Map Rendering**: `react-native-maps`
+
+-----
+
+## 🏗️ System Architecture
+
+Miniway follows a modern client-server architecture with real-time capabilities, leveraging cloud services for scalability and reliability.
+
+### **High-Level Architecture Diagram**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     MINIWAY SYSTEM ARCHITECTURE                  │
+└─────────────────────────────────────────────────────────────────┘
+
+                    ┌──────────────────────┐
+                    │  Google Maps Platform │
+                    │  • Directions API     │
+                    │  • Geocoding API      │
+                    └──────────┬───────────┘
+                               │
+                               │ HTTP/REST
+                               │
+    ┌──────────────────────────┼──────────────────────────┐
+    │                          │                          │
+    ▼                          ▼                          ▼
+┌────────────────┐    ┌────────────────┐       ┌────────────────┐
+│  Commuter App  │    │   Driver App   │       │   Admin App    │
+│  (React Native)│    │ (React Native) │       │ (React Native) │
+└────────┬───────┘    └────────┬───────┘       └────────┬───────┘
+         │                     │                        │
+         │                     │                        │
+         └─────────────────────┼────────────────────────┘
+                               │
+                    REST API / Realtime WebSocket
+                               │
+                               ▼
+                ┌──────────────────────────────┐
+                │       SUPABASE BACKEND       │
+                │  ┌────────────────────────┐  │
+                │  │   PostgreSQL + PostGIS │  │
+                │  │   • routes table       │  │
+                │  │   • users table        │  │
+                │  │   • trips table        │  │
+                │  │   • bus_locations      │  │
+                │  └────────────────────────┘  │
+                │                              │
+                │  ┌────────────────────────┐  │
+                │  │    Realtime Engine     │  │
+                │  │  • Live bus tracking   │  │
+                │  │  • Position updates    │  │
+                │  └────────────────────────┘  │
+                │                              │
+                │  ┌────────────────────────┐  │
+                │  │   Authentication       │  │
+                │  │  • Email/Password      │  │
+                │  │  • Role-based access   │  │
+                │  └────────────────────────┘  │
+                │                              │
+                │  ┌────────────────────────┐  │
+                │  │    Storage (Assets)    │  │
+                │  │  • User avatars        │  │
+                │  │  • Route images        │  │
+                │  └────────────────────────┘  │
+                └──────────────────────────────┘
+```
+
+### **Component Breakdown**
+
+#### **1. Mobile Applications (Frontend)**
+The system supports three distinct user roles, each with a tailored interface:
+
+- **Commuter App**
+  - View real-time bus locations on map
+  - Search for nearest routes to destination
+  - Browse all available routes
+  - Track trip history
+  - Manage user profile and saved locations
+  
+- **Driver/Conductor App**
+  - Start/end trips and update bus status
+  - Share real-time location with commuters
+  - View assigned routes
+  - Manage trip logs
+  
+- **Admin Interface**
+  - Create and manage bus routes
+  - Generate route paths using Google Directions API
+  - Monitor system usage and analytics
+  - Manage user roles and permissions
+
+**Technologies:**
+- React Native with Expo for cross-platform development
+- `react-native-maps` for map rendering
+- `expo-location` for GPS tracking
+- Supabase client for backend communication
+
+#### **2. Supabase Backend**
+
+**Database (PostgreSQL + PostGIS)**
+- **PostGIS Extension**: Enables spatial queries and geographic calculations
+- **Key Tables:**
+  - `routes`: Stores route information with geographic LineString paths
+  - `users`: User accounts with role-based permissions
+  - `trips`: Active and historical trip records
+  - `bus_locations`: Real-time position data for buses
+
+**SQL Functions:**
+```sql
+-- Spatial query to find nearest route to destination
+find_route_near_destination(dest_lat, dest_lon)
+
+-- Insert new route with GeoJSON geometry
+add_new_route(route_name, route_path)
+```
+
+**Realtime Channels:**
+- Broadcasts live bus position updates to connected commuters
+- Uses WebSocket connections for low-latency updates
+- Subscribers receive updates when buses move
+
+**Authentication & Authorization:**
+- Email/password authentication
+- Row Level Security (RLS) policies for data access control
+- Role-based permissions (commuter, driver, conductor, admin)
+
+**Storage:**
+- User profile images
+- Route documentation and photos
+
+#### **3. External Services**
+
+**Google Maps Platform:**
+- **Directions API**: Generates accurate route polylines between waypoints
+- **Geocoding API**: Converts addresses to coordinates and vice versa
+- Provides traffic-aware routing for optimal paths
+
+### **Data Flow Scenarios**
+
+#### **Scenario 1: Commuter Finding Nearest Route**
+```
+1. User enters destination → App geocodes address
+2. App calls Supabase RPC: find_route_near_destination(lat, lon)
+3. PostGIS calculates ST_Distance for all routes
+4. Returns nearest route with GeoJSON path
+5. App renders polyline on map
+```
+
+#### **Scenario 2: Admin Creating New Route**
+```
+1. Admin selects waypoints on map
+2. App calls Google Directions API
+3. Receives optimized route polyline
+4. App calls Supabase: add_new_route(name, geojson)
+5. PostGIS stores as geography LineString
+6. Route becomes available to all users
+```
+
+#### **Scenario 3: Real-Time Bus Tracking**
+```
+1. Driver starts trip → App begins location tracking
+2. Device location updates (every 5-10 seconds)
+3. App inserts/updates bus_locations table
+4. Supabase Realtime broadcasts change
+5. Subscribed commuters receive update via WebSocket
+6. Maps update bus marker positions
+```
+
+### **Security Architecture**
+
+- **API Key Management**: Environment variables for sensitive keys
+- **Row Level Security**: Database-level access control
+- **Google API Restrictions**: HTTP referrer and app bundle restrictions
+- **Authentication Tokens**: JWT-based session management
+- **HTTPS Only**: All API communications encrypted
+
+### **Performance Optimizations**
+
+- **Spatial Indexing**: GIST index on `routes.path` for fast spatial queries
+- **Realtime Throttling**: Location updates limited to prevent flooding
+- **Caching**: Route data cached locally on mobile apps
+- **Database Connection Pooling**: Managed by Supabase
+- **Lazy Loading**: Routes loaded on-demand as user pans map
+
+### **Scalability Considerations**
+
+- **Horizontal Scaling**: Supabase automatically scales with demand
+- **Realtime Channels**: Can handle thousands of concurrent connections
+- **CDN for Assets**: Static resources served via edge network
+- **Database Partitioning**: Future consideration for high-volume trip logs
+- **Microservices Ready**: Architecture allows service extraction if needed
 
 -----
 

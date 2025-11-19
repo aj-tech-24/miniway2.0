@@ -73,8 +73,14 @@ export default function TripScreen() {
   const tripFinalizedRef = useRef(false);
 
   const busId = params.busId as string;
-  const busPlateNumber = params.busPlateNumber as string;
+  const initialPlateNumber = (params.busPlateNumber as string) || "Unknown Bus";
   const passengerCount = parseInt(params.passengerCount as string) || 1;
+
+  // State for bus plate number (can be updated if initially unknown)
+  const [busPlateNumber, setBusPlateNumber] = useState<string>(initialPlateNumber);
+
+  console.log("🚌 Trip screen debug - busPlateNumber:", busPlateNumber);
+  console.log("🚌 Trip screen debug - raw params.busPlateNumber:", params.busPlateNumber);
   console.log(
     "Trip screen - Passenger count from params:",
     passengerCount,
@@ -208,6 +214,36 @@ export default function TripScreen() {
       return address;
     } catch {
       return null;
+    }
+  };
+
+  // Function to fetch bus plate number if unknown
+  const fetchBusPlateNumber = async () => {
+    if (busPlateNumber !== "Unknown Bus" && busPlateNumber !== "Unknown") {
+      return; // Already have valid plate number
+    }
+
+    try {
+      console.log("🔍 Fetching bus plate number for busId:", busId);
+      const { data: busData, error } = await supabase
+        .from("buses")
+        .select("plate_number")
+        .eq("id", busId)
+        .single();
+
+      if (error) {
+        console.error("❌ Error fetching bus plate number:", error);
+        return;
+      }
+
+      if (busData?.plate_number) {
+        console.log("✅ Found bus plate number:", busData.plate_number);
+        setBusPlateNumber(busData.plate_number);
+      } else {
+        console.log("⚠️ No plate number found for bus ID:", busId);
+      }
+    } catch (error) {
+      console.error("❌ Error in fetchBusPlateNumber:", error);
     }
   };
 
@@ -456,29 +492,69 @@ export default function TripScreen() {
 
       try {
         setSaving(true);
-        // changed: do not use coordinates; prefer resolved names, fallback labels
+        
+        // FIRST: Update trip_passengers status to completed/cancelled
+        const newStatus = reason === "cancelled" ? "cancelled" : "completed";
+        const { error: tripPassengerError } = await supabase
+          .from("trip_passengers")
+          .update({ 
+            status: newStatus,
+            updated_at: new Date().toISOString()
+          })
+          .eq("passenger_id", session.user.id)
+          .eq("bus_id", busId);
+
+        if (tripPassengerError) {
+          console.error("Error updating trip_passengers status:", tripPassengerError);
+          throw new Error("Failed to update trip status");
+        }
+
+        console.log(`✅ Trip passenger status updated to: ${newStatus}`);
+        
+        // SECOND: Save to travel history
         const startName = pickupName || "Pickup location";
         const endName = destinationName || "Destination";
-        const { error } = await supabase
+        const { error: historyError } = await supabase
           .from("travel_history_commuter")
           .insert({
             user_id: session.user.id,
             start_location_name: startName,
             end_location_name: endName,
             travel_date: new Date().toISOString(),
-            route_name: `Bus ${busPlateNumber}`, // if you don't want this, remove and also adjust history screen
+            route_name: `Bus ${busPlateNumber}`,
             status: reason === "cancelled" ? "cancelled" : "completed",
           });
-        if (error) throw error;
-        router.replace("/(commuter)/history");
+          
+        if (historyError) {
+          console.error("Error saving to travel history:", historyError);
+          // Don't throw here - trip status is already updated, history is less critical
+        }
+
+        // Show success message based on reason
+        if (reason === "arrived") {
+          Alert.alert(
+            "Trip Completed! 🎉",
+            "Thank you for using our service. Have a great day!",
+            [{ text: "OK", onPress: () => router.replace("/(commuter)/history") }]
+          );
+        } else if (reason === "cancelled") {
+          Alert.alert(
+            "Trip Cancelled",
+            "Your trip has been cancelled.",
+            [{ text: "OK", onPress: () => router.replace("/(commuter)/history") }]
+          );
+        } else {
+          router.replace("/(commuter)/history");
+        }
       } catch (e) {
-        Alert.alert("Error", "Could not save your trip. Please try again.");
+        console.error("Error in finalizeTrip:", e);
+        Alert.alert("Error", "Could not complete your trip. Please try again.");
         tripFinalizedRef.current = false;
       } finally {
         setSaving(false);
       }
     },
-    [session?.user?.id, pickupName, destinationName, busPlateNumber]
+    [session?.user?.id, pickupName, destinationName, busPlateNumber, busId]
   );
 
   // QR code is now imported directly, no need for dynamic loading
@@ -520,28 +596,10 @@ export default function TripScreen() {
             setTripStatus("waiting");
           }
         } else {
-          // Create trip_passengers record if it doesn't exist
-          const { data: newTripPassenger, error: createError } = await supabase
-            .from("trip_passengers")
-            .insert({
-              bus_id: busId,
-              trip_id: params.tripId as string,
-              passenger_id: session.user.id,
-              pickup_lat: pickupCoords.latitude,
-              pickup_lng: pickupCoords.longitude,
-              dest_lat: destCoords.latitude,
-              dest_lng: destCoords.longitude,
-              status: "waiting",
-            })
-            .select("id, status")
-            .single();
-
-          if (createError) {
-            // If creation fails, still set status to waiting as the record might exist from route-details
-            setTripStatus("waiting");
-          } else {
-            setTripStatus("waiting");
-          }
+          // No trip_passengers record found - this shouldn't happen if user came from route-details
+          // Don't create a new record, just set status to waiting and let the conductor handle it
+          console.log("No trip_passengers record found - user may have accessed trip directly");
+          setTripStatus("waiting");
         }
 
         // Location
@@ -609,6 +667,9 @@ export default function TripScreen() {
         ) {
           pickupRequestResolved.current = true;
         }
+
+        // Fetch bus plate number if unknown
+        await fetchBusPlateNumber();
       } catch (err) {
         Alert.alert(
           "Error",
@@ -618,7 +679,13 @@ export default function TripScreen() {
         setLoading(false);
       }
     };
-    fetchInitialLocation();
+    
+    const initializeTrip = async () => {
+      await fetchInitialLocation();
+      await fetchBusPlateNumber(); // Fetch plate number if unknown
+    };
+    
+    initializeTrip();
   }, [busId, session?.user?.id]);
 
   useEffect(() => {
@@ -942,7 +1009,7 @@ export default function TripScreen() {
             // Enhanced camera animations for better driving mode experience
             const camera: Partial<Camera> = {
               center: newLocation,
-              pitch: tripStatus === "picked_up" ? 60 : 75, // Lower pitch when boarded for better route view
+              pitch: tripStatus === "picked_up" ? 85 : 90, // Lower pitch when boarded for better route view
               heading: heading,
               zoom: tripStatus === "picked_up" ? 16 : 18, // Slightly zoomed out when boarded to see more route
             };
@@ -1032,9 +1099,10 @@ export default function TripScreen() {
         customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
         initialCamera={{
           center: busLocation,
-          pitch: 75,
+          pitch: 85, // Changed from 85 to 60 for better 3D view
           heading: 0,
-          zoom: 18,
+          zoom: 17,
+          altitude: 1000,
         }}
         showsUserLocation={false}
         showsMyLocationButton={false}
@@ -1097,8 +1165,12 @@ export default function TripScreen() {
         {busLocation && (
           <Marker
             coordinate={busLocation}
-            title={busPlateNumber}
+            title={busPlateNumber || "Bus"}
+            description="Your bus location"
             anchor={{ x: 0.5, y: 0.5 }}
+            onPress={() => {
+              console.log("Bus marker pressed:", busPlateNumber);
+            }}
           >
             <View
               style={[
@@ -1229,7 +1301,7 @@ export default function TripScreen() {
                     Show this QR code to the conductor for boarding
                   </Text>
                   <Text style={styles.qrSubText}>
-                    The QR code will disappear once you're boarded
+                    The QR code will disappear once you&apos;re boarded
                   </Text>
                   {/* Fallback: Show payload as text if QR doesn't work
                   <View style={styles.fallbackContainer}>
@@ -1266,10 +1338,10 @@ export default function TripScreen() {
               <FontAwesome5 name="flag-checkered" size={20} color="#28a745" />
             </View>
             <Text style={styles.destinationText}>
-              Bus {busPlateNumber}{" "}
+              Bus {busPlateNumber}
               {tripStatus === "waiting"
-                ? "to your pickup"
-                : "to your destination"}
+                ? " to your pickup"
+                : " to your destination"}
             </Text>
           </>
         )}

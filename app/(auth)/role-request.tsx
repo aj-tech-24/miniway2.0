@@ -263,8 +263,16 @@ export default function RoleRequestScreen() {
   return (
     <AuthLayout>
       <AuthForm
-        title="Apply for Role"
-        subtitle="Join our team as a driver or conductor"
+        title={
+          typeof "Apply for Role" === "string"
+            ? "Apply for Role"
+            : "Invalid Title"
+        }
+        subtitle={
+          typeof "Join our team as a driver or conductor" === "string"
+            ? "Join our team as a driver or conductor"
+            : "Invalid Subtitle"
+        }
         fields={fields}
         buttonText="Submit Application"
         onButtonPress={handleSubmitRequest}

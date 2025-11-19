@@ -21,9 +21,8 @@ import { useThemeColor } from "../../hooks/useThemeColor";
 export default function VerifyEmailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-
   // Get email from params or use empty string as fallback
-  const [email, setEmail] = useState((params.email as string) || "");
+  const [email] = useState((params.email as string) || "");
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isResending, setIsResending] = useState(false);
@@ -206,22 +205,18 @@ export default function VerifyEmailScreen() {
               marginTop: -20,
             }}
           />
-
           <Ionicons
             name="mail-unread-outline"
             size={80}
             color="#007AFF"
             style={{ alignSelf: "center", marginBottom: 20 }}
           />
-
           <Text style={[styles.title, { color: textColor }]}>
             Verify Your Email
           </Text>
-
           <Text style={[styles.subtitle, { color: textColor }]}>
             We've sent a 6-digit confirmation code to {email}
           </Text>
-
           <View style={styles.inputContainer}>
             <Text style={[styles.label, { color: textColor }]}>
               Confirmation Code
@@ -260,11 +255,9 @@ export default function VerifyEmailScreen() {
             ) : (
               <Text style={styles.resendButtonText}>Resend Code</Text>
             )}
-          </TouchableOpacity>
-
-          <View style={styles.footer}>
+          </TouchableOpacity>          <View style={styles.footer}>
             <Text style={[styles.footerText, { color: textColor }]}>
-              Didn't receive the code? Check your spam folder or{" "}
+              Didn&apos;t receive the code? Check your spam folder or
             </Text>
             <TouchableOpacity
               onPress={handleResendEmail}
@@ -279,18 +272,17 @@ export default function VerifyEmailScreen() {
       {/* Error Modal */}
       <ErrorModal
         visible={showErrorModal}
-        title="Verification Error"
-        message={message?.text || "An error occurred during verification"}
+        title={typeof message?.text === 'string' ? "Verification Error" : "Error"}
+        message={typeof message?.text === 'string' ? message.text : "An error occurred during verification"}
         onClose={() => setShowErrorModal(false)}
         icon="close-circle"
         iconColor="#FF3B30"
       />
-
       {/* Success Modal */}
       <SuccessModal
         visible={showSuccessModal}
-        title="Verification Successful"
-        message={message?.text || "Your email has been verified successfully"}
+        title={typeof message?.text === 'string' ? "Verification Successful" : "Success"}
+        message={typeof message?.text === 'string' ? message.text : "Your email has been verified successfully"}
         onClose={() => setShowSuccessModal(false)}
         icon="checkmark-circle"
         iconColor="#34C759"

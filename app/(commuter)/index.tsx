@@ -50,6 +50,46 @@ interface Place {
   };
 }
 
+// Trip data types from database
+interface BusData {
+  id: string;
+  plate_number: string;
+  route_id: string;
+  status: string;
+}
+
+interface TripData {
+  id: string;
+  current_location: string | { latitude: number; longitude: number } | { type: string; coordinates: number[] } | null;
+  bus_id: string;
+  status: string;
+  buses: BusData | BusData[];
+}
+
+interface BusWithLocation {
+  id: string;
+  plateNumber: string;
+  route_id: string;
+  currentLocation: string | { latitude: number; longitude: number } | { type: string; coordinates: number[] };
+}
+
+// Type for trips_with_geojson view
+interface TripWithGeoJSON {
+  status: string;
+  current_location: any; // GeoJSON object or string
+  bus_id: string;
+  plate_number: string;
+  route_id: string;
+  driver_id: string;
+  driver_name: string;
+}
+
+interface RouteData {
+  id: string;
+  name: string;
+  path: string | { coordinates: number[][] };
+}
+
 // --- Constants ---
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
@@ -190,9 +230,84 @@ export function CommuterHomeScreen() {
       return distance;
     },
     []
-  );
+  );  // Helper function to parse location data in various formats
+  const parseLocation = useCallback((location: any): { latitude: number; longitude: number } | null => {
+    if (!location) return null;
 
+    try {
+      // Handle string format (POINT or GeoJSON string or binary)
+      if (typeof location === 'string') {
+        // Check for binary format (starts with hex like 0101000020E6100000...)
+        if (location.startsWith('01') && location.length > 20) {
+          console.log(`⚠️ Binary PostGIS format detected: ${location.substring(0, 30)}... - Using trips_with_geojson view should prevent this`);
+          return null;
+        }
+
+        // Handle PostGIS POINT format: POINT(lng lat)
+        if (location.startsWith('POINT(')) {
+          const coordString = location.replace("POINT(", "").replace(")", "");
+          const coords = coordString.split(" ");
+          if (coords.length >= 2) {
+            const [lng, lat] = coords.map(Number);
+            if (!isNaN(lat) && !isNaN(lng)) {
+              console.log(`✅ Parsed POINT format: ${lat}, ${lng}`);
+              return { latitude: lat, longitude: lng };
+            }
+          }
+          console.log(`⚠️ Invalid POINT format: ${location}`);
+          return null;
+        }
+
+        // Try to parse as GeoJSON string
+        try {
+          const geoJson = JSON.parse(location);
+          if (geoJson.type === 'Point' && Array.isArray(geoJson.coordinates)) {
+            const [lng, lat] = geoJson.coordinates;
+            if (!isNaN(lat) && !isNaN(lng)) {
+              console.log(`✅ Parsed GeoJSON string: ${lat}, ${lng}`);
+              return { latitude: lat, longitude: lng };
+            }
+          }
+        } catch (parseError) {
+          // Not a JSON string, that's okay
+        }
+
+        // If we get here, it's an unrecognized string format
+        console.log(`⚠️ Unrecognized location format: ${location.substring(0, 50)}`);
+        return null;
+      }
+
+      // Handle object format (most common with trips_with_geojson view)
+      if (typeof location === 'object') {
+        // GeoJSON Point format: { type: "Point", coordinates: [lng, lat] }
+        if (location.type === 'Point' && Array.isArray(location.coordinates)) {
+          const [lng, lat] = location.coordinates;
+          if (!isNaN(lat) && !isNaN(lng)) {
+            console.log(`✅ Parsed GeoJSON object: ${lat}, ${lng}`);
+            return { latitude: lat, longitude: lng };
+          }
+        }
+
+        // Direct lat/lng object format
+        if (location.latitude && location.longitude) {
+          const { latitude, longitude } = location;
+          if (!isNaN(latitude) && !isNaN(longitude)) {
+            console.log(`✅ Parsed lat/lng object: ${latitude}, ${longitude}`);
+            return { latitude, longitude };
+          }
+        }
+
+        console.log(`⚠️ Unrecognized object format:`, location);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error parsing location:', error);
+      return null;
+    }
+  }, []);
   // Function to check for existing waiting trips (for app crash recovery)
+  // PRIORITY FUNCTION: This must be called first to handle trip recovery
   const checkForExistingTrip = useCallback(async () => {
     if (!session?.user?.id) {
       setIsCheckingExistingTrip(false);
@@ -200,7 +315,7 @@ export function CommuterHomeScreen() {
     }
 
     try {
-      console.log("🔍 Checking for existing waiting trips...");
+      console.log("🚨 PRIORITY: Checking for existing waiting trips for user ID:", session.user.id);
 
       // Check for trip_passengers records with waiting status
       const { data: existingTrips, error } = await supabase
@@ -222,7 +337,7 @@ export function CommuterHomeScreen() {
           `
         )
         .eq("passenger_id", session.user.id)
-        .eq("status", "boarded")
+        .in("status", ["boarded", "waiting"])
         .order("created_at", { ascending: false })
         .limit(1);
 
@@ -230,18 +345,25 @@ export function CommuterHomeScreen() {
         console.error("Error checking for existing trips:", error);
         setIsCheckingExistingTrip(false);
         return;
-      }
+      }      if (existingTrips && existingTrips.length > 0) {
+        const existingTrip = existingTrips[0];        console.log("✅ Found existing waiting trip:", existingTrip);
+        console.log("🔍 Existing trip buses data:", existingTrip.buses);
 
-      if (existingTrips && existingTrips.length > 0) {
-        const existingTrip = existingTrips[0];
-        console.log("✅ Found existing waiting trip:", existingTrip);
+        // Extract plate number - handle both array and object formats
+        let plateNumber = "Unknown";
+        if (existingTrip.buses) {
+          if (Array.isArray(existingTrip.buses) && existingTrip.buses.length > 0) {
+            plateNumber = existingTrip.buses[0]?.plate_number || "Unknown";
+          } else if (typeof existingTrip.buses === 'object' && (existingTrip.buses as any).plate_number) {
+            plateNumber = (existingTrip.buses as any).plate_number;
+          }
+        }
+        console.log("🚌 Extracted plate number:", plateNumber);
 
         // Show alert to continue trip
         Alert.alert(
           "Continue Your Trip? 🚌",
-          `You have an ongoing trip on Bus ${
-            existingTrip.buses[0]?.plate_number || "Unknown"
-          }. Would you like to continue where you left off?`,
+          `You have an ongoing trip on Bus ${plateNumber}. Would you like to continue where you left off?`,
           [
             {
               text: "Start New Trip",
@@ -291,16 +413,24 @@ export function CommuterHomeScreen() {
       console.error("Error cancelling trip:", error);
     }
   };
-
   // Function to continue existing trip
   const continueExistingTrip = (existingTrip: any) => {
     try {
-      console.log("🚀 Continuing existing trip:", existingTrip);
+      console.log("🚀 Continuing existing trip:", existingTrip);      // Extract plate number - handle both array and object formats
+      let plateNumber = "Unknown";
+      if (existingTrip.buses) {
+        if (Array.isArray(existingTrip.buses) && existingTrip.buses.length > 0) {
+          plateNumber = existingTrip.buses[0]?.plate_number || "Unknown";
+        } else if (typeof existingTrip.buses === 'object' && (existingTrip.buses as any).plate_number) {
+          plateNumber = (existingTrip.buses as any).plate_number;
+        }
+      }
+      console.log("🚌 Using plate number for navigation:", plateNumber);
 
       // Navigate to trip screen with the existing trip data
       const tripParams = {
         busId: existingTrip.bus_id,
-        busPlateNumber: existingTrip.buses[0]?.plate_number || "Unknown",
+        busPlateNumber: plateNumber,
         tripId: existingTrip.trip_id,
         passengerCount: existingTrip.passenger_count || 1,
         pickupLat: existingTrip.pickup_lat.toString(),
@@ -319,48 +449,107 @@ export function CommuterHomeScreen() {
       console.error("Error continuing trip:", error);
       Alert.alert("Error", "Could not continue the trip. Please try again.");
     }
-  };
-
-  // Fetch nearby buses on routes
+  };  // Fetch nearby buses on routes
   const fetchActiveMinibuses = useCallback(async () => {
-    try {
-      // First, get all active buses
-      const { data: busesData, error: busesError } = await supabase
-        .from("buses")
-        .select("id, plateNumber, currentLocation, route_id")
-        .eq("status", "active");
+    try {      console.log("🚌 Fetching active buses from trips...");
+      
+      // Get active trips with bus information and current location
+      // Include both 'waiting' and 'ongoing' trips to show all available buses
+      // Use trips_with_geojson view which converts location to GeoJSON format
+      const { data: activeTripsData, error: tripsError } = await supabase
+        .from("trips_with_geojson")
+        .select(`
+          status,
+          current_location,
+          bus_id,
+          plate_number,
+          route_id,
+          driver_id,
+          driver_name
+        `)
+        .in("status", ["waiting", "ongoing"]);
+      
+      if (tripsError) {
+        console.error("Error fetching trips:", tripsError);
+        throw tripsError;
+      }      console.log("📍 Found active trips:", activeTripsData?.length || 0);
+        // Transform the data to match expected format
+      // Filter out trips with invalid/binary location data
+      const busesData = activeTripsData?.filter((trip: TripWithGeoJSON) => {
+        // Check if location is valid
+        if (!trip.current_location) {
+          console.log(`⚠️ Trip with bus ${trip.plate_number} has no location data`);
+          return false;
+        }
+        
+        // Log the location format for debugging
+        console.log(`📍 Bus ${trip.plate_number} - Location type: ${typeof trip.current_location}`, 
+          typeof trip.current_location === 'string' 
+            ? trip.current_location.substring(0, 50) 
+            : JSON.stringify(trip.current_location).substring(0, 50));
+        
+        // GeoJSON view should return objects, but handle strings just in case
+        if (typeof trip.current_location === 'string') {
+          // Check for binary format
+          const isBinaryFormat = trip.current_location.startsWith('01');
+          if (isBinaryFormat) {
+            console.log(`⚠️ Skipping bus ${trip.plate_number} - location in binary format`);
+            return false;
+          }
+        }
+        
+        return true;}).map((trip: TripWithGeoJSON): BusWithLocation => {
+        console.log(`🚌 Bus ${trip.plate_number} - Status: ${trip.status} - Location:`, trip.current_location);
+        return {
+          id: trip.bus_id, // Use bus_id as the identifier
+          plateNumber: trip.plate_number,
+          route_id: trip.route_id,
+          currentLocation: trip.current_location, // GeoJSON or text location from view
+        };
+      }) || [];
 
-      if (busesError) throw busesError;
-
-      // Get all routes to check proximity
+      // Get all routes with geojson data to check proximity
       const { data: routesData, error: routesError } = await supabase
-        .from("routes")
-        .select("id, name, geojson");
+        .from("routes_with_geojson")
+        .select("id, name, path");
 
-      if (routesError) throw routesError;
-
-      if (!userLocation || !busesData || !routesData) {
-        // Fallback to original behavior if no user location
-        const formattedData =
-          busesData?.map((bus) => {
-            const [longitude, latitude] = bus.currentLocation
-              .replace("POINT(", "")
-              .replace(")", "")
-              .split(" ")
-              .map(Number);
-            return { ...bus, currentLocation: { latitude, longitude } };
-          }) || [];
-        setBuses(formattedData);
-        return;
+      if (routesError) {
+        console.error("Error fetching routes:", routesError);
+        throw routesError;
       }
 
-      // Filter buses that are on routes near the user
-      const nearbyBuses = busesData.filter((bus) => {
-        const [longitude, latitude] = bus.currentLocation
-          .replace("POINT(", "")
-          .replace(")", "")
-          .split(" ")
-          .map(Number);
+      console.log("🗺️ Found routes:", routesData?.length || 0);      console.log("🗺️ Found routes:", routesData?.length || 0);
+
+      if (!busesData || busesData.length === 0) {
+        console.log("⚠️ No buses found");
+        setBuses([]);
+        return;
+      }      if (!userLocation) {
+        console.log("⚠️ No user location available");
+        // Fallback to showing all buses if no user location
+        const formattedData = busesData.map((bus: BusWithLocation) => {
+          const parsedLocation = parseLocation(bus.currentLocation);
+          const latitude = parsedLocation?.latitude || 6.7536; // Default Davao coordinates
+          const longitude = parsedLocation?.longitude || 125.356;
+          
+          return { 
+            id: bus.id,
+            plateNumber: bus.plateNumber,
+            currentLocation: { latitude, longitude } 
+          };
+        });
+          console.log("✅ Setting buses from trips (no location filter):", formattedData.length);
+        setBuses(formattedData);
+        return;      }      // Filter buses that are on routes near the user
+      const nearbyBuses = busesData.filter((bus: BusWithLocation) => {
+        const parsedLocation = parseLocation(bus.currentLocation);
+        
+        if (!parsedLocation) {
+          console.log(`⚠️ Could not parse location for bus ${bus.plateNumber}`);
+          return false;
+        }
+
+        const { latitude, longitude } = parsedLocation;
 
         // Calculate distance from user to bus
         const distanceToBus = calculateDistance(
@@ -370,50 +559,87 @@ export function CommuterHomeScreen() {
           longitude
         );
 
+        console.log(`🚌 Bus ${bus.plateNumber}: ${distanceToBus.toFixed(2)}km away`);
+
         // Only include buses within 5km of user
         if (distanceToBus > 5) return false;
 
         // If bus has a route_id, check if the route is near the user
-        if (bus.route_id) {
+        if (bus.route_id && routesData) {
           const route = routesData.find((r) => r.id === bus.route_id);
-          if (route && route.geojson && route.geojson.coordinates) {
-            // Check if any point on the route is within 2km of user
-            const routePoints = route.geojson.coordinates;
-            const isRouteNearUser = routePoints.some((point: number[]) => {
-              const [lng, lat] = point;
-              const distanceToRoute = calculateDistance(
-                userLocation.coords.latitude,
-                userLocation.coords.longitude,
-                lat,
-                lng
-              );
-              return distanceToRoute <= 2; // 2km radius for route proximity
-            });
-            return isRouteNearUser;
+          if (route && route.path) {
+            try {
+              // Parse the PostGIS geography data from the path field
+              let routePoints: number[][] = [];
+              
+              if (typeof route.path === 'string') {
+                // Handle PostGIS LineString format: LINESTRING(lng lat, lng lat, ...)
+                if (route.path.startsWith('LINESTRING(')) {
+                  const coordinateString = route.path
+                    .replace('LINESTRING(', '')
+                    .replace(')', '');
+                  routePoints = coordinateString.split(',').map(coord => {
+                    const [lng, lat] = coord.trim().split(' ').map(Number);
+                    return [lng, lat];
+                  });
+                }
+              } else if (route.path && route.path.coordinates) {
+                // Handle GeoJSON format
+                routePoints = route.path.coordinates;
+              }
+              
+              if (routePoints.length > 0) {
+                // Check if any point on the route is within 2km of user
+                const isRouteNearUser = routePoints.some((point: number[]) => {
+                  const [lng, lat] = point;
+                  const distanceToRoute = calculateDistance(
+                    userLocation.coords.latitude,
+                    userLocation.coords.longitude,
+                    lat,
+                    lng
+                  );
+                  return distanceToRoute <= 2; // 2km radius for route proximity
+                });
+                return isRouteNearUser;
+              }
+            } catch (error) {
+              console.error("Error parsing route path:", error);
+            }
           }
         }
 
         // If no route_id or route data, include bus if it's close enough
         return distanceToBus <= 3; // 3km radius for buses without route data
-      });
+      });      console.log(`📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`);      console.log(`📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`);
 
       // Format the data
-      const formattedData = nearbyBuses.map((bus) => {
-        const [longitude, latitude] = bus.currentLocation
-          .replace("POINT(", "")
-          .replace(")", "")
-          .split(" ")
-          .map(Number);
-        return { ...bus, currentLocation: { latitude, longitude } };
-      });
-
+      const formattedData = nearbyBuses.map((bus: BusWithLocation) => {
+        const parsedLocation = parseLocation(bus.currentLocation);
+        const latitude = parsedLocation?.latitude || 6.7536;
+        const longitude = parsedLocation?.longitude || 125.356;
+        
+        return { 
+          id: bus.id,
+          plateNumber: bus.plateNumber,
+          currentLocation: { latitude, longitude } 
+        };
+      });console.log("✅ Setting buses from active trips:", formattedData.length);
       setBuses(formattedData);
+      
+      // Log final bus data for debugging
+      formattedData.forEach((bus: Minibus, index: number) => {
+        console.log(`🚌 Bus ${index + 1}: ${bus.plateNumber} at (${bus.currentLocation.latitude.toFixed(4)}, ${bus.currentLocation.longitude.toFixed(4)})`);
+      });
+      
     } catch (error) {
-      if (error instanceof Error) {
-        Alert.alert("Error", "Could not fetch minibus locations.");
+      console.error("❌ Error in fetchActiveMinibuses:", error);
+      setBuses([]); // Set empty array on error
+      
+      // Don't show alert for database errors as they're usually temporary
+      if (error instanceof Error && !error.message.includes("column")) {        Alert.alert("Error", "Could not fetch bus locations: " + error.message);
       }
     }
-  }, [userLocation, calculateDistance]);
+  }, [userLocation, calculateDistance, parseLocation]);
 
   // Handle route selection from route tab (for backward compatibility)
   useEffect(() => {
@@ -440,9 +666,22 @@ export function CommuterHomeScreen() {
       }
     }
   }, [params.selectedRouteId, params.selectedRouteName, params.message]);
+  // PRIORITY EFFECT: Check for existing trips immediately when session is available
+  // This runs BEFORE any other initialization to ensure trip recovery happens first
+  useEffect(() => {
+    if (session?.user?.id) {
+      console.log("🚨 PRIORITY: Session detected - immediately checking for existing trips");
+      console.log("🚨 PRIORITY: User ID:", session.user.id);
+      checkForExistingTrip();
+    }
+  }, [session?.user?.id, checkForExistingTrip]);
 
   useEffect(() => {
     const initialize = async () => {
+      // PRIORITY: Check for existing waiting trips first (for app crash recovery)
+      // This must run before other initialization to handle trip recovery
+      await checkForExistingTrip();
+
       const hasSeenModal = await AsyncStorage.getItem("hasSeenWelcomeModal");
       if (!hasSeenModal) {
         setShowWelcomeModal(true);
@@ -462,17 +701,13 @@ export function CommuterHomeScreen() {
       updateLocationWithDebounce(location);
       await fetchActiveMinibuses();
 
-      // Check for existing waiting trips (for app crash recovery)
-      await checkForExistingTrip();
-
       setInitialLoading(false);
-    };
-    initialize();
+    };initialize();
     const subscription = supabase
-      .channel("public:minibuses")
+      .channel("public:trips")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "minibuses" },
+        { event: "*", schema: "public", table: "trips" },
         () => fetchActiveMinibuses()
       )
       .subscribe();
@@ -1130,7 +1365,10 @@ export function CommuterHomeScreen() {
                       title={`Bus: ${bus.plateNumber}`}
                     >
                       <View style={styles.markerContainer}>
-                        <FontAwesome name="bus" size={20} color="#fff" />
+                        <Image
+                          source={require("@/assets/images/bus-icon.png")}
+                          style={styles.busIcon}
+                        />
                       </View>
                     </Marker>
                   ))}
@@ -2610,14 +2848,10 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
   },
-
+  busIcon: { width: 34, height: 34 },
   // Marker Styles
   markerContainer: {
-    backgroundColor: "#007AFF",
     padding: 8,
-    borderRadius: 20,
-    borderColor: "#fff",
-    borderWidth: 2,
   },
 
   // User Marker Styles

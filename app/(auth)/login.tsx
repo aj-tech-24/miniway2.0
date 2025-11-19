@@ -109,8 +109,8 @@ export default function LoginScreen() {
   return (
     <AuthLayout>
       <AuthForm
-        title="Welcome Back!"
-        subtitle="Log in to your Miniway account"
+        title={typeof "Welcome Back!" === 'string' ? "Welcome Back!" : "Invalid Title"}
+        subtitle={typeof "Log in to your Miniway account" === 'string' ? "Log in to your Miniway account" : "Invalid Subtitle"}
         fields={fields}
         buttonText="Log In"
         onButtonPress={handleLogin}

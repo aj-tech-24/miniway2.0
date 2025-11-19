@@ -274,9 +274,9 @@ export default function RouteDetailsScreen() {
             const heading = calculateBearing(startPoint, endPoint);
             setInitialCamera({
               center: startPoint,
-              pitch: 80,
+              pitch: 70,
               heading: heading,
-              zoom: 14,
+              zoom: 18,
             });
           }
 
@@ -300,7 +300,6 @@ export default function RouteDetailsScreen() {
             )
             .eq("route_id", rawRoute.id)
             .eq("status", "active");
-
           if (busesError) throw busesError;
           if (!Array.isArray(busesData)) throw new Error("Invalid data.");
 
@@ -310,7 +309,6 @@ export default function RouteDetailsScreen() {
             "get_active_trips_with_geojson",
             { bus_ids: busIds }
           );
-
           // Map bus to its latest trip location
           const formattedBuses: Bus[] = (busesData ?? []).map((bus: any) => {
             const trip = (tripsData ?? []).find(
@@ -318,7 +316,6 @@ export default function RouteDetailsScreen() {
                 t.bus_id === bus.id &&
                 (t.status === "ongoing" || t.status === "waiting")
             );
-
             let location = null;
             if (trip?.current_location) {
               try {
@@ -331,7 +328,6 @@ export default function RouteDetailsScreen() {
                 location = null;
               }
             }
-
             return {
               id: bus.id,
               plate_number: bus.plate_number,
@@ -416,7 +412,7 @@ export default function RouteDetailsScreen() {
               center: startPoint,
               pitch: 80,
               heading: heading,
-              zoom: 14,
+              zoom: 18,
             });
           }
 
@@ -613,9 +609,7 @@ export default function RouteDetailsScreen() {
     } finally {
       setRefreshing(false);
     }
-  };
-
-  // Real-time updates
+  };  // Real-time updates
   useEffect(() => {
     if (!buses || buses.length === 0) return;
     const busIds = buses.map((bus) => bus.id);
@@ -648,11 +642,15 @@ export default function RouteDetailsScreen() {
                       latitude: updatedTrip.current_location.coordinates[1],
                       longitude: updatedTrip.current_location.coordinates[0],
                     }
-                  : null;
-                if (selectedBus?.id === updatedTrip.bus_id && newLoc) {
-                  mapRef.current?.animateToRegion(
-                    { ...newLoc, latitudeDelta: 0.01, longitudeDelta: 0.01 },
-                    1000
+                  : null;                if (selectedBus?.id === updatedTrip.bus_id && newLoc) {
+                  mapRef.current?.animateCamera(
+                    {
+                      center: newLoc,
+                      zoom: 17,
+                      pitch: 70,
+                      heading: 0,
+                    },
+                    { duration: 1000 }
                   );
                 }
                 return {
@@ -690,30 +688,20 @@ export default function RouteDetailsScreen() {
 
       if (bus.location) {
         // If bus has live location, focus on it
-        console.log("Focusing on bus location:", bus.location);
-
-        // Try multiple methods for better compatibility
+        console.log("Focusing on bus location:", bus.location);        // Use animateCamera for better control over zoom and pitch
         if (mapRef.current) {
-          // Method 1: fitToCoordinates
-          mapRef.current.fitToCoordinates([bus.location], {
-            edgePadding: { top: 100, right: 50, bottom: 100, left: 50 },
-            animated: true,
-          });
-
-          // Method 2: animateToRegion as backup
-          setTimeout(() => {
-            if (bus.location) {
-              mapRef.current?.animateToRegion(
-                {
-                  latitude: bus.location.latitude,
-                  longitude: bus.location.longitude,
-                  latitudeDelta: 0.01,
-                  longitudeDelta: 0.01,
-                },
-                1000
-              );
-            }
-          }, 500);
+          mapRef.current.animateCamera(
+            {
+              center: {
+                latitude: bus.location.latitude,
+                longitude: bus.location.longitude,
+              },
+              zoom: 17,
+              pitch: 70,
+              heading: 0,
+            },
+            { duration: 1000 }
+          );
         }
       } else if (
         nearestRoute?.path?.coordinates &&
@@ -725,41 +713,36 @@ export default function RouteDetailsScreen() {
           latitude: startCoord[1],
           longitude: startCoord[0],
         };
-        console.log("Focusing on fallback location:", fallbackLocation);
-
-        if (mapRef.current) {
-          // Method 1: fitToCoordinates
-          mapRef.current.fitToCoordinates([fallbackLocation], {
-            edgePadding: { top: 100, right: 50, bottom: 100, left: 50 },
-            animated: true,
-          });
-
-          // Method 2: animateToRegion as backup
-          setTimeout(() => {
-            mapRef.current?.animateToRegion(
-              {
+        console.log("Focusing on fallback location:", fallbackLocation);        if (mapRef.current) {
+          mapRef.current.animateCamera(
+            {
+              center: {
                 latitude: fallbackLocation.latitude,
                 longitude: fallbackLocation.longitude,
-                latitudeDelta: 0.02,
-                longitudeDelta: 0.02,
               },
-              1000
-            );
-          }, 500);
+              zoom: 17,
+              pitch: 70,
+              heading: 0,
+            },
+            { duration: 1000 }
+          );
         }
       }
     }, 300);
   };
 
   const handleUseCurrentLocation = () => {
-    getCurrentLocation(
-      (location) => {
+    getCurrentLocation(      (location) => {
         setPickupLocation(location);
-        mapRef.current?.animateToRegion({
-          ...location,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        });
+        mapRef.current?.animateCamera(
+          {
+            center: location,
+            zoom: 17,
+            pitch: 70,
+            heading: 0,
+          },
+          { duration: 1000 }
+        );
       },
       setLocationLoading,
       setShowLocationPermissionAlert
@@ -855,16 +838,24 @@ export default function RouteDetailsScreen() {
         tripId = newTrip.id;
       } else {
         tripId = existingTrip.id;
-      }
-
-      // Check if trip_passengers record already exists
+      }      // Check if trip_passengers record already exists for this specific trip and passenger
       const { data: existingTripPassenger, error: checkError } = await supabase
         .from("trip_passengers")
-        .select("id, status")
+        .select("id, status, created_at")
         .eq("bus_id", selectedBus.id)
         .eq("passenger_id", session.user.id)
         .eq("trip_id", tripId)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
+
+      console.log("Existing trip_passengers record check:", { 
+        existingRecord: existingTripPassenger, 
+        error: checkError,
+        busId: selectedBus.id,
+        passengerId: session.user.id,
+        tripId: tripId
+      });
 
       let tripPassengerId;
       if (existingTripPassenger && !checkError) {
@@ -1282,9 +1273,8 @@ export default function RouteDetailsScreen() {
     return (
       <View style={styles.centered}>
         <Ionicons name="map" size={64} color="#6c757d" />
-        <Text style={styles.errorTitle}>No Route Found</Text>
-        <Text style={styles.errorText}>
-          We couldn't find a route for your destination. Please try selecting a
+        <Text style={styles.errorTitle}>No Route Found</Text>        <Text style={styles.errorText}>
+          We couldn&apos;t find a route for your destination. Please try selecting a
           different destination.
         </Text>
         <TouchableOpacity
@@ -1314,26 +1304,43 @@ export default function RouteDetailsScreen() {
         showsCompass={false}
         onPress={(e) => handlePinLocation(e.nativeEvent.coordinate)}
       >
+        {/* Enhanced Destination Marker */}
         <Marker
           coordinate={destCoords}
           title="Your Destination"
-          pinColor="red"
-        />
+          anchor={{ x: 0.5, y: 1 }}
+        >
+          <View style={styles.destinationMarkerContainer}>
+            <View style={styles.destinationMarkerHead}>
+              <Ionicons name="flag" size={18} color="#fff" />
+            </View>
+            <View style={styles.destinationMarkerPoint} />
+          </View>
+        </Marker>
         <Polyline
           coordinates={polylineCoords}
           strokeColor="#007AFF"
           strokeWidth={6}
         />
-
+        
+        
+        {/* Enhanced Pickup Location Marker */}
         {pickupLocation && (
           <Marker
             coordinate={pickupLocation}
             title="Your Pickup Spot"
-            pinColor="blue"
-          />
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={styles.pickupMarkerContainer}>
+              <View style={styles.pickupMarkerHead}>
+                <Ionicons name="hand-right" size={18} color="#fff" />
+              </View>
+              <View style={styles.pickupMarkerPoint} />
+            </View>
+          </Marker>
         )}
-
-        {/* Custom User Location Marker */}
+        
+        {/* Enhanced User Location Marker */}
         {currentLocation && (
           <Marker
             coordinate={currentLocation}
@@ -1341,11 +1348,10 @@ export default function RouteDetailsScreen() {
             anchor={{ x: 0.5, y: 0.5 }}
           >
             <View style={styles.userMarkerContainer}>
-              <Image
-                source={require("../assets/images/user-pin.png")}
-                style={styles.userMarkerIcon}
-                resizeMode="contain"
-              />
+              <View style={styles.userLocationDot}>
+                <Ionicons name="person" size={16} color="#fff" />
+              </View>
+              <View style={styles.userLocationRipple} />
             </View>
           </Marker>
         )}
@@ -1392,26 +1398,36 @@ export default function RouteDetailsScreen() {
                 />
               </View>
             </Marker>
-          );
-        })}
+            );
+          })}
       </MapView>
 
+      {/* Enhanced Header with Route Info */}
       <View style={styles.headerContainer}>
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backButton}
+          activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color="black" />
+          <Ionicons name="arrow-back" size={24} color="#007AFF" />
         </TouchableOpacity>
+        <View style={styles.headerInfo}>
+          <Text style={styles.headerTitle}>Route Details</Text>
+          <Text style={styles.headerSubtitle}>
+            {nearestRoute?.name || "Loading..."}
+          </Text>
+        </View>
         <TouchableOpacity
           onPress={onRefresh}
-          style={styles.refreshButton}
+          style={[styles.refreshButton, refreshing && styles.refreshingButton]}
           disabled={refreshing}
+          activeOpacity={0.7}
         >
           <Ionicons
             name="refresh"
             size={20}
-            color={refreshing ? "#6c757d" : "black"}
+            color={refreshing ? "#6c757d" : "#007AFF"}
+            style={refreshing ? { transform: [{ rotate: '180deg' }] } : {}}
           />
         </TouchableOpacity>
       </View>
@@ -1426,8 +1442,8 @@ export default function RouteDetailsScreen() {
           </TouchableOpacity>
         </View>
       )}
-
-      {/* Bottom Panel */}
+      
+      {/* Enhanced Bottom Panel */}
       <View style={styles.bottomPanel}>
         {showPickupSelection ? (
           <View>
@@ -1495,7 +1511,7 @@ export default function RouteDetailsScreen() {
                   </View>
                   {selectedBus && typeof selectedBus.capacity === "number" && (
                     <Text style={styles.availableSeatsText}>
-                      Available seats:{" "}
+                      Available seats:
                       {selectedBus.capacity - (selectedBus.passengers || 0)}
                     </Text>
                   )}
@@ -1578,17 +1594,18 @@ export default function RouteDetailsScreen() {
                 const isSelected = selectedBus?.id === bus.id;
 
                 return (
-                  <TouchableOpacity
+                <TouchableOpacity
                     key={bus.id}
                     style={[
                       styles.busCard,
                       {
-                        backgroundColor: isActive ? "#fff" : "#f8d7da",
-                        borderColor: isSelected ? "#007AFF" : "#ddd",
+                        backgroundColor: isActive ? "#fff" : "#ffebee",
+                        borderColor: isSelected ? "#007AFF" : isActive ? "#e0e0e0" : "#ffcdd2",
                         shadowColor: isSelected ? "#007AFF" : "#000",
-                        shadowOpacity: isSelected ? 0.2 : 0.08,
-                        shadowRadius: 8,
-                        elevation: isSelected ? 6 : 2,
+                        shadowOpacity: isSelected ? 0.25 : 0.1,
+                        shadowRadius: isSelected ? 12 : 8,
+                        elevation: isSelected ? 8 : 3,
+                        transform: isSelected ? [{ scale: 1.02 }] : [{ scale: 1 }],
                       },
                     ]}
                     onPress={() => {
@@ -1596,6 +1613,7 @@ export default function RouteDetailsScreen() {
                       setShowBusModal(true);
                     }}
                     disabled={!isActive}
+                    activeOpacity={0.8}
                   >
                     <Text style={[styles.busPlate, { color: textColor }]}>
                       {bus.plate_number || "N/A"}
@@ -1765,8 +1783,8 @@ export default function RouteDetailsScreen() {
                 <View style={styles.waitingInfoRow}>
                   <Ionicons name="location" size={20} color="#007AFF" />
                   <Text style={styles.waitingInfoText}>
-                    Pickup:{" "}
-                    {waitingPickupRequest.pickupLocation.latitude.toFixed(4)},{" "}
+                    Pickup:
+                    {waitingPickupRequest.pickupLocation.latitude.toFixed(4)},
                     {waitingPickupRequest.pickupLocation.longitude.toFixed(4)}
                   </Text>
                 </View>
@@ -1871,8 +1889,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     marginTop: 24,
     gap: 12,
-  },
-  goBackButton: {
+  },  goBackButton: {
     marginTop: 20,
     paddingVertical: 12,
     paddingHorizontal: 24,
@@ -1881,49 +1898,78 @@ const styles = StyleSheet.create({
   },
   headerContainer: {
     position: "absolute",
-    top: 60,
+    top: 50,
     left: 20,
     right: 20,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
   },
   backButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
-    padding: 12,
-    borderRadius: 25,
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
+    backgroundColor: "rgba(0, 122, 255, 0.1)",
+    padding: 10,
+    borderRadius: 20,
+    elevation: 2,
+    shadowColor: "#007AFF",
+    shadowOpacity: 0.2,
     shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  headerInfo: {
+    flex: 1,
+    alignItems: "center",
+    marginHorizontal: 16,
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#007AFF",
+    marginBottom: 2,
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: "#666",
+    fontWeight: "500",
   },
   refreshButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
-    padding: 12,
-    borderRadius: 25,
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
+    backgroundColor: "rgba(0, 122, 255, 0.1)",
+    padding: 10,
+    borderRadius: 20,
+    elevation: 2,
+    shadowColor: "#007AFF",
+    shadowOpacity: 0.2,
     shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },  refreshingButton: {
+    backgroundColor: "rgba(108, 117, 125, 0.1)",
   },
   errorBanner: {
     position: "absolute",
-    top: 120,
+    top: 140,
     left: 20,
     right: 20,
-    backgroundColor: "#f8d7da",
-    borderColor: "#f5c6cb",
+    backgroundColor: "#ffebee",
+    borderColor: "#f8bbd9",
     borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
+    borderRadius: 16,
+    padding: 16,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  errorBannerText: {
+    elevation: 8,
+    shadowColor: "#dc3545",
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+  },  errorBannerText: {
     flex: 1,
     color: "#721c24",
     fontSize: 14,
@@ -1934,67 +1980,114 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(0, 0, 0, 0.08)",
   },
   routeName: {
-    fontSize: 18,
-    fontWeight: "bold",
+    fontSize: 19,
+    fontWeight: "700",
     flex: 1,
+    letterSpacing: -0.2,
   },
   refreshButtonSmall: {
-    padding: 8,
-    borderRadius: 20,
-    backgroundColor: "rgba(0, 122, 255, 0.1)",
+    padding: 10,
+    borderRadius: 22,
+    backgroundColor: "rgba(0, 122, 255, 0.12)",
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,    shadowRadius: 4,
+    elevation: 3,
   },
   bottomPanel: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "white",
-    padding: 20,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    elevation: 10,
+    backgroundColor: "#ffffff",
+    padding: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    elevation: 16,
     shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: -4 },    borderTopWidth: 1,
+    borderTopColor: "rgba(0, 0, 0, 0.05)",
   },
-  panelTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 5 },
-  panelSubtitle: { fontSize: 14, color: "#6c757d", marginBottom: 10 },
+  panelTitle: {
+    fontSize: 20, 
+    fontWeight: "700", 
+    marginBottom: 6,
+    color: "#1a1a1a",
+    letterSpacing: -0.3,
+  },
+  panelSubtitle: { 
+    fontSize: 15, 
+    color: "#666", 
+    marginBottom: 12,
+    fontWeight: "500",
+  },
   panelInstruction: {
-    fontSize: 14,
-    color: "#333",
+    fontSize: 15,
+    color: "#444",
     textAlign: "center",
-    marginBottom: 15,
+    marginBottom: 18,    lineHeight: 21,
+    fontWeight: "400",
   },
   busCard: {
-    padding: 12,
-    borderRadius: 10,
+    padding: 16,
+    borderRadius: 16,
     borderWidth: 2,
-    marginRight: 10,
+    marginRight: 12,
     alignItems: "center",
-    minWidth: 120,
+    minWidth: 140,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,    shadowRadius: 8,
+    elevation: 6,
   },
-  busPlate: { fontWeight: "bold", fontSize: 16 },
-  driverName: { fontSize: 14, color: "#333", marginVertical: 2 },
+  busPlate: {
+    fontWeight: "700", 
+    fontSize: 17,
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  driverName: { 
+    fontSize: 14, 
+    color: "#555",    marginVertical: 3,
+    fontWeight: "500",
+  },
   noBusesContainer: {
     alignItems: "center",
-    padding: 20,
-    minWidth: 200,
+    padding: 32,
+    minWidth: 280,
+    backgroundColor: "#f8f9fa",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.05)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   noBusesText: {
     fontStyle: "italic",
-    color: "#6c757d",
+    color: "#666",
     textAlign: "center",
-    marginTop: 8,
+    marginTop: 12,
     fontSize: 16,
+    fontWeight: "500",
+    lineHeight: 22,
   },
   noBusesSubtext: {
-    color: "#6c757d",
+    color: "#888",
     textAlign: "center",
-    marginTop: 4,
+    marginTop: 6,
     fontSize: 14,
+    fontWeight: "400",
   },
   modalText: {
     fontSize: 16,
@@ -2031,53 +2124,70 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   seatsBadgeText: {
-    color: "#fff",
-    fontSize: 12,
+    color: "#fff",    fontSize: 12,
     fontWeight: "bold",
   },
   pickupLocationInfo: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#e3f2fd",
-    padding: 8,
-    borderRadius: 6,
-    marginBottom: 10,
+    backgroundColor: "#e8f5e8",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#c8e6c9",
+    shadowColor: "#4caf50",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,    shadowRadius: 4,
+    elevation: 3,
   },
   pickupLocationText: {
-    marginLeft: 6,
-    fontSize: 14,
-    color: "#007AFF",
-    fontWeight: "500",
-  },
-  currentLocationButton: {
+    marginLeft: 8,
+    fontSize: 15,
+    color: "#2e7d32",
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },currentLocationButton: {
     backgroundColor: "#007AFF",
-    padding: 15,
-    borderRadius: 10,
+    padding: 16,
+    borderRadius: 14,
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 12,
     flexDirection: "row",
     justifyContent: "center",
-    gap: 8,
+    gap: 10,
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
   buttonRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+    flexDirection: "row",    justifyContent: "space-between",
   },
   actionButton: {
     flex: 1,
-    padding: 15,
-    borderRadius: 10,
+    padding: 16,
+    borderRadius: 14,
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
   },
   cancelButton: {
     backgroundColor: "#6c757d",
-    marginRight: 10,
+    marginRight: 12,
   },
   confirmButton: {
-    backgroundColor: "#28a745",
+    backgroundColor: "#34C759",
+    shadowColor: "#34C759",
   },
   disabledButton: {
     backgroundColor: "#a5d6a7",
+    shadowOpacity: 0.1,
+    elevation: 2,
   },
   buttonText: {
     color: "#fff",
@@ -2086,19 +2196,20 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.4)",
-    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.4)",    justifyContent: "center",
     alignItems: "center",
   },
   modalContent: {
     backgroundColor: "#fff",
-    borderRadius: 18,
-    padding: 24,
-    width: "80%",
-    elevation: 10,
+    borderRadius: 24,
+    padding: 28,
+    width: "85%",
+    maxWidth: 400,
+    elevation: 16,
     shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
   },
   modalTitle: {
     fontSize: 20,
@@ -2138,15 +2249,17 @@ const styles = StyleSheet.create({
   // Waiting Modal Styles
   waitingModalContent: {
     backgroundColor: "#fff",
-    borderRadius: 24,
-    padding: 32,
-    width: "90%",
-    maxWidth: 400,
+    borderRadius: 28,
+    padding: 36,
+    width: "92%",
+    maxWidth: 420,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 12,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 16,
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.05)",
   },
   waitingHeader: {
     alignItems: "center",
@@ -2202,28 +2315,40 @@ const styles = StyleSheet.create({
   },
   waitingFooterText: {
     fontSize: 14,
-    color: "#8e8e93",
-    textAlign: "center",
+    color: "#8e8e93",    textAlign: "center",
     fontStyle: "italic",
   },
   capacityBar: {
-    height: 4,
-    backgroundColor: "#e9ecef",
-    borderRadius: 2,
-    marginTop: 8,
-    marginBottom: 8,
+    height: 6,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 3,
+    marginTop: 10,
+    marginBottom: 10,
     width: "100%",
     overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
   },
   capacityFill: {
     height: "100%",
-    borderRadius: 2,
+    borderRadius: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,    shadowRadius: 2,
   },
   passengerCountContainer: {
     backgroundColor: "#f8f9fa",
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 15,
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.05)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,    shadowRadius: 4,
+    elevation: 2,
   },
   passengerCountLabel: {
     fontSize: 16,
@@ -2239,11 +2364,16 @@ const styles = StyleSheet.create({
   },
   passengerCountButton: {
     backgroundColor: "#007AFF",
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: "center",
     alignItems: "center",
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
   passengerCountText: {
     fontSize: 20,
@@ -2266,8 +2396,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   busMarkerIcon: {
-    width: 32,
-    height: 32,
+    width: 50,
+    height: 50,
   },
   busMarkerPointer: {
     width: 0,
@@ -2278,11 +2408,108 @@ const styles = StyleSheet.create({
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
   },
-
-  // Custom User Marker Styles
+  // Enhanced Marker Styles
+  destinationMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "flex-end",
+    height: 50,
+    width: 50,
+  },
+  destinationMarkerHead: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#FF4B4B",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  destinationMarkerPoint: {
+    width: 0,
+    height: 0,
+    backgroundColor: "transparent",
+    borderStyle: "solid",
+    borderTopWidth: 8,
+    borderRightWidth: 4,
+    borderBottomWidth: 0,
+    borderLeftWidth: 4,
+    borderTopColor: "#FF4B4B",
+    borderRightColor: "transparent",
+    borderBottomColor: "transparent",
+    borderLeftColor: "transparent",
+    marginTop: -2,
+  },
+  pickupMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "flex-end",
+    height: 50,
+    width: 50,
+  },
+  pickupMarkerHead: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#34C759",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  pickupMarkerPoint: {
+    width: 0,
+    height: 0,
+    backgroundColor: "transparent",
+    borderStyle: "solid",
+    borderTopWidth: 8,
+    borderRightWidth: 4,
+    borderBottomWidth: 0,
+    borderLeftWidth: 4,
+    borderTopColor: "#34C759",
+    borderRightColor: "transparent",
+    borderBottomColor: "transparent",
+    borderLeftColor: "transparent",
+    marginTop: -2,
+  },
   userMarkerContainer: {
     alignItems: "center",
     justifyContent: "center",
+    width: 40,
+    height: 40,
+  },
+  userLocationDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#007AFF",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  userLocationRipple: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(0, 122, 255, 0.3)",
+    borderWidth: 2,
+    borderColor: "rgba(0, 122, 255, 0.5)",
   },
   userMarkerIcon: {
     width: 32,

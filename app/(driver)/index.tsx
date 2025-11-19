@@ -252,6 +252,104 @@ const DriverScreen = () => {
     getCurrentLocation();
   }, [fetchRoutes]);
 
+  // Auto-detect an existing active trip on mount and resume it automatically
+  useEffect(() => {
+    let mounted = true;
+    const checkActiveTrip = async () => {
+      try {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+        if (userError || !user) return;
+
+        // Look for trips in 'waiting' or 'ongoing' for this driver
+        const { data: existingTrips, error: existingTripsError } = await supabase
+          .from("trips")
+          .select("id, bus_id, status, current_location")
+          .eq("driver_id", user.id)
+          .in("status", ["waiting", "ongoing"])
+          .order("started_at", { ascending: false })
+          .limit(1);
+
+        if (existingTripsError || !existingTrips || existingTrips.length === 0) return;
+
+        const activeTrip = existingTrips[0];
+
+        // Determine current trip location
+        let currentTripLocation = { latitude: 0, longitude: 0 };
+        if (activeTrip.current_location && (activeTrip.current_location as any).coordinates) {
+          const [lng, lat] = (activeTrip.current_location as any).coordinates;
+          currentTripLocation = { latitude: lat, longitude: lng };
+        } else {
+          // Fallback to cached or live driver location
+          const cached = await getCachedDriverLocation();
+          if (cached) currentTripLocation = cached;
+          else if (driverLocation) currentTripLocation = driverLocation;
+          else {
+            try {
+              const pos = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+              });
+              currentTripLocation = {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              };
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+
+        // Fetch bus data to find route id and passenger count
+        const { data: busData, error: busError } = await supabase
+          .from("buses")
+          .select("id, capacity, passengers, route_id")
+          .eq("id", activeTrip.bus_id)
+          .single();
+        if (busError || !busData) return;
+
+        // Try to fetch route geojson using route_id from bus
+        let coordinates: any[] = [];
+        let routeName = "";
+        if (busData.route_id) {
+          const { data: routeData, error: routeError } = await supabase
+            .rpc("get_route_geojson", { route_id: busData.route_id })
+            .single<RouteGeoJSONResponse>();
+          if (!routeError && routeData) {
+            coordinates = routeData.geojson?.coordinates || [];
+            routeName = routeData.name || "";
+          }
+        }
+
+        // If we have coordinates, navigate to DrivingModeScreen with trip context
+        if (mounted) {
+          router.push({
+            pathname: "/DrivingModeScreen",
+            params: {
+              routeName: routeName || selectedRoute?.name || "",
+              path: JSON.stringify(coordinates),
+              capacity: String(busData.capacity || 0),
+              passengers: String(busData.passengers || 0),
+              departureTime: "Resuming trip",
+              busLocation: JSON.stringify(currentTripLocation),
+              tripId: activeTrip.id,
+              busId: busData.id,
+            },
+          });
+        }
+      } catch (err) {
+        // ignore errors silently - do not block UI
+      }
+    };
+
+    checkActiveTrip();
+
+    return () => {
+      mounted = false;
+    };
+  }, [getCachedDriverLocation, driverLocation, router, selectedRoute]);
+
   // Optimized location fetching function
   const getCurrentLocation = useCallback(async () => {
     setLocationLoading(true);
@@ -330,6 +428,40 @@ const DriverScreen = () => {
       setSelectedRoute(route);
       setShowDropdown(false);
       await saveSelectedRoute(route);
+
+      // Update the route_id in the buses table for the current driver
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        showAlert(
+          "Authentication Error",
+          "Unable to update the route. Please log in again.",
+          "error"
+        );
+        return;
+      }
+
+      const { error: updateError } = await supabase
+        .from("buses")
+        .update({ route_id: route.id })
+        .eq("driver_id", user.id);
+
+      if (updateError) {
+        showAlert(
+          "Update Failed",
+          "Failed to update the route for your bus. Please try again.",
+          "error"
+        );
+      } else {
+        showAlert(
+          "Route Updated",
+          "The route for your bus has been successfully updated.",
+          "success"
+        );
+      }
     },
     [saveSelectedRoute]
   );
@@ -826,7 +958,7 @@ const DriverScreen = () => {
                   </View>
                   {driverLocation && (
                     <Text style={styles.coordinatesText}>
-                      {driverLocation.latitude.toFixed(4)},{" "}
+                      {driverLocation.latitude.toFixed(4)},
                       {driverLocation.longitude.toFixed(4)}
                     </Text>
                   )}
@@ -944,7 +1076,7 @@ const DriverScreen = () => {
                       </Text>
                       {selectedRoute && (
                         <Text style={styles.dropdownSubText}>
-                          {selectedRoute.start_address} →{" "}
+                          {selectedRoute.start_address} →
                           {selectedRoute.end_address}
                         </Text>
                       )}

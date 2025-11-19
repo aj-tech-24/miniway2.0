@@ -91,11 +91,6 @@ export default function AuthForm({
     >
       <Text style={[styles.title, { color: textColor }]}>{title}</Text>
       <Text style={[styles.subtitle, { color: textColor }]}>{subtitle}</Text>
-
-      {customContent && (
-        <View style={styles.customContentContainer}>{customContent}</View>
-      )}
-
       {fields.map((field) => (
         <View key={field.name} style={styles.inputContainer}>
           <Text style={[styles.label, { color: textColor }]}>
@@ -186,7 +181,9 @@ export default function AuthForm({
           {field.error && <Text style={styles.errorText}>{field.error}</Text>}
         </View>
       ))}
-
+      {customContent && (
+        <View style={styles.customContentContainer}>{customContent}</View>
+      )}
       <TouchableOpacity
         style={[styles.button, isLoading && styles.buttonDisabled]}
         onPress={onButtonPress}
@@ -198,22 +195,20 @@ export default function AuthForm({
           <Text style={styles.buttonText}>{buttonText}</Text>
         )}
       </TouchableOpacity>
-
       <View style={styles.footer}>
         <Text style={[styles.footerText, { color: textColor }]}>
-          {footerText}{" "}
+          {footerText}
         </Text>
         <TouchableOpacity onPress={onFooterLinkPress} disabled={isLoading}>
           <Text style={styles.link}>{footerLinkText}</Text>
         </TouchableOpacity>
       </View>
-
       {additionalFooterText &&
         additionalFooterLinkText &&
         onAdditionalFooterLinkPress && (
           <View style={styles.additionalFooter}>
             <Text style={[styles.footerText, { color: textColor }]}>
-              {additionalFooterText}{" "}
+              {additionalFooterText}
             </Text>
             <TouchableOpacity
               onPress={onAdditionalFooterLinkPress}
@@ -223,27 +218,32 @@ export default function AuthForm({
             </TouchableOpacity>
           </View>
         )}
-
       {/* Error Modal */}
       <ErrorModal
         visible={showErrorModal}
-        title="Error"
-        message={message?.text || "An error occurred"}
+        title={typeof message?.text === "string" ? "Error" : "Error"}
+        message={
+          typeof message?.text === "string"
+            ? message.text
+            : "An error occurred"
+        }
         onClose={() => setShowErrorModal(false)}
         icon="close-circle"
         iconColor="#FF3B30"
       />
-
       {/* Success Modal */}
       <SuccessModal
         visible={showSuccessModal}
-        title="Success"
-        message={message?.text || "Operation completed successfully"}
+        title={typeof message?.text === "string" ? "Success" : "Success"}
+        message={
+          typeof message?.text === "string"
+            ? message.text
+            : "Operation completed successfully"
+        }
         onClose={() => setShowSuccessModal(false)}
         icon="checkmark-circle"
         iconColor="#34C759"
       />
-
       {/* Select Options Modal */}
       <Modal
         visible={showSelectModal}
