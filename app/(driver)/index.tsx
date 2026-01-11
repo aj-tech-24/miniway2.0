@@ -3,6 +3,7 @@ import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -81,10 +82,10 @@ const DriverScreen = () => {
     title: "",
     message: "",
     type: "info" as "info" | "error" | "warning" | "success",
-    onConfirm: () => {},
+    onConfirm: () => { },
     confirmText: "OK",
     showCancel: false,
-    onCancel: () => {},
+    onCancel: () => { },
     cancelText: "Cancel",
   });
 
@@ -94,10 +95,10 @@ const DriverScreen = () => {
       title: string,
       message: string,
       type: "info" | "error" | "warning" | "success" = "info",
-      onConfirm: () => void = () => {},
+      onConfirm: () => void = () => { },
       confirmText: string = "OK",
       showCancel: boolean = false,
-      onCancel: () => void = () => {},
+      onCancel: () => void = () => { },
       cancelText: string = "Cancel"
     ) => {
       setAlertConfig({
@@ -874,18 +875,29 @@ const DriverScreen = () => {
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
-      {/* Enhanced Header Section */}
-      <View style={styles.header}>
+      {/* Premium Header Section */}
+      <LinearGradient
+        colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        <View style={styles.headerDecoCircle1} />
+        <View style={styles.headerDecoCircle2} />
         <View style={styles.headerContent}>
           <View style={styles.headerIconContainer}>
-            <Ionicons name="bus" size={28} color="#fff" />
+            <Ionicons name="bus" size={26} color="#fff" />
           </View>
           <View style={styles.headerTextContainer}>
             <Text style={styles.title}>Driver Dashboard</Text>
             <Text style={styles.subtitle}>Ready to start your journey</Text>
           </View>
+          <View style={styles.headerBadge}>
+            <Ionicons name="shield-checkmark" size={14} color="#fff" />
+            <Text style={styles.headerBadgeText}>Verified</Text>
+          </View>
         </View>
-      </View>
+      </LinearGradient>
       <View style={styles.container}>
         <TouchableWithoutFeedback onPress={() => setShowDropdown(false)}>
           <ScrollView
@@ -898,25 +910,26 @@ const DriverScreen = () => {
             removeClippedSubviews={false}
             onScrollBeginDrag={() => setShowDropdown(false)}
           >
-            {/* Enhanced Status Cards */}
+            {/* Premium Status Cards */}
             <View style={styles.statusCardsContainer}>
               {/* Driver Status Card */}
               <View style={styles.statusCard}>
                 <View style={styles.statusCardHeader}>
-                  <Ionicons name="person-circle" size={24} color="#007AFF" />
+                  <LinearGradient
+                    colors={["#8B5CF6", "#7C3AED"]}
+                    style={styles.statusCardIconBg}
+                  >
+                    <Ionicons name="person-circle" size={18} color="#fff" />
+                  </LinearGradient>
                   <Text style={styles.statusCardTitle}>Driver Status</Text>
                 </View>
                 <View style={styles.statusCardContent}>
                   <View style={styles.statusItem}>
-                    <Ionicons
-                      name="pause-circle-outline"
-                      size={20}
-                      color="#8e8e93"
-                    />
+                    <View style={[styles.statusDotSmall, { backgroundColor: "#F59E0B" }]} />
                     <Text style={styles.statusItemText}>Waiting to start</Text>
                   </View>
                   <View style={styles.statusItem}>
-                    <Ionicons name="time-outline" size={20} color="#8e8e93" />
+                    <View style={[styles.statusDotSmall, { backgroundColor: "#10B981" }]} />
                     <Text style={styles.statusItemText}>Ready for trip</Text>
                   </View>
                 </View>
@@ -925,36 +938,39 @@ const DriverScreen = () => {
               {/* GPS Status Card */}
               <View style={styles.statusCard}>
                 <View style={styles.statusCardHeader}>
-                  <Ionicons name="location" size={24} color="#007AFF" />
-                  <Text style={styles.statusCardTitle}>Location Status</Text>
+                  <LinearGradient
+                    colors={["#0891B2", "#06B6D4"]}
+                    style={styles.statusCardIconBg}
+                  >
+                    <Ionicons name="location" size={18} color="#fff" />
+                  </LinearGradient>
+                  <Text style={styles.statusCardTitle}>GPS Status</Text>
                 </View>
                 <View style={styles.statusCardContent}>
                   <View style={styles.gpsStatusContainer}>
-                    <View
-                      style={[
-                        styles.gpsIndicator,
-                        locationError && styles.gpsErrorIndicator,
-                        locationLoading && styles.gpsLoadingIndicator,
-                      ]}
+                    <LinearGradient
+                      colors={
+                        locationLoading
+                          ? ["#F59E0B", "#D97706"]
+                          : locationError
+                            ? ["#EF4444", "#DC2626"]
+                            : ["#10B981", "#059669"]
+                      }
+                      style={styles.gpsIndicator}
                     >
                       {locationLoading ? (
                         <ActivityIndicator size="small" color="#ffffff" />
                       ) : (
-                        <View
-                          style={[
-                            styles.gpsDot,
-                            locationError && styles.gpsErrorDot,
-                          ]}
-                        />
+                        <View style={styles.gpsDot} />
                       )}
                       <Text style={styles.gpsText}>
                         {locationLoading
-                          ? "Getting Location..."
+                          ? "Getting..."
                           : locationError
-                          ? "GPS Error"
-                          : "GPS Connected"}
+                            ? "Error"
+                            : "Connected"}
                       </Text>
-                    </View>
+                    </LinearGradient>
                   </View>
                   {driverLocation && (
                     <Text style={styles.coordinatesText}>
@@ -1030,139 +1046,178 @@ const DriverScreen = () => {
 
             {/* Enhanced Route Selection Card */}
             <View style={styles.routeCard}>
-              <View style={styles.routeHeader}>
-                <View style={styles.routeHeaderLeft}>
-                  <Ionicons name="map" size={24} color="#007AFF" />
-                  <Text style={styles.routeTitle}>Route Selection</Text>
+              {/* Premium Header */}
+              <LinearGradient
+                colors={["#0891B2", "#06B6D4"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.routeCardHeader}
+              >
+                <View style={styles.routeCardHeaderContent}>
+                  <View style={styles.routeCardIconBg}>
+                    <Ionicons name="map" size={20} color="#0891B2" />
+                  </View>
+                  <Text style={styles.routeCardTitle}>Route Selection</Text>
                 </View>
                 {selectedRoute && (
-                  <View style={styles.routeStatusBadge}>
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={16}
-                      color="#4CAF50"
-                    />
-                    <Text style={styles.routeStatusText}>Selected</Text>
+                  <View style={styles.routeSelectedBadge}>
+                    <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                    <Text style={styles.routeSelectedText}>Ready</Text>
+                  </View>
+                )}
+              </LinearGradient>
+
+              <View style={styles.routeCardBody}>
+                {/* Enhanced Route Dropdown */}
+                <View style={styles.dropdownContainer}>
+                  <Text style={styles.dropdownLabel}>SELECT YOUR ROUTE</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.dropdownField,
+                      selectedRoute && styles.dropdownFieldSelected,
+                    ]}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      setShowDropdown(!showDropdown);
+                    }}
+                  >
+                    <View style={styles.dropdownLeft}>
+                      <LinearGradient
+                        colors={selectedRoute ? ["#0891B2", "#06B6D4"] : ["#94A3B8", "#64748B"]}
+                        style={styles.dropdownIconBg}
+                      >
+                        <Ionicons name="bus" size={16} color="#fff" />
+                      </LinearGradient>
+                      <View style={styles.dropdownTextContainer}>
+                        <Text
+                          style={[
+                            styles.dropdownText,
+                            selectedRoute && styles.dropdownTextSelected,
+                          ]}
+                        >
+                          {selectedRoute?.name || "Tap to select a route"}
+                        </Text>
+                        {selectedRoute && (
+                          <Text style={styles.dropdownSubText}>
+                            {selectedRoute.start_address} → {selectedRoute.end_address}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                    <View style={styles.dropdownChevronBg}>
+                      <Ionicons
+                        name={showDropdown ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color="#64748B"
+                      />
+                    </View>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Enhanced Route Display */}
+                {selectedRoute && (
+                  <View style={styles.currentRoute}>
+                    <View style={styles.routeVisualization}>
+                      <View style={styles.routeItem}>
+                        <LinearGradient
+                          colors={["#10B981", "#059669"]}
+                          style={styles.locationMarkerGradient}
+                        >
+                          <Ionicons name="radio-button-on" size={12} color="#fff" />
+                        </LinearGradient>
+                        <View style={styles.locationTextContainer}>
+                          <Text style={styles.locationLabel}>ORIGIN</Text>
+                          <Text style={styles.locationText}>
+                            {selectedRoute.start_address || "Start Location"}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.routeConnectorContainer}>
+                        <View style={styles.routeConnectorLine} />
+                        <View style={styles.routeConnectorDots}>
+                          <View style={styles.connectorDot} />
+                          <View style={styles.connectorDot} />
+                          <View style={styles.connectorDot} />
+                        </View>
+                        <View style={styles.routeConnectorLine} />
+                      </View>
+
+                      <View style={styles.routeItem}>
+                        <LinearGradient
+                          colors={["#EF4444", "#DC2626"]}
+                          style={styles.locationMarkerGradient}
+                        >
+                          <Ionicons name="location" size={12} color="#fff" />
+                        </LinearGradient>
+                        <View style={styles.locationTextContainer}>
+                          <Text style={styles.locationLabel}>DESTINATION</Text>
+                          <Text style={styles.locationText}>
+                            {selectedRoute.end_address || "End Location"}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                )}
+
+                {/* Empty State */}
+                {!selectedRoute && (
+                  <View style={styles.routeEmptyState}>
+                    <Ionicons name="navigate-circle-outline" size={40} color="#CBD5E1" />
+                    <Text style={styles.routeEmptyText}>
+                      Select a route above to see details
+                    </Text>
                   </View>
                 )}
               </View>
-
-              {/* Enhanced Route Dropdown */}
-              <View style={styles.dropdownContainer}>
-                <TouchableOpacity
-                  style={[
-                    styles.dropdownField,
-                    selectedRoute && styles.dropdownFieldSelected,
-                  ]}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    setShowDropdown(!showDropdown);
-                  }}
-                >
-                  <View style={styles.dropdownLeft}>
-                    <Ionicons
-                      name="bus"
-                      size={20}
-                      color={selectedRoute ? "#007AFF" : "#8e8e93"}
-                    />
-                    <View style={styles.dropdownTextContainer}>
-                      <Text
-                        style={[
-                          styles.dropdownText,
-                          selectedRoute && styles.dropdownTextSelected,
-                        ]}
-                      >
-                        {selectedRoute?.name || "Select a route to begin"}
-                      </Text>
-                      {selectedRoute && (
-                        <Text style={styles.dropdownSubText}>
-                          {selectedRoute.start_address} →
-                          {selectedRoute.end_address}
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-                  <Ionicons
-                    name={showDropdown ? "chevron-up" : "chevron-down"}
-                    size={20}
-                    color="#8e8e93"
-                  />
-                </TouchableOpacity>
-              </View>
-
-              {/* Enhanced Route Display */}
-              {selectedRoute && (
-                <View style={styles.currentRoute}>
-                  <View style={styles.routeItem}>
-                    <View style={styles.locationMarker}>
-                      <Ionicons name="location" size={16} color="#fff" />
-                    </View>
-                    <View style={styles.locationTextContainer}>
-                      <Text style={styles.locationLabel}>From</Text>
-                      <Text style={styles.locationText}>
-                        {selectedRoute.start_address || "Start Location"}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.arrowContainer}>
-                    <Ionicons name="arrow-down" size={20} color="#8e8e93" />
-                  </View>
-
-                  <View style={styles.routeItem}>
-                    <View
-                      style={[
-                        styles.locationMarker,
-                        { backgroundColor: "#FF3B30" },
-                      ]}
-                    >
-                      <Ionicons name="location" size={16} color="#FFFFFF" />
-                    </View>
-                    <View style={styles.locationTextContainer}>
-                      <Text style={styles.locationLabel}>To</Text>
-                      <Text style={styles.locationText}>
-                        {selectedRoute.end_address || "End Location"}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              )}
             </View>
           </ScrollView>
         </TouchableWithoutFeedback>
 
-        {/* Fixed Start Trip Button - Outside ScrollView */}
+        {/* Premium Start Trip Button */}
         <View style={styles.fixedStartButtonContainer}>
           <TouchableOpacity
-            style={[
-              styles.startButton,
-              !selectedRoute && styles.disabledButton,
-              loading && styles.disabledButton,
-            ]}
             onPress={handleStartTrip}
             disabled={!selectedRoute || loading}
+            activeOpacity={0.9}
+            style={styles.startButtonWrapper}
           >
-            <View style={styles.startButtonContent}>
-              {loading ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <View style={styles.startButtonIcon}>
-                  <Ionicons name="play" size={24} color="#FFFFFF" />
+            <LinearGradient
+              colors={
+                !selectedRoute || loading
+                  ? ["#94A3B8", "#64748B"]
+                  : ["#10B981", "#059669", "#047857"]
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.startButton}
+            >
+              <View style={styles.startButtonContent}>
+                {loading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <View style={styles.startButtonIcon}>
+                    <Ionicons name="play" size={22} color="#FFFFFF" />
+                  </View>
+                )}
+                <View style={styles.startButtonTextContainer}>
+                  <Text style={styles.startButtonText}>
+                    {loading ? "Starting Trip..." : "Start New Trip"}
+                  </Text>
+                  <Text style={styles.startButtonSubtext}>
+                    {!selectedRoute
+                      ? "Select a route first"
+                      : loading
+                        ? "Please wait..."
+                        : "Begin your journey"}
+                  </Text>
                 </View>
-              )}
-              <View style={styles.startButtonTextContainer}>
-                <Text style={styles.startButtonText}>
-                  {loading ? "Starting Trip..." : "Start New Trip"}
-                </Text>
-                <Text style={styles.startButtonSubtext}>
-                  {!selectedRoute
-                    ? "Select a route first"
-                    : loading
-                    ? "Please wait..."
-                    : "Begin your journey"}
-                </Text>
+                <View style={styles.startButtonArrow}>
+                  <Ionicons name="arrow-forward" size={20} color="rgba(255,255,255,0.8)" />
+                </View>
               </View>
-            </View>
+            </LinearGradient>
           </TouchableOpacity>
         </View>
       </View>
@@ -1229,29 +1284,64 @@ const DriverScreen = () => {
         </View>
       </Modal>
 
-      {/* Dropdown Overlay at Root Level */}
+      {/* Premium Dropdown Overlay at Root Level */}
       {showDropdown && (
         <TouchableOpacity
           style={styles.dropdownBackdrop}
           activeOpacity={1}
           onPress={() => setShowDropdown(false)}
         >
-          <View style={styles.dropdownListOverlayCentered}>
-            <TextInput
-              style={styles.dropdownSearch}
-              placeholder="Search route..."
-              value={searchTerm}
-              onChangeText={setSearchTerm}
-              autoFocus
-            />
+          <View style={styles.dropdownModalContainer}>
+            {/* Modal Header */}
+            <LinearGradient
+              colors={["#0891B2", "#06B6D4"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.dropdownModalHeader}
+            >
+              <View style={styles.dropdownModalHeaderContent}>
+                <View style={styles.dropdownModalIconBg}>
+                  <Ionicons name="bus" size={18} color="#0891B2" />
+                </View>
+                <Text style={styles.dropdownModalTitle}>Select Route</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowDropdown(false)}
+                style={styles.dropdownModalClose}
+              >
+                <Ionicons name="close" size={20} color="rgba(255,255,255,0.9)" />
+              </TouchableOpacity>
+            </LinearGradient>
+
+            {/* Search Input */}
+            <View style={styles.dropdownSearchContainer}>
+              <Ionicons name="search" size={18} color="#64748B" />
+              <TextInput
+                style={styles.dropdownSearchInput}
+                placeholder="Search routes..."
+                placeholderTextColor="#94A3B8"
+                value={searchTerm}
+                onChangeText={setSearchTerm}
+                autoFocus
+              />
+              {searchTerm.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchTerm("")}>
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Route List */}
             {loading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color="#007AFF" />
-                <Text style={styles.loadingText}>Loading routes...</Text>
+              <View style={styles.dropdownLoadingContainer}>
+                <ActivityIndicator size="small" color="#0891B2" />
+                <Text style={styles.dropdownLoadingText}>Loading routes...</Text>
               </View>
             ) : filteredRoutes.length === 0 ? (
-              <View style={styles.loadingContainer}>
-                <Text style={styles.loadingText}>No routes found.</Text>
+              <View style={styles.dropdownEmptyContainer}>
+                <Ionicons name="map-outline" size={40} color="#CBD5E1" />
+                <Text style={styles.dropdownEmptyText}>No routes found</Text>
+                <Text style={styles.dropdownEmptySubText}>Try a different search term</Text>
               </View>
             ) : (
               <ScrollView
@@ -1259,33 +1349,51 @@ const DriverScreen = () => {
                 showsVerticalScrollIndicator={true}
                 nestedScrollEnabled={true}
               >
-                {filteredRoutes.map((route) => (
+                {filteredRoutes.map((route, index) => (
                   <TouchableOpacity
                     key={route.id}
                     style={[
-                      styles.dropdownItem,
-                      selectedRoute?.id === route.id &&
-                        styles.selectedDropdownItem,
+                      styles.dropdownRouteItem,
+                      selectedRoute?.id === route.id && styles.dropdownRouteItemSelected,
+                      index === filteredRoutes.length - 1 && { borderBottomWidth: 0 },
                     ]}
                     onPress={(e) => {
                       e.stopPropagation();
                       handleRouteSelect(route);
-                      setSearchTerm(""); // Clear search on select
-                      setShowDropdown(false); // Close dropdown
+                      setSearchTerm("");
+                      setShowDropdown(false);
                     }}
                   >
-                    <Text
-                      style={[
-                        styles.dropdownItemText,
-                        selectedRoute?.id === route.id &&
-                          styles.selectedDropdownItemText,
-                      ]}
-                    >
-                      {route.name}
-                    </Text>
-                    <Text style={styles.dropdownItemSubText}>
-                      {route.start_address} → {route.end_address}
-                    </Text>
+                    <View style={styles.dropdownRouteLeft}>
+                      <LinearGradient
+                        colors={selectedRoute?.id === route.id ? ["#0891B2", "#06B6D4"] : ["#E2E8F0", "#CBD5E1"]}
+                        style={styles.dropdownRouteIconBg}
+                      >
+                        <Ionicons
+                          name="navigate"
+                          size={14}
+                          color={selectedRoute?.id === route.id ? "#fff" : "#64748B"}
+                        />
+                      </LinearGradient>
+                      <View style={styles.dropdownRouteTextContainer}>
+                        <Text
+                          style={[
+                            styles.dropdownRouteTitle,
+                            selectedRoute?.id === route.id && styles.dropdownRouteTitleSelected,
+                          ]}
+                        >
+                          {route.name}
+                        </Text>
+                        <Text style={styles.dropdownRouteSubtext}>
+                          {route.start_address} → {route.end_address}
+                        </Text>
+                      </View>
+                    </View>
+                    {selectedRoute?.id === route.id && (
+                      <View style={styles.dropdownRouteCheck}>
+                        <Ionicons name="checkmark-circle" size={22} color="#10B981" />
+                      </View>
+                    )}
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -1300,51 +1408,86 @@ const DriverScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f2f2f7",
+    backgroundColor: "#F8FAFC",
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingBottom: 120, // Add more space for fixed button
+    paddingBottom: 130,
+    marginBottom: 20,
     flexGrow: 1,
-    minHeight: "100%", // Ensure content is at least full height
+    minHeight: "100%",
   },
 
+  // Premium Header Styles
   header: {
-    backgroundColor: "#007AFF",
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingVertical: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: "hidden",
+    position: "relative",
   },
-
+  headerDecoCircle1: {
+    position: "absolute",
+    top: -40,
+    right: -40,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecoCircle2: {
+    position: "absolute",
+    bottom: -20,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
   },
   headerIconContainer: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     backgroundColor: "rgba(255, 255, 255, 0.2)",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 16,
+    marginRight: 14,
   },
   headerTextContainer: {
     flex: 1,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 22,
+    fontWeight: "800",
     color: "#fff",
-    marginBottom: 4,
+    letterSpacing: -0.3,
   },
   subtitle: {
-    fontSize: 14,
-    color: "rgba(255, 255, 255, 0.8)",
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.85)",
+    marginTop: 2,
+  },
+  headerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 4,
+  },
+  headerBadgeText: {
+    fontSize: 11,
+    color: "#fff",
+    fontWeight: "600",
   },
 
-  // Enhanced Status Cards Styles
+  // Premium Status Cards Styles
   statusCardsContainer: {
     flexDirection: "row",
     gap: 12,
@@ -1354,67 +1497,71 @@ const styles = StyleSheet.create({
   statusCard: {
     flex: 1,
     backgroundColor: "#ffffff",
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   statusCardHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 14,
+  },
+  statusCardIconBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
   },
   statusCardTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#333",
-    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1E293B",
     flex: 1,
     flexWrap: "wrap",
   },
   statusCardContent: {
-    gap: 8,
+    gap: 10,
   },
   statusItem: {
     flexDirection: "row",
     alignItems: "center",
   },
+  statusDotSmall: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 10,
+  },
   statusItemText: {
     fontSize: 12,
-    color: "#8e8e93",
-    marginLeft: 8,
+    color: "#64748B",
     flex: 1,
     flexWrap: "wrap",
   },
   gpsStatusContainer: {
     flex: 1,
-    minWidth: 0, // Allow shrinking
+    minWidth: 0,
   },
   coordinatesText: {
     fontSize: 10,
-    color: "#8e8e93",
+    color: "#94A3B8",
     fontFamily: "monospace",
-    marginTop: 4,
-    flexWrap: "wrap",
+    marginTop: 8,
   },
   gpsIndicator: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#34C759",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 12,
-    flex: 1,
-    minWidth: 0, // Allow shrinking
-  },
-  gpsLoadingIndicator: {
-    backgroundColor: "#FF9500",
-  },
-  gpsErrorIndicator: {
-    backgroundColor: "#FF3B30",
   },
   gpsDot: {
     width: 8,
@@ -1423,11 +1570,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     marginRight: 6,
   },
-  gpsErrorDot: {
-    backgroundColor: "#ffffff",
-  },
   gpsText: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#ffffff",
     fontWeight: "600",
   },
@@ -1437,34 +1581,34 @@ const styles = StyleSheet.create({
     height: 240,
     borderRadius: 20,
     marginBottom: 20,
-    shadowColor: "#000",
+    shadowColor: "#0891B2",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.1,
     shadowRadius: 12,
     elevation: 6,
     overflow: "hidden",
     backgroundColor: "#ffffff",
     borderWidth: 1,
-    borderColor: "#f0f0f0",
+    borderColor: "#E2E8F0",
   },
   mapHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: "linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: "#F8FAFC",
     borderBottomWidth: 1,
-    borderBottomColor: "#e5e5e7",
+    borderBottomColor: "#E2E8F0",
   },
   mapHeaderLeft: {
     flexDirection: "row",
     alignItems: "center",
   },
   mapTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
-    color: "#1c1c1e",
+    color: "#1E293B",
     marginLeft: 10,
   },
   mapHeaderRight: {
@@ -1477,11 +1621,11 @@ const styles = StyleSheet.create({
     padding: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
     borderWidth: 1,
-    borderColor: "#e5e5e7",
+    borderColor: "#E2E8F0",
   },
   mapActionButtonDisabled: {
     backgroundColor: "#f2f2f7",
@@ -1566,16 +1710,60 @@ const styles = StyleSheet.create({
   // Enhanced Route Card Styles
   routeCard: {
     backgroundColor: "#ffffff",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 30,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
+    borderRadius: 20,
+    marginBottom: 50,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-    overflow: "visible",
+    shadowRadius: 16,
+    elevation: 4,
+    overflow: "hidden",
     position: "relative",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  routeCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  routeCardHeaderContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  routeCardIconBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  routeCardTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: -0.2,
+  },
+  routeSelectedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    gap: 4,
+  },
+  routeSelectedText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  routeCardBody: {
+    padding: 16,
   },
   routeHeader: {
     flexDirection: "row",
@@ -1590,128 +1778,156 @@ const styles = StyleSheet.create({
   routeTitle: {
     fontSize: 18,
     fontWeight: "600",
-    color: "#007AFF",
+    color: "#0891B2",
     marginLeft: 8,
   },
   routeStatusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E8F5E8",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
   },
   routeStatusText: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#4CAF50",
+    color: "#059669",
     marginLeft: 4,
   },
   dropdownContainer: {
     marginBottom: 16,
-    position: "relative", // <-- Add this!
-    zIndex: 10, // <-- Add this!
+    position: "relative",
+    zIndex: 10,
+  },
+  dropdownLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#64748B",
+    marginBottom: 8,
+    letterSpacing: 0.5,
   },
   dropdownField: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#f2f2f7",
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#e5e5ea",
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: "#E2E8F0",
   },
   dropdownFieldSelected: {
-    backgroundColor: "#E3F2FD",
-    borderColor: "#007AFF",
+    backgroundColor: "#ECFEFF",
+    borderColor: "#0891B2",
   },
   dropdownLeft: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
   },
+  dropdownIconBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  dropdownChevronBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   dropdownTextContainer: {
     flex: 1,
-    marginLeft: 8,
   },
   dropdownText: {
-    fontSize: 16,
-    color: "#1c1c1e",
+    fontSize: 15,
+    color: "#1E293B",
+    fontWeight: "500",
     flexWrap: "wrap",
   },
   dropdownTextSelected: {
-    color: "#007AFF",
+    color: "#0891B2",
     fontWeight: "600",
   },
   dropdownSubText: {
     fontSize: 12,
-    color: "#8e8e93",
-    marginTop: 2,
+    color: "#64748B",
+    marginTop: 3,
     flexWrap: "wrap",
   },
   dropdownList: {
     backgroundColor: "#ffffff",
-    borderRadius: 8,
+    borderRadius: 12,
     marginTop: 4,
     maxHeight: 250,
-    shadowColor: "#000",
+    shadowColor: "#0891B2",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
     elevation: 8,
     borderWidth: 1,
-    borderColor: "#e5e5ea",
+    borderColor: "#E2E8F0",
   },
   dropdownItem: {
     paddingHorizontal: 16,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: "#f2f2f7",
+    borderBottomColor: "#F1F5F9",
     minHeight: 48,
     justifyContent: "center",
   },
   selectedDropdownItem: {
-    backgroundColor: "#f8f9fa",
+    backgroundColor: "#ECFEFF",
   },
   dropdownItemText: {
-    fontSize: 16,
-    color: "#1c1c1e",
+    fontSize: 15,
+    color: "#1E293B",
     fontWeight: "500",
   },
   selectedDropdownItemText: {
-    color: "#007AFF",
+    color: "#0891B2",
     fontWeight: "600",
   },
-  loadingContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 20,
-  },
-  loadingText: {
-    marginLeft: 8,
-    fontSize: 16,
-    color: "#8e8e93",
-  },
-  dropdownScrollView: {
-    maxHeight: 200,
+  dropdownItemSubText: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 2,
   },
   currentRoute: {
-    backgroundColor: "#f8f9fa",
+    backgroundColor: "#F8FAFC",
     padding: 16,
-    borderRadius: 12,
-    gap: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  routeVisualization: {
+    gap: 0,
   },
   routeItem: {
     flexDirection: "row",
     alignItems: "center",
   },
+  locationMarkerGradient: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
   locationMarker: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "#4CAF50",
+    backgroundColor: "#10B981",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -1720,87 +1936,123 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   locationLabel: {
-    fontSize: 12,
-    color: "#8e8e93",
-    fontWeight: "500",
-    marginBottom: 2,
+    fontSize: 10,
+    color: "#64748B",
+    fontWeight: "600",
+    marginBottom: 3,
+    letterSpacing: 0.5,
   },
   locationText: {
     fontSize: 14,
-    color: "#1c1c1e",
+    color: "#1E293B",
     fontWeight: "600",
     flexWrap: "wrap",
+  },
+  routeConnectorContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 15,
+    height: 28,
+  },
+  routeConnectorLine: {
+    width: 2,
+    height: 8,
+    backgroundColor: "#CBD5E1",
+  },
+  routeConnectorDots: {
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 3,
+    marginVertical: 2,
+  },
+  connectorDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#CBD5E1",
   },
   arrowContainer: {
     alignItems: "center",
     marginVertical: 4,
   },
+  routeEmptyState: {
+    alignItems: "center",
+    paddingVertical: 24,
+    gap: 8,
+  },
+  routeEmptyText: {
+    fontSize: 14,
+    color: "#94A3B8",
+    fontWeight: "500",
+  },
 
   // Fixed Start Button Styles
   fixedStartButtonContainer: {
     position: "absolute",
-    bottom: 0,
+    bottom: 90, // Above the 70px navbar + some spacing
     left: 0,
     right: 0,
-    backgroundColor: "#f2f2f7",
+    backgroundColor: "transparent",
     paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 20,
-    borderTopWidth: 1,
-    borderTopColor: "#e5e5e7",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    zIndex: 100,
+    pointerEvents: "box-none",
+  },
+  startButtonWrapper: {
+    borderRadius: 18,
+    overflow: "hidden",
+    shadowColor: "#10B981",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
     elevation: 8,
-    zIndex: 1000,
-    pointerEvents: "box-none", // Allow touch events to pass through to ScrollView
   },
   startButton: {
-    backgroundColor: "#007AFF",
-    borderRadius: 16,
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    borderRadius: 18,
     width: "100%",
-    pointerEvents: "auto", // Ensure button can receive touch events
+    pointerEvents: "auto",
   },
   startButtonContent: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 20,
+    paddingVertical: 18,
     paddingHorizontal: 20,
   },
   startButtonIcon: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 14,
     backgroundColor: "rgba(255, 255, 255, 0.2)",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 16,
+    marginRight: 14,
   },
   startButtonTextContainer: {
     flex: 1,
   },
   startButtonText: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "700",
     color: "#ffffff",
-    marginBottom: 4,
+    marginBottom: 2,
     flexWrap: "wrap",
   },
   startButtonSubtext: {
-    fontSize: 14,
+    fontSize: 13,
     color: "rgba(255, 255, 255, 0.8)",
     flexWrap: "wrap",
   },
+  startButtonArrow: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   disabledButton: {
-    backgroundColor: "#8e8e93",
-    shadowColor: "#8e8e93",
-    shadowOpacity: 0.2,
+    backgroundColor: "#94A3B8",
+    shadowColor: "#64748B",
+    shadowOpacity: 0.15,
   },
   dropdownSearch: {
     borderBottomWidth: 1,
@@ -1809,12 +2061,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     fontSize: 16,
     marginBottom: 4,
-  },
-  dropdownItemSubText: {
-    fontSize: 12,
-    color: "#8e8e93",
-    marginTop: 2,
-    marginLeft: 2,
   },
   dropdownListOverlay: {
     position: "absolute",
@@ -1840,10 +2086,160 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.2)", // semi-transparent background
+    backgroundColor: "rgba(0,0,0,0.4)",
     justifyContent: "center",
     alignItems: "center",
     zIndex: 2000,
+  },
+  // Premium Dropdown Modal Styles
+  dropdownModalContainer: {
+    width: "90%",
+    maxWidth: 400,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    maxHeight: 450,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 20,
+    overflow: "hidden",
+    zIndex: 2001,
+  },
+  dropdownModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  dropdownModalHeaderContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  dropdownModalIconBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  dropdownModalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: -0.2,
+  },
+  dropdownModalClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  dropdownSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8FAFC",
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  dropdownSearchInput: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 15,
+    color: "#1E293B",
+    fontWeight: "500",
+  },
+  dropdownLoadingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 32,
+    gap: 10,
+  },
+  dropdownLoadingText: {
+    fontSize: 15,
+    color: "#64748B",
+    fontWeight: "500",
+  },
+  dropdownEmptyContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40,
+    gap: 8,
+  },
+  dropdownEmptyText: {
+    fontSize: 16,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  dropdownEmptySubText: {
+    fontSize: 13,
+    color: "#94A3B8",
+  },
+  dropdownScrollView: {
+    maxHeight: 280,
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+  },
+  dropdownRouteItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    marginHorizontal: 8,
+    marginBottom: 6,
+    borderRadius: 14,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  dropdownRouteItemSelected: {
+    backgroundColor: "#ECFEFF",
+    borderColor: "#0891B2",
+  },
+  dropdownRouteLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  dropdownRouteIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  dropdownRouteTextContainer: {
+    flex: 1,
+  },
+  dropdownRouteTitle: {
+    fontSize: 15,
+    color: "#1E293B",
+    fontWeight: "600",
+  },
+  dropdownRouteTitleSelected: {
+    color: "#0891B2",
+  },
+  dropdownRouteSubtext: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 2,
+  },
+  dropdownRouteCheck: {
+    marginLeft: 10,
   },
   dropdownListOverlayCentered: {
     width: "85%",

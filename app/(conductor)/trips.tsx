@@ -1,6 +1,7 @@
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -59,7 +60,6 @@ const ConductorTripsScreen = () => {
     try {
       setError(null);
 
-      // Get current user
       const {
         data: { user },
         error: userError,
@@ -70,7 +70,6 @@ const ConductorTripsScreen = () => {
         return;
       }
 
-      // First, get the bus assigned to this conductor
       const { data: busData, error: busError } = await supabase
         .from("buses")
         .select("id")
@@ -82,7 +81,6 @@ const ConductorTripsScreen = () => {
         return;
       }
 
-      // Fetch trips for the conductor's bus
       const { data, error: tripsError } = await supabase
         .from("trips")
         .select(
@@ -146,33 +144,48 @@ const ConductorTripsScreen = () => {
     fetchTrips();
   }, [fetchTrips]);
 
-  const getStatusColor = (status: string) => {
+  const getStatusConfig = (status: string) => {
     switch (status) {
       case "completed":
-        return "#4CAF50";
+        return {
+          color: "#10B981",
+          gradient: ["#10B981", "#059669"] as const,
+          bgColor: "#ECFDF5",
+          icon: "checkmark-circle" as const,
+          label: "Completed",
+        };
       case "ongoing":
-        return "#FF9500";
+        return {
+          color: "#F59E0B",
+          gradient: ["#F59E0B", "#D97706"] as const,
+          bgColor: "#FEF3C7",
+          icon: "play-circle" as const,
+          label: "In Progress",
+        };
       case "cancelled":
-        return "#FF3B30";
+        return {
+          color: "#EF4444",
+          gradient: ["#EF4444", "#DC2626"] as const,
+          bgColor: "#FEE2E2",
+          icon: "close-circle" as const,
+          label: "Cancelled",
+        };
       case "waiting":
-        return "#8e8e93";
+        return {
+          color: "#6B7280",
+          gradient: ["#6B7280", "#4B5563"] as const,
+          bgColor: "#F3F4F6",
+          icon: "time" as const,
+          label: "Waiting",
+        };
       default:
-        return "#8e8e93";
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "checkmark-circle";
-      case "ongoing":
-        return "play-circle";
-      case "cancelled":
-        return "close-circle";
-      case "waiting":
-        return "time";
-      default:
-        return "help-circle";
+        return {
+          color: "#6B7280",
+          gradient: ["#6B7280", "#4B5563"] as const,
+          bgColor: "#F3F4F6",
+          icon: "help-circle" as const,
+          label: "Unknown",
+        };
     }
   };
 
@@ -213,12 +226,17 @@ const ConductorTripsScreen = () => {
     };
   };
 
+  const getTotalPassengers = () => {
+    return trips.reduce((acc, t) => {
+      const stats = getPassengerStats(t.trip_passengers);
+      return acc + stats.totalPassengers;
+    }, 0);
+  };
+
   const renderTripItem = ({ item }: { item: Trip }) => {
     const passengerStats = getPassengerStats(item.trip_passengers);
-    const statusColor = getStatusColor(item.status);
-    const statusIcon = getStatusIcon(item.status);
+    const statusConfig = getStatusConfig(item.status);
 
-    // Handle undefined values
     if (!item.buses || !item.buses.routes) {
       return (
         <View style={styles.tripCard}>
@@ -230,18 +248,26 @@ const ConductorTripsScreen = () => {
             <View
               style={[
                 styles.statusBadge,
-                { backgroundColor: `${statusColor}20` },
+                { backgroundColor: statusConfig.bgColor },
               ]}
             >
-              <Ionicons name={statusIcon} size={16} color={statusColor} />
-              <Text style={[styles.statusText, { color: statusColor }]}>
-                {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+              <Ionicons
+                name={statusConfig.icon}
+                size={14}
+                color={statusConfig.color}
+              />
+              <Text style={[styles.statusText, { color: statusConfig.color }]}>
+                {statusConfig.label}
               </Text>
             </View>
           </View>
-          <Text style={styles.incompleteDataText}>
-            Some trip data is missing. Please contact support if this persists.
-          </Text>
+          <View style={styles.incompleteDataContainer}>
+            <Ionicons name="warning" size={16} color="#F59E0B" />
+            <Text style={styles.incompleteDataText}>
+              Some trip data is missing. Please contact support if this
+              persists.
+            </Text>
+          </View>
         </View>
       );
     }
@@ -255,17 +281,24 @@ const ConductorTripsScreen = () => {
         <View style={styles.tripHeader}>
           <View style={styles.tripInfo}>
             <Text style={styles.routeName}>{route.name}</Text>
-            <Text style={styles.busPlate}>{bus.plate_number}</Text>
+            <View style={styles.busPlateContainer}>
+              <Ionicons name="bus" size={12} color="#64748B" />
+              <Text style={styles.busPlate}>{bus.plate_number}</Text>
+            </View>
           </View>
           <View
             style={[
               styles.statusBadge,
-              { backgroundColor: `${statusColor}20` },
+              { backgroundColor: statusConfig.bgColor },
             ]}
           >
-            <Ionicons name={statusIcon} size={16} color={statusColor} />
-            <Text style={[styles.statusText, { color: statusColor }]}>
-              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+            <Ionicons
+              name={statusConfig.icon}
+              size={14}
+              color={statusConfig.color}
+            />
+            <Text style={[styles.statusText, { color: statusConfig.color }]}>
+              {statusConfig.label}
             </Text>
           </View>
         </View>
@@ -273,55 +306,83 @@ const ConductorTripsScreen = () => {
         {/* Route Details */}
         <View style={styles.routeDetails}>
           <View style={styles.routeItem}>
-            <View
-              style={[styles.locationMarker, { backgroundColor: "#4CAF50" }]}
-            >
-              <Ionicons name="location" size={12} color="#fff" />
+            <View style={[styles.locationMarker, { backgroundColor: "#10B981" }]}>
+              <Ionicons name="location" size={10} color="#fff" />
             </View>
-            <Text style={styles.locationText}>{route.start_address}</Text>
+            <View style={styles.routeTextContainer}>
+              <Text style={styles.routeLabel}>From</Text>
+              <Text style={styles.locationText}>{route.start_address}</Text>
+            </View>
+          </View>
+          <View style={styles.routeConnector}>
+            <View style={styles.routeConnectorLine} />
+            <Ionicons name="arrow-down" size={14} color="#CBD5E1" />
+            <View style={styles.routeConnectorLine} />
           </View>
           <View style={styles.routeItem}>
-            <View
-              style={[styles.locationMarker, { backgroundColor: "#FF3B30" }]}
-            >
-              <Ionicons name="location" size={12} color="#fff" />
+            <View style={[styles.locationMarker, { backgroundColor: "#EF4444" }]}>
+              <Ionicons name="location" size={10} color="#fff" />
             </View>
-            <Text style={styles.locationText}>{route.end_address}</Text>
+            <View style={styles.routeTextContainer}>
+              <Text style={styles.routeLabel}>To</Text>
+              <Text style={styles.locationText}>{route.end_address}</Text>
+            </View>
           </View>
         </View>
 
-        {/* Passenger Statistics */}
-        <View style={styles.passengerStats}>
+        {/* Trip Stats */}
+        <View style={styles.tripStats}>
           <View style={styles.statItem}>
-            <Ionicons name="people" size={16} color="#007AFF" />
-            <Text style={styles.statText}>
-              {passengerStats.totalPassengers}/{bus.capacity}
-            </Text>
-            <Text style={styles.statLabel}>Total</Text>
+            <View style={styles.statIconBg}>
+              <Ionicons name="people" size={14} color="#0891B2" />
+            </View>
+            <View>
+              <Text style={styles.statLabel}>Total</Text>
+              <Text style={styles.statValue}>
+                {passengerStats.totalPassengers}/{bus.capacity}
+              </Text>
+            </View>
           </View>
           <View style={styles.statItem}>
-            <Ionicons name="phone-portrait" size={16} color="#34C759" />
-            <Text style={styles.statText}>{passengerStats.appUsers}</Text>
-            <Text style={styles.statLabel}>App Users</Text>
+            <View style={[styles.statIconBg, { backgroundColor: "#ECFDF5" }]}>
+              <Ionicons name="phone-portrait" size={14} color="#10B981" />
+            </View>
+            <View>
+              <Text style={styles.statLabel}>App Users</Text>
+              <Text style={styles.statValue}>{passengerStats.appUsers}</Text>
+            </View>
           </View>
           <View style={styles.statItem}>
-            <Ionicons name="person-add" size={16} color="#FF9500" />
-            <Text style={styles.statText}>{passengerStats.guestCount}</Text>
-            <Text style={styles.statLabel}>Guests</Text>
+            <View style={[styles.statIconBg, { backgroundColor: "#FEF3C7" }]}>
+              <Ionicons name="person-add" size={14} color="#F59E0B" />
+            </View>
+            <View>
+              <Text style={styles.statLabel}>Guests</Text>
+              <Text style={styles.statValue}>{passengerStats.guestCount}</Text>
+            </View>
           </View>
-          <View style={styles.statItem}>
-            <Ionicons name="calendar" size={16} color="#8e8e93" />
-            <Text style={styles.statText}>{formatDate(item.updated_at)}</Text>
-            <Text style={styles.statLabel}>Date</Text>
+        </View>
+
+        {/* Date & Time Stats */}
+        <View style={styles.dateTimeStats}>
+          <View style={styles.dateTimeItem}>
+            <Ionicons name="calendar-outline" size={14} color="#0891B2" />
+            <Text style={styles.dateTimeText}>{formatDate(item.updated_at)}</Text>
           </View>
+          {item.started_at && (
+            <View style={styles.dateTimeItem}>
+              <Ionicons name="time-outline" size={14} color="#F59E0B" />
+              <Text style={styles.dateTimeText}>
+                {formatTime(item.started_at)}
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* Trip Timeline */}
         <View style={styles.timeline}>
           <View style={styles.timelineItem}>
-            <View
-              style={[styles.timelineDot, { backgroundColor: "#4CAF50" }]}
-            />
+            <View style={[styles.timelineDot, { backgroundColor: "#10B981" }]} />
             <Text style={styles.timelineText}>Trip Created</Text>
             <Text style={styles.timelineTime}>
               {formatTime(item.updated_at)}
@@ -331,7 +392,7 @@ const ConductorTripsScreen = () => {
           {item.started_at && (
             <View style={styles.timelineItem}>
               <View
-                style={[styles.timelineDot, { backgroundColor: "#FF9500" }]}
+                style={[styles.timelineDot, { backgroundColor: "#F59E0B" }]}
               />
               <Text style={styles.timelineText}>Trip Started</Text>
               <Text style={styles.timelineTime}>
@@ -343,7 +404,7 @@ const ConductorTripsScreen = () => {
           {item.ended_at && (
             <View style={styles.timelineItem}>
               <View
-                style={[styles.timelineDot, { backgroundColor: "#4CAF50" }]}
+                style={[styles.timelineDot, { backgroundColor: "#10B981" }]}
               />
               <Text style={styles.timelineText}>Trip Completed</Text>
               <Text style={styles.timelineTime}>
@@ -355,7 +416,7 @@ const ConductorTripsScreen = () => {
           {item.cancelled_at && (
             <View style={styles.timelineItem}>
               <View
-                style={[styles.timelineDot, { backgroundColor: "#FF3B30" }]}
+                style={[styles.timelineDot, { backgroundColor: "#EF4444" }]}
               />
               <Text style={styles.timelineText}>Trip Cancelled</Text>
               <Text style={styles.timelineTime}>
@@ -367,10 +428,13 @@ const ConductorTripsScreen = () => {
 
         {item.cancellation_reason && (
           <View style={styles.cancellationReason}>
-            <Text style={styles.cancellationLabel}>Reason:</Text>
-            <Text style={styles.cancellationText}>
-              {item.cancellation_reason}
-            </Text>
+            <Ionicons name="information-circle" size={16} color="#EF4444" />
+            <View style={styles.cancellationContent}>
+              <Text style={styles.cancellationLabel}>Cancellation Reason</Text>
+              <Text style={styles.cancellationText}>
+                {item.cancellation_reason}
+              </Text>
+            </View>
           </View>
         )}
       </TouchableOpacity>
@@ -379,22 +443,37 @@ const ConductorTripsScreen = () => {
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Ionicons name="person-outline" size={64} color="#8e8e93" />
+      <LinearGradient
+        colors={["#0891B2", "#06B6D4"]}
+        style={styles.emptyIconContainer}
+      >
+        <Ionicons name="ticket-outline" size={40} color="#fff" />
+      </LinearGradient>
       <Text style={styles.emptyTitle}>No Trips Yet</Text>
       <Text style={styles.emptySubtitle}>
-        Your conductor trip history will appear here once you start working
+        Your trip history will appear here once you start conducting
       </Text>
     </View>
   );
 
   const renderErrorState = () => (
     <View style={styles.errorState}>
-      <Ionicons name="alert-circle-outline" size={64} color="#FF3B30" />
+      <LinearGradient
+        colors={["#EF4444", "#DC2626"]}
+        style={styles.errorIconContainer}
+      >
+        <Ionicons name="alert-circle-outline" size={40} color="#fff" />
+      </LinearGradient>
       <Text style={styles.errorTitle}>Failed to Load Trips</Text>
       <Text style={styles.errorSubtitle}>{error}</Text>
-      <TouchableOpacity style={styles.retryButton} onPress={fetchTrips}>
-        <Ionicons name="refresh" size={20} color="#fff" />
-        <Text style={styles.retryButtonText}>Try Again</Text>
+      <TouchableOpacity style={styles.retryButtonWrapper} onPress={fetchTrips}>
+        <LinearGradient
+          colors={["#0891B2", "#06B6D4"]}
+          style={styles.retryButton}
+        >
+          <Ionicons name="refresh" size={18} color="#fff" />
+          <Text style={styles.retryButtonText}>Try Again</Text>
+        </LinearGradient>
       </TouchableOpacity>
     </View>
   );
@@ -402,9 +481,11 @@ const ConductorTripsScreen = () => {
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar style={theme === "dark" ? "light" : "dark"} />
+        <StatusBar style="light" />
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <View style={styles.loadingSpinner}>
+            <ActivityIndicator size="large" color="#0891B2" />
+          </View>
           <Text style={styles.loadingText}>Loading your trips...</Text>
         </View>
       </SafeAreaView>
@@ -414,7 +495,7 @@ const ConductorTripsScreen = () => {
   if (error) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar style={theme === "dark" ? "light" : "dark"} />
+        <StatusBar style="light" />
         {renderErrorState()}
       </SafeAreaView>
     );
@@ -422,18 +503,66 @@ const ConductorTripsScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar style={theme === "dark" ? "light" : "dark"} />
+      <StatusBar style="light" />
 
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Premium Gradient Header - Matching Conductor Dashboard */}
+      <LinearGradient
+        colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        <View style={styles.headerDecoCircle1} />
+        <View style={styles.headerDecoCircle2} />
         <View style={styles.headerContent}>
-          <Ionicons name="person" size={28} color="#ffffff" />
-          <Text style={styles.headerTitle}>Conductor History</Text>
+          <View style={styles.headerIconContainer}>
+            <Ionicons name="time" size={24} color="#0891B2" />
+          </View>
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.headerTitle}>Trip History</Text>
+            <Text style={styles.headerSubtitle}>
+              {trips.length} {trips.length === 1 ? "trip" : "trips"} recorded
+            </Text>
+          </View>
         </View>
-        <Text style={styles.headerSubtitle}>
-          {trips.length} {trips.length === 1 ? "trip" : "trips"} completed
-        </Text>
-      </View>
+
+        {/* Stats Summary */}
+        <View style={styles.headerStats}>
+          <View style={styles.headerStatItem}>
+            <View style={styles.headerStatIconBg}>
+              <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+            </View>
+            <View>
+              <Text style={styles.headerStatValue}>
+                {trips.filter((t) => t.status === "completed").length}
+              </Text>
+              <Text style={styles.headerStatLabel}>Completed</Text>
+            </View>
+          </View>
+          <View style={styles.headerStatDivider} />
+          <View style={styles.headerStatItem}>
+            <View style={styles.headerStatIconBg}>
+              <Ionicons name="play-circle" size={16} color="#F59E0B" />
+            </View>
+            <View>
+              <Text style={styles.headerStatValue}>
+                {trips.filter((t) => t.status === "ongoing").length}
+              </Text>
+              <Text style={styles.headerStatLabel}>Ongoing</Text>
+            </View>
+          </View>
+          <View style={styles.headerStatDivider} />
+          <View style={styles.headerStatItem}>
+            <View style={styles.headerStatIconBg}>
+              <Ionicons name="people" size={16} color="#0891B2" />
+            </View>
+            <View>
+              <Text style={styles.headerStatValue}>{getTotalPassengers()}</Text>
+              <Text style={styles.headerStatLabel}>Passengers</Text>
+            </View>
+          </View>
+        </View>
+      </LinearGradient>
 
       {/* Trips List */}
       <FlatList
@@ -446,8 +575,8 @@ const ConductorTripsScreen = () => {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={["#007AFF"]}
-            tintColor="#007AFF"
+            colors={["#0891B2"]}
+            tintColor="#0891B2"
           />
         }
         ListEmptyComponent={renderEmptyState}
@@ -459,50 +588,127 @@ const ConductorTripsScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f2f2f7",
+    backgroundColor: "#F8FAFC",
   },
 
-  // Header Styles
+  // Premium Header Styles - Matching Dashboard
   header: {
-    backgroundColor: "#007AFF",
-    paddingTop: 20,
+    paddingTop: 16,
     paddingBottom: 20,
     paddingHorizontal: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    marginBottom: 20,
-    elevation: 4,
-    shadowColor: "#007AFF",
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    marginBottom: 16,
+    overflow: "hidden",
+    position: "relative",
+  },
+  headerDecoCircle1: {
+    position: "absolute",
+    top: -40,
+    right: -40,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecoCircle2: {
+    position: "absolute",
+    bottom: -20,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
   },
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 20,
+  },
+  headerIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  headerTextContainer: {
+    flex: 1,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
+    fontSize: 22,
+    fontWeight: "800",
     color: "#fff",
-    marginLeft: 12,
+    letterSpacing: -0.3,
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.85)",
+    marginTop: 2,
+  },
+  headerStats: {
+    flexDirection: "row",
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  headerStatItem: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  headerStatIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerStatValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  headerStatLabel: {
+    fontSize: 10,
     color: "rgba(255, 255, 255, 0.8)",
+    marginTop: 1,
     fontWeight: "500",
   },
+  headerStatDivider: {
+    width: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    marginHorizontal: 8,
+  },
 
-  // Loading and Error States
+  // Loading States
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
   },
+  loadingSpinner: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    backgroundColor: "#E0F2FE",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
   loadingText: {
     fontSize: 16,
-    color: "#8e8e93",
-    marginTop: 12,
+    color: "#64748B",
     fontWeight: "500",
   },
   emptyState: {
@@ -510,17 +716,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 40,
+    paddingTop: 60,
+  },
+  emptyIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
   },
   emptyTitle: {
     fontSize: 20,
-    fontWeight: "bold",
-    color: "#1c1c1e",
-    marginTop: 16,
+    fontWeight: "700",
+    color: "#1E293B",
     marginBottom: 8,
   },
   emptySubtitle: {
-    fontSize: 16,
-    color: "#8e8e93",
+    fontSize: 15,
+    color: "#64748B",
     textAlign: "center",
     lineHeight: 22,
   },
@@ -530,52 +744,63 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 40,
   },
+  errorIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+  },
   errorTitle: {
     fontSize: 20,
-    fontWeight: "bold",
-    color: "#1c1c1e",
-    marginTop: 16,
+    fontWeight: "700",
+    color: "#1E293B",
     marginBottom: 8,
   },
   errorSubtitle: {
-    fontSize: 16,
-    color: "#8e8e93",
+    fontSize: 15,
+    color: "#64748B",
     textAlign: "center",
     lineHeight: 22,
     marginBottom: 24,
   },
+  retryButtonWrapper: {
+    borderRadius: 14,
+    overflow: "hidden",
+  },
   retryButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#007AFF",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    gap: 8,
   },
   retryButtonText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
-    marginLeft: 8,
   },
 
   // List Styles
   listContainer: {
     paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingBottom: 100,
   },
 
   // Trip Card Styles
   tripCard: {
     backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 14,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   tripHeader: {
     flexDirection: "row",
@@ -587,14 +812,19 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   routeName: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1c1c1e",
-    marginBottom: 4,
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#1E293B",
+    marginBottom: 6,
+  },
+  busPlateContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   busPlate: {
-    fontSize: 14,
-    color: "#8e8e93",
+    fontSize: 13,
+    color: "#64748B",
     fontWeight: "500",
   },
   statusBadge: {
@@ -602,121 +832,189 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 16,
+    borderRadius: 20,
+    gap: 6,
   },
   statusText: {
     fontSize: 12,
     fontWeight: "600",
-    marginLeft: 6,
   },
 
   // Route Details
   routeDetails: {
     marginBottom: 16,
-    gap: 8,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    padding: 14,
   },
   routeItem: {
     flexDirection: "row",
     alignItems: "center",
   },
+  routeTextContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  routeLabel: {
+    fontSize: 10,
+    color: "#94A3B8",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  routeConnector: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 9,
+    marginVertical: 6,
+  },
+  routeConnectorLine: {
+    width: 1,
+    height: 8,
+    backgroundColor: "#CBD5E1",
+  },
   locationMarker: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 7,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
   },
   locationText: {
     fontSize: 14,
-    color: "#1c1c1e",
+    color: "#1E293B",
     fontWeight: "500",
-    flex: 1,
+    marginTop: 2,
   },
 
-  // Passenger Statistics
-  passengerStats: {
+  // Trip Stats
+  tripStats: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 16,
+    marginBottom: 12,
     paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: "#f2f2f7",
+    borderTopColor: "#F1F5F9",
   },
   statItem: {
+    flexDirection: "row",
     alignItems: "center",
     flex: 1,
+    gap: 8,
   },
-  statText: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#1c1c1e",
-    marginTop: 4,
+  statIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#E0F2FE",
+    justifyContent: "center",
+    alignItems: "center",
   },
   statLabel: {
+    fontSize: 10,
+    color: "#94A3B8",
+    fontWeight: "500",
+    textTransform: "uppercase",
+  },
+  statValue: {
+    fontSize: 13,
+    color: "#1E293B",
+    fontWeight: "600",
+    marginTop: 1,
+  },
+
+  // Date Time Stats
+  dateTimeStats: {
+    flexDirection: "row",
+    gap: 16,
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  dateTimeItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  dateTimeText: {
     fontSize: 12,
-    color: "#8e8e93",
-    marginTop: 2,
-    textAlign: "center",
+    color: "#64748B",
+    fontWeight: "500",
   },
 
   // Timeline
   timeline: {
     marginBottom: 12,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
   },
   timelineItem: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 10,
   },
   timelineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     marginRight: 12,
   },
   timelineText: {
-    fontSize: 12,
-    color: "#1c1c1e",
+    fontSize: 13,
+    color: "#1E293B",
     fontWeight: "500",
     flex: 1,
   },
   timelineTime: {
     fontSize: 12,
-    color: "#8e8e93",
+    color: "#64748B",
     fontWeight: "500",
   },
 
   // Cancellation Reason
   cancellationReason: {
-    backgroundColor: "#fff5f5",
-    padding: 12,
-    borderRadius: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: "#FF3B30",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#FEF2F2",
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FEE2E2",
+    gap: 12,
+  },
+  cancellationContent: {
+    flex: 1,
   },
   cancellationLabel: {
-    fontSize: 12,
-    color: "#FF3B30",
+    fontSize: 11,
+    color: "#EF4444",
     fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
     marginBottom: 4,
   },
   cancellationText: {
     fontSize: 14,
-    color: "#1c1c1e",
+    color: "#1E293B",
     fontWeight: "500",
   },
-  incompleteDataText: {
-    fontSize: 14,
-    color: "#FF9500",
-    fontWeight: "500",
-    textAlign: "center",
-    marginTop: 12,
+  incompleteDataContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFBEB",
     padding: 12,
-    backgroundColor: "#fff8e1",
-    borderRadius: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: "#FF9500",
+    borderRadius: 10,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#FEF3C7",
+  },
+  incompleteDataText: {
+    fontSize: 13,
+    color: "#92400E",
+    fontWeight: "500",
+    flex: 1,
   },
 });
 

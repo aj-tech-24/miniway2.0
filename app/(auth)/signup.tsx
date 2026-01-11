@@ -32,10 +32,8 @@ export default function SignupScreen() {
         terms: "You must accept the Terms and Conditions to continue",
       });
       return;
-    }
-
-    // Validate form with email duplicate check
-    const validation = await validateSignupForm(
+    }    // Validate form
+    const validation = validateSignupForm(
       fullName,
       email,
       password,
@@ -75,11 +73,24 @@ export default function SignupScreen() {
               name: error.name,
             }
           : "No error"
-      );
+      );      if (error) {
+        console.log("Signup error details:", {
+          message: error.message,
+          status: error.status,
+          name: error.name,
+        });
 
-      if (error) {
         // Handle specific error types
         if (
+          error.message.includes("User already registered") ||
+          error.message.includes("already registered") ||
+          error.message.includes("already exists")
+        ) {
+          setMessage({
+            type: "error",
+            text: "An account with this email already exists. Please try logging in instead.",
+          });
+        } else if (
           error.message.includes("Email address") &&
           error.message.includes("invalid")
         ) {
@@ -95,18 +106,21 @@ export default function SignupScreen() {
               text: "The email address format is not accepted. Please try a different email address.",
             });
           }
-        } else if (error.message.includes("already registered")) {
-          setMessage({
-            type: "error",
-            text: "An account with this email already exists. Please try logging in instead.",
-          });
         } else if (error.message.includes("rate limit")) {
           setMessage({
             type: "error",
             text: "Too many signup attempts. Please wait a moment and try again.",
           });
+        } else if (error.message.includes("Password should be")) {
+          setMessage({
+            type: "error",
+            text: "Password does not meet requirements. Please ensure it's at least 6 characters long.",
+          });
         } else {
-          setMessage({ type: "error", text: error.message });
+          setMessage({ 
+            type: "error", 
+            text: `Registration failed: ${error.message}` 
+          });
         }
         return;
       }
@@ -173,12 +187,11 @@ export default function SignupScreen() {
       isPasswordField: true,
       error: errors.confirmPassword,
     },
-  ];
-  return (
+  ];  return (
     <AuthLayout>
       <AuthForm
-        title={typeof "Create Account" === 'string' ? "Create Account" : "Invalid Title"}
-        subtitle={typeof "Join the Miniway community" === 'string' ? "Join the Miniway community" : "Invalid Subtitle"}
+        title="Create Account"
+        subtitle="Join the Miniway community"
         fields={fields}
         buttonText="Sign Up"
         onButtonPress={handleSignup}

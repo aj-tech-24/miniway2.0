@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { Camera, CameraView } from "expo-camera";
 import * as Haptics from "expo-haptics";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -11,6 +12,7 @@ import {
   Animated,
   FlatList,
   Image,
+  InteractionManager,
   Modal,
   Platform,
   ScrollView,
@@ -73,11 +75,11 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   const R = 6371; // Radius of the Earth in kilometers
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
 
@@ -95,7 +97,7 @@ const calculateEstimatedTime = (distance: number): string => {
   const averageSpeed = 25;
   const timeInHours = distance / averageSpeed;
   const timeInMinutes = Math.round(timeInHours * 60);
-  
+
   if (timeInMinutes < 60) {
     return `${timeInMinutes} min`;
   } else {
@@ -129,6 +131,26 @@ export function ConductorScreen() {
   const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(
     new Set()
   );
+  // Store the assigned bus information even when there's no active trip
+  const [assignedBus, setAssignedBus] = useState<{
+    id: string;
+    plate_number: string;
+    capacity: number;
+    passengers: number;
+    routes: {
+      id: string;
+      name: string;
+      start_address: string;
+      end_address: string;
+    } | null;
+  } | null>(null);
+
+  const [mapRegion, setMapRegion] = useState({
+    latitude: 14.5995,
+    longitude: 120.9842,
+    latitudeDelta: 0.015,
+    longitudeDelta: 0.015,
+  });
 
   const scanLineAnimation = useRef(new Animated.Value(0)).current;
 
@@ -146,10 +168,10 @@ export function ConductorScreen() {
     title: "",
     message: "",
     type: "info" as "info" | "error" | "warning" | "success",
-    onConfirm: () => {},
+    onConfirm: () => { },
     confirmText: "OK",
     showCancel: false,
-    onCancel: () => {},
+    onCancel: () => { },
     cancelText: "Cancel",
   });
 
@@ -159,10 +181,10 @@ export function ConductorScreen() {
       title: string,
       message: string,
       type: "info" | "error" | "warning" | "success" = "info",
-      onConfirm: () => void = () => {},
+      onConfirm: () => void = () => { },
       confirmText: string = "OK",
       showCancel: boolean = false,
-      onCancel: () => void = () => {},
+      onCancel: () => void = () => { },
       cancelText: string = "Cancel"
     ) => {
       setAlertConfig({
@@ -222,10 +244,11 @@ export function ConductorScreen() {
       useNativeDriver: true,
     }).start();
   }, []);
-
   // Pulse animation for waiting passengers
   useEffect(() => {
     const waitingCount = passengers.filter((p) => p.status === "waiting").length;
+    let animationRef: Animated.CompositeAnimation | null = null;
+    
     if (waitingCount > 0) {
       const pulse = Animated.sequence([
         Animated.timing(pulseAnimation, {
@@ -239,11 +262,19 @@ export function ConductorScreen() {
           useNativeDriver: true,
         }),
       ]);
-      Animated.loop(pulse).start();
+      animationRef = Animated.loop(pulse);
+      animationRef.start();
     } else {
       pulseAnimation.setValue(1);
     }
-  }, [passengers]);
+    
+    return () => {
+      if (animationRef) {
+        animationRef.stop();
+      }
+      pulseAnimation.stopAnimation();
+    };
+  }, [passengers, pulseAnimation]);
 
   // Fetch current trip and passengers
   const fetchCurrentTrip = useCallback(async () => {
@@ -261,8 +292,11 @@ export function ConductorScreen() {
         return;
       }
 
+      console.log("👤 Current User ID:", user.id);
+
       // Find current trip for this conductor (assuming conductor is assigned to a bus)
-      const { data: busData, error: busError } = await supabase
+      // Use limit(1) instead of single() to handle case where conductor is assigned to multiple buses
+      const { data: busResults, error: busError } = await supabase
         .from("buses")
         .select(
           `
@@ -280,9 +314,14 @@ export function ConductorScreen() {
         `
         )
         .eq("conductor_id", user.id)
-        .single();
+        .limit(1);
+
+      const busData = busResults && busResults.length > 0 ? busResults[0] : null;
+
+      console.log("🚌 Bus Query Result:", { busData, busError, totalBuses: busResults?.length || 0 });
 
       if (busError || !busData) {
+        console.error("❌ Bus Error:", busError);
         showAlert(
           "No Bus Assignment",
           "You haven't been assigned to a bus yet. Please contact your administrator.",
@@ -292,12 +331,17 @@ export function ConductorScreen() {
       }
 
       // Find active trip for this bus
+      // Use maybeSingle() instead of single() to avoid throwing error on 0 results
+      console.log("🔍 Searching for trips with bus_id:", busData.id);
+
       const { data: tripData, error: tripError } = await supabase
         .from("trips")
         .select(
           `
           id,
           status,
+          bus_id,
+          driver_id,
           buses(
             id,
             plate_number,
@@ -324,16 +368,43 @@ export function ConductorScreen() {
         `
         )
         .eq("bus_id", busData.id)
-        .in("status", ["waiting", "ongoing"])
+        .in("status", ["waiting", "ongoing", "Waiting", "Ongoing"])
         .order("updated_at", { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
-      if (tripError || !tripData) {
-        // No active trip found
-        console.log("Trip query error:", tripError);
-        console.log("Trip data:", tripData);
-        console.log("Bus ID:", busData.id);
+      console.log("📋 Trip Query Result:", { tripData, tripError });
+
+      if (tripError) {
+        console.error("❌ Critical Trip Query Error:", tripError.message, tripError.details, tripError.hint);
+      }
+
+      if (!tripData) {
+        console.log("⚠️ No active trip found in DB for Bus ID:", busData.id);
+
+        // Let's also check if ANY trips exist for this bus (regardless of status)
+        const { data: allTrips, error: allTripsError } = await supabase
+          .from("trips")
+          .select("id, status, bus_id, driver_id, updated_at")
+          .eq("bus_id", busData.id)
+          .order("updated_at", { ascending: false })
+          .limit(5);
+
+        console.log("📊 All trips for this bus:", allTrips);
+        if (allTripsError) {
+          console.error("❌ Error fetching all trips:", allTripsError);
+        }
+
+        // Save the assigned bus information
+        const busRoutes = Array.isArray(busData.routes) ? busData.routes[0] : busData.routes;
+        setAssignedBus({
+          id: busData.id,
+          plate_number: busData.plate_number,
+          capacity: busData.capacity,
+          passengers: busData.passengers,
+          routes: busRoutes || null,
+        });
+
         setCurrentTrip(null);
         setPassengers([]);
         setPassengerCount(0);
@@ -344,14 +415,26 @@ export function ConductorScreen() {
       const busInfo = Array.isArray(tripData.buses)
         ? tripData.buses[0]
         : tripData.buses;
+
+      const busRoutes = Array.isArray(busInfo.routes)
+        ? busInfo.routes[0]
+        : busInfo.routes;
+
+      // Also update the assigned bus info
+      setAssignedBus({
+        id: busInfo.id,
+        plate_number: busInfo.plate_number,
+        capacity: busInfo.capacity,
+        passengers: busInfo.passengers,
+        routes: busRoutes || null,
+      });
+
       const transformedTrip: Trip = {
         id: tripData.id,
         status: tripData.status,
         buses: {
           ...busInfo,
-          routes: Array.isArray(busInfo.routes)
-            ? busInfo.routes[0]
-            : busInfo.routes,
+          routes: busRoutes,
         },
         trip_passengers: (tripData.trip_passengers || []).map((p: any) => ({
           id: p.id,
@@ -400,7 +483,6 @@ export function ConductorScreen() {
   useEffect(() => {
     fetchCurrentTrip();
   }, [fetchCurrentTrip]);
-
   // Set up real-time subscription for new boarded passengers
   useEffect(() => {
     if (!currentTrip?.id) return;
@@ -414,18 +496,18 @@ export function ConductorScreen() {
           schema: "public",
           table: "trip_passengers",
           filter: `trip_id=eq.${currentTrip.id}`,
-        },        async (payload) => {
+        }, (payload) => {
           console.log("New passenger boarded:", payload.new);
 
-          // Use setTimeout to batch state updates and prevent useInsertionEffect warning
-          setTimeout(async () => {
+          // Use InteractionManager to schedule updates after interactions complete
+          InteractionManager.runAfterInteractions(async () => {
             // Fetch passenger details
             const { data: passengerData } = await supabase
               .from("trip_passengers")
               .select("passenger_id, passenger_count, users(fullName)")
               .eq("id", payload.new.id)
               .single();
-            
+
             if (passengerData) {
               const userData = Array.isArray(passengerData.users)
                 ? passengerData.users[0]
@@ -458,9 +540,9 @@ export function ConductorScreen() {
               });
             }
 
-            // Refresh data after a delay to prevent cascade updates
+            // Refresh data after interactions complete
             fetchCurrentTrip();
-          }, 0);
+          });
         }
       )
       .on(
@@ -470,11 +552,11 @@ export function ConductorScreen() {
           schema: "public",
           table: "trip_passengers",
           filter: `trip_id=eq.${currentTrip.id}`,
-        },        async (payload) => {
+        }, (payload) => {
           console.log("Passenger updated:", payload.new);
-          
-          // Use setTimeout to batch state updates and prevent useInsertionEffect warning
-          setTimeout(async () => {
+
+          // Use InteractionManager to schedule updates after interactions complete
+          InteractionManager.runAfterInteractions(async () => {
             // Check if status changed to boarded
             if (
               payload.new.status === "boarded" &&
@@ -486,7 +568,7 @@ export function ConductorScreen() {
                 .select("passenger_id, passenger_count, users(fullName)")
                 .eq("id", payload.new.id)
                 .single();
-              
+
               if (passengerData) {
                 const userData = Array.isArray(passengerData.users)
                   ? passengerData.users[0]
@@ -522,9 +604,9 @@ export function ConductorScreen() {
               }
             }
 
-            // Refresh data after a delay to prevent cascade updates
+            // Refresh data after interactions complete
             fetchCurrentTrip();
-          }, 0);
+          });
         }
       )
       .subscribe();
@@ -532,28 +614,29 @@ export function ConductorScreen() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [currentTrip?.id, fetchCurrentTrip]);
+  }, [currentTrip?.id, fetchCurrentTrip, notificationAnimation]);
   // Add debugging logs to the `pickup_requests` subscription.
   useEffect(() => {
-    if (!currentTrip?.buses?.id) {
+    const busId = currentTrip?.buses?.id || assignedBus?.id;
+    if (!busId) {
       console.log("No bus ID available for subscription.");
       return;
     }
 
     const pickupSubscription = supabase
-      .channel(`pickup_requests_${currentTrip.buses.id}`)
+      .channel(`pickup_requests_${busId}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "pickup_requests",
-          filter: `bus_id=eq.${currentTrip.buses.id}`,
-        },        (payload) => {
+          filter: `bus_id=eq.${busId}`,
+        }, (payload) => {
           console.log("New pickup request received:", payload.new);
 
-          // Use setTimeout to prevent state updates during render
-          setTimeout(() => {
+          // Use InteractionManager to prevent state updates during render
+          InteractionManager.runAfterInteractions(() => {
             // Add the new pickup request to the state
             const newPickup = {
               id: payload.new.id,
@@ -574,7 +657,7 @@ export function ConductorScreen() {
               console.log("Updated _pendingPickups state:", updatedPickups);
               return updatedPickups;
             });
-          }, 0);
+          });
         }
       )
       .on(
@@ -583,12 +666,12 @@ export function ConductorScreen() {
           event: "UPDATE",
           schema: "public",
           table: "pickup_requests",
-          filter: `bus_id=eq.${currentTrip.buses.id}`,
-        },        (payload) => {
+          filter: `bus_id=eq.${busId}`,
+        }, (payload) => {
           console.log("Pickup request updated:", payload.new);
 
-          // Use setTimeout to prevent state updates during render
-          setTimeout(() => {
+          // Use InteractionManager to prevent state updates during render
+          InteractionManager.runAfterInteractions(() => {
             // If status changed to accepted or declined, remove from pending list
             if (payload.new.status === "accepted" || payload.new.status === "declined") {
               setPendingPickups((prev) => prev.filter((p) => p.id !== payload.new.id));
@@ -598,18 +681,20 @@ export function ConductorScreen() {
                 prev.map((p) => (p.id === payload.new.id ? { ...p, ...payload.new } : p))
               );
             }
-          }, 0);
+          });
         }
       )
       .subscribe();
 
-    console.log("Subscribed to pickup_requests for bus ID:", currentTrip.buses.id);
+    console.log("Subscribed to pickup_requests for bus ID:", busId);
 
     return () => {
-      console.log("Unsubscribing from pickup_requests for bus ID:", currentTrip.buses.id);
+      console.log("Unsubscribing from pickup_requests for bus ID:", busId);
       pickupSubscription.unsubscribe();
     };
-  }, [currentTrip?.buses?.id]);  const handleAcceptPickup = async (pickupId: string) => {
+  }, [currentTrip?.buses?.id, assignedBus?.id]);
+
+  const handleAcceptPickup = async (pickupId: string) => {
     try {
       // Find the pickup request to get commuter details
       const pickupRequest = _pendingPickups.find((p) => p.id === pickupId);
@@ -624,8 +709,8 @@ export function ConductorScreen() {
       }
 
       // Validate that location data exists
-      if (!pickupRequest.pickup_lat || !pickupRequest.pickup_lng || 
-          !pickupRequest.dest_lat || !pickupRequest.dest_lng) {
+      if (!pickupRequest.pickup_lat || !pickupRequest.pickup_lng ||
+        !pickupRequest.dest_lat || !pickupRequest.dest_lng) {
         showAlert("Error", "Pickup request is missing location data.", "error");
         return;
       }
@@ -671,22 +756,22 @@ export function ConductorScreen() {
 
       // Remove from pending list
       setPendingPickups((prev) => prev.filter((p) => p.id !== pickupId));
-      
+
       // Close map modal if open
       setSelectedRequest(null);
 
       showAlert("Pickup Accepted", "Passenger added to waiting list.", "success");
-      
+
       // Refresh trip data to show the new waiting passenger
       fetchCurrentTrip();
     } catch (error) {
       console.error("Error accepting pickup request:", error);
       showAlert("Error", "Failed to accept the pickup request. Please try again.", "error");
     }
-  };  const handleDeclinePickup = async (pickupId: string) => {
+  }; const handleDeclinePickup = async (pickupId: string) => {
     try {      // First get the pickup request details
       const pickupRequest = _pendingPickups.find((p: PendingPickupRequest) => p.id === pickupId);
-      
+
       // Update pickup request status to declined
       const { error } = await supabase
         .from("pickup_requests")
@@ -697,9 +782,9 @@ export function ConductorScreen() {
       if (pickupRequest && currentTrip) {
         const { error: tripPassengerError } = await supabase
           .from("trip_passengers")
-          .update({ 
+          .update({
             status: "cancelled",
-            declined_at: new Date().toISOString() 
+            declined_at: new Date().toISOString()
           })
           .eq("trip_id", currentTrip.id)
           .eq("bus_id", currentTrip.buses.id)
@@ -714,12 +799,12 @@ export function ConductorScreen() {
 
       // Remove from local state
       setPendingPickups((prev) => prev.filter((p) => p.id !== pickupId));
-      
+
       // Close map modal if open
       setSelectedRequest(null);
 
       showAlert("Pickup Declined", "You have declined the pickup request.", "warning");
-      
+
       // Refresh trip data to reflect changes
       fetchCurrentTrip();
     } catch (error) {
@@ -756,6 +841,10 @@ export function ConductorScreen() {
             longitude: location.coords.longitude,
           };
           setBusLocation(coords);
+          setMapRegion(prev => ({
+            ...prev,
+            ...coords
+          }));
         }
       );
     }
@@ -879,10 +968,10 @@ export function ConductorScreen() {
         prev.map((p) =>
           p.id === passenger.id
             ? {
-                ...p,
-                status: "boarded" as const,
-                boarded_at: new Date().toISOString(),
-              }
+              ...p,
+              status: "boarded" as const,
+              boarded_at: new Date().toISOString(),
+            }
             : p
         )
       );
@@ -894,8 +983,7 @@ export function ConductorScreen() {
 
       showAlert(
         "Passenger Boarded! ✅",
-        `${
-          passenger.users?.fullName || "Passenger"
+        `${passenger.users?.fullName || "Passenger"
         } has been successfully boarded. ${passengerText} added.`,
         "success"
       );
@@ -911,7 +999,7 @@ export function ConductorScreen() {
     }
   };
 
-  // Add guest passenger
+  // Add guest passenger - only updates passenger count, doesn't create trip_passengers record
   const addGuestPassenger = async () => {
     if (!currentTrip || guestCount < 1) {
       showAlert(
@@ -932,23 +1020,7 @@ export function ConductorScreen() {
     }
 
     try {
-      // Create a guest passenger record
-      const { error: insertError } = await supabase
-        .from("trip_passengers")
-        .insert({
-          trip_id: currentTrip.id,
-          bus_id: currentTrip.buses.id,
-          passenger_id: `guest_${Date.now()}`, // Generate unique guest ID
-          status: "boarded",
-          boarded_at: new Date().toISOString(),
-          passenger_count: guestCount,
-        });
-
-      if (insertError) {
-        throw insertError;
-      }
-
-      // Update bus passenger count
+      // Only update the bus passenger count - guests are just a headcount
       const newPassengerCount = passengerCount + guestCount;
       const { error: busError } = await supabase
         .from("buses")
@@ -956,40 +1028,41 @@ export function ConductorScreen() {
         .eq("id", currentTrip.buses.id);
 
       if (busError) {
-        console.error("Error updating bus passenger count:", busError);
+        throw busError;
       }
 
       // Update local state
       setPassengerCount(newPassengerCount);
 
+      // Haptic feedback
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
       const guestText = guestCount > 1 ? `${guestCount} guests` : "1 guest";
       showAlert(
         "Guests Added! ✅",
-        `${guestText} have been added to the passenger count.`,
+        `${guestText} added to the passenger count.`,
         "success"
       );
 
       setShowGuestModal(false);
       setGuestCount(1);
-
-      // Refresh data
-      fetchCurrentTrip();
     } catch (error) {
       console.error("Error adding guest passengers:", error);
       showAlert(
         "Error",
-        "Failed to add guest passengers. Please try again.",
+        "Failed to add guests. Please try again.",
         "error"
       );
     }
   };
   const renderPassengerItem = ({ item }: { item: Passenger }) => {
-    const isGuest = item.passenger_id.startsWith('guest_');
-    const passengerName = item.users?.fullName || 
+    // Guests have null passenger_id
+    const isGuest = !item.passenger_id;
+    const passengerName = item.users?.fullName ||
       (isGuest ? `Guest Passenger` : `Passenger #${item.id.substring(0, 8)}`);
-    
+
     return (
-      <Animated.View 
+      <Animated.View
         style={[
           styles.passengerItem,
           {
@@ -1000,13 +1073,13 @@ export function ConductorScreen() {
       >
         <View style={styles.passengerMainInfo}>
           <View style={styles.passengerAvatar}>
-            <Ionicons 
-              name={isGuest ? "person-add" : "person"} 
-              size={24} 
-              color={item.status === "boarded" ? "#34C759" : "#007AFF"} 
+            <Ionicons
+              name={isGuest ? "person-add" : "person"}
+              size={24}
+              color={item.status === "boarded" ? "#34C759" : "#007AFF"}
             />
           </View>
-          
+
           <View style={styles.passengerDetailsContainer}>
             <View style={styles.passengerHeader}>
               <Text style={styles.passengerName}>{passengerName}</Text>
@@ -1017,12 +1090,12 @@ export function ConductorScreen() {
                 </View>
               )}
             </View>
-            
+
             <View style={styles.passengerMeta}>
               <View style={styles.metaItem}>
                 <Ionicons name="time" size={14} color="#8e8e93" />
                 <Text style={styles.metaText}>
-                  {item.boarded_at 
+                  {item.boarded_at
                     ? new Date(item.boarded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                     : "Waiting"
                   }
@@ -1060,15 +1133,19 @@ export function ConductorScreen() {
   // Add a button to show pending requests and display their pickup locations.
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<PendingPickupRequest | null>(null);
-  
+
   // Enhanced Route Map state
-  const [mapLoading, setMapLoading] = useState(true);
   const pulseAnimationRef = useRef(new Animated.Value(1)).current;
 
   // Pulse animation for pickup marker
   useEffect(() => {
-    const pulse = () => {
-      Animated.sequence([
+    let animationRef: Animated.CompositeAnimation | null = null;
+    let isMounted = true;
+
+    const runPulse = () => {
+      if (!isMounted) return;
+      
+      animationRef = Animated.sequence([
         Animated.timing(pulseAnimationRef, {
           toValue: 1.3,
           duration: 1000,
@@ -1079,14 +1156,26 @@ export function ConductorScreen() {
           duration: 1000,
           useNativeDriver: true,
         }),
-      ]).start(() => pulse());
+      ]);
+      
+      animationRef.start(({ finished }) => {
+        if (finished && isMounted && selectedRequest) {
+          runPulse();
+        }
+      });
     };
-    
+
     if (selectedRequest) {
-      pulse();
+      runPulse();
+    } else {
+      pulseAnimationRef.setValue(1);
     }
-    
+
     return () => {
+      isMounted = false;
+      if (animationRef) {
+        animationRef.stop();
+      }
       pulseAnimationRef.stopAnimation();
     };
   }, [selectedRequest, pulseAnimationRef]);
@@ -1098,145 +1187,174 @@ export function ConductorScreen() {
         animationType="slide"
         onRequestClose={() => setShowPendingRequests(false)}
       >
-        <SafeAreaView style={styles.container}>
-          <View style={styles.modalHeader}>
-            <View style={styles.modalHeaderLeft}>
-              <Ionicons name="notifications" size={28} color="#fff" />
-              <Text style={styles.headerTitle}>Pickup Requests</Text>
+        <View style={styles.pickupRequestsContainer}>
+          {/* Premium Gradient Header */}
+          <LinearGradient
+            colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.pickupRequestsHeader}
+          >
+            <View style={styles.pickupHeaderContent}>
+              <View style={styles.pickupHeaderIconBg}>
+                <Ionicons name="notifications" size={26} color="#0891B2" />
+              </View>
+              <View style={styles.pickupHeaderTextContainer}>
+                <Text style={styles.pickupHeaderTitle}>Pickup Requests</Text>
+                <Text style={styles.pickupHeaderSubtitle}>
+                  {_pendingPickups.length} {_pendingPickups.length === 1 ? 'request' : 'requests'} pending
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.pickupHeaderClose}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowPendingRequests(false);
+                }}
+              >
+                <Ionicons name="close" size={24} color="#fff" />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setShowPendingRequests(false);
-              }}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="close" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          
-          {_pendingPickups.length > 0 && (
-            <View style={styles.requestsCount}>
-              <Ionicons name="time" size={20} color="#FF9500" />
-              <Text style={styles.requestsCountText}>
-                {_pendingPickups.length} pending {_pendingPickups.length === 1 ? 'request' : 'requests'}
-              </Text>
-            </View>
-          )}
+          </LinearGradient>
 
           <FlatList
             data={_pendingPickups}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.requestsList}
+            contentContainerStyle={styles.pickupRequestsList}
+            showsVerticalScrollIndicator={false}
             renderItem={({ item }) => (
-              <View style={[styles.requestCard, styles.cardShadow]}>
-                <View style={styles.requestHeader}>
-                  <View style={styles.commuterInfo}>
-                    <View style={styles.avatarPlaceholder}>
-                      <Ionicons name="person" size={24} color="#007AFF" />
+              <View style={styles.pickupRequestCard}>
+                {/* Card Header */}
+                <View style={styles.pickupCardHeader}>
+                  <View style={styles.pickupCommuterInfo}>
+                    <View style={styles.pickupAvatarContainer}>
+                      <LinearGradient
+                        colors={["#0891B2", "#06B6D4"]}
+                        style={styles.pickupAvatarGradient}
+                      >
+                        <Ionicons name="person" size={22} color="#fff" />
+                      </LinearGradient>
                     </View>
-                    <View style={styles.commuterDetails}>
-                      <Text style={styles.commuterName}>
+                    <View style={styles.pickupCommuterDetails}>
+                      <Text style={styles.pickupCommuterName}>
                         {item.commuter_name || "Unknown Commuter"}
                       </Text>
                       {item.passenger_count && item.passenger_count > 1 && (
-                        <View style={styles.passengerCountBadge}>
-                          <Ionicons name="people" size={14} color="#8e8e93" />
-                          <Text style={styles.passengerCountText}>
+                        <View style={styles.pickupPassengerBadge}>
+                          <Ionicons name="people" size={12} color="#0891B2" />
+                          <Text style={styles.pickupPassengerText}>
                             {item.passenger_count} passengers
                           </Text>
                         </View>
                       )}
                     </View>
                   </View>
-                  <View style={styles.statusPill}>
-                    <View style={styles.statusDot} />
-                    <Text style={styles.statusPillText}>Pending</Text>
+                  <View style={styles.pickupStatusBadge}>
+                    <View style={styles.pickupStatusDot} />
+                    <Text style={styles.pickupStatusText}>Pending</Text>
                   </View>
                 </View>
 
+                {/* Notes Section */}
                 {item.notes && (
-                  <View style={styles.notesContainer}>
-                    <Ionicons name="chatbubble-outline" size={16} color="#8e8e93" />
-                    <Text style={styles.notesText}>{item.notes}</Text>
+                  <View style={styles.pickupNotesContainer}>
+                    <Ionicons name="chatbubble-outline" size={14} color="#64748B" />
+                    <Text style={styles.pickupNotesText}>{item.notes}</Text>
                   </View>
                 )}
 
-                <View style={styles.locationInfo}>
-                  <View style={styles.locationRow}>
-                    <View style={styles.locationIconContainer}>
-                      <Ionicons name="location" size={18} color="#34C759" />
+                {/* Location Info */}
+                <View style={styles.pickupLocationCard}>
+                  <View style={styles.pickupLocationRow}>
+                    <View style={[styles.pickupLocationIcon, { backgroundColor: "#ECFDF5" }]}>
+                      <Ionicons name="radio-button-on" size={14} color="#10B981" />
                     </View>
-                    <View style={styles.locationTextContainer}>
-                      <Text style={styles.locationLabel}>Pickup</Text>
-                      <Text style={styles.locationCoords}>
+                    <View style={styles.pickupLocationDetails}>
+                      <Text style={styles.pickupLocationLabel}>Pickup Location</Text>
+                      <Text style={styles.pickupLocationCoords}>
                         {item.pickup_lat?.toFixed(6)}, {item.pickup_lng?.toFixed(6)}
                       </Text>
                     </View>
                   </View>
 
-                  <View style={styles.locationDivider} />
+                  <View style={styles.pickupLocationConnector}>
+                    <View style={styles.pickupConnectorLine} />
+                  </View>
 
-                  <View style={styles.locationRow}>
-                    <View style={styles.locationIconContainer}>
-                      <Ionicons name="location" size={18} color="#FF3B30" />
+                  <View style={styles.pickupLocationRow}>
+                    <View style={[styles.pickupLocationIcon, { backgroundColor: "#FEF2F2" }]}>
+                      <Ionicons name="location" size={14} color="#EF4444" />
                     </View>
-                    <View style={styles.locationTextContainer}>
-                      <Text style={styles.locationLabel}>Drop-off</Text>
-                      <Text style={styles.locationCoords}>
+                    <View style={styles.pickupLocationDetails}>
+                      <Text style={styles.pickupLocationLabel}>Drop-off Location</Text>
+                      <Text style={styles.pickupLocationCoords}>
                         {item.dest_lat?.toFixed(6)}, {item.dest_lng?.toFixed(6)}
                       </Text>
                     </View>
                   </View>
                 </View>
-                {/* View on Map Button */}
+
+                {/* View Map Button */}
                 <TouchableOpacity
-                  style={styles.viewMapButton}
+                  style={styles.pickupViewMapButton}
                   onPress={() => {
-                    console.log("View Map button pressed for:", item.commuter_name);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     setSelectedRequest(item);
                   }}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="map-outline" size={20} color="#007AFF" />
-                  <Text style={styles.viewMapButtonText}>View Route on Map</Text>
-                  <Ionicons name="chevron-forward" size={20} color="#007AFF" />
+                  <Ionicons name="map-outline" size={18} color="#0891B2" />
+                  <Text style={styles.pickupViewMapText}>View Route on Map</Text>
+                  <Ionicons name="chevron-forward" size={18} color="#0891B2" />
                 </TouchableOpacity>
 
                 {/* Action Buttons */}
-                <View style={styles.requestActions}>
+                <View style={styles.pickupActionButtons}>
                   <TouchableOpacity
-                    style={[styles.requestActionButton, styles.declineActionButton]}
-                    onPress={() => handleDeclinePickup(item.id)}
+                    style={styles.pickupDeclineButton}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      handleDeclinePickup(item.id);
+                    }}
                   >
-                    <Ionicons name="close-circle" size={22} color="#fff" />
-                    <Text style={styles.declineActionText}>Decline</Text>
+                    <Ionicons name="close" size={20} color="#EF4444" />
+                    <Text style={styles.pickupDeclineText}>Decline</Text>
                   </TouchableOpacity>
+
                   <TouchableOpacity
-                    style={[styles.requestActionButton, styles.approveActionButton]}
-                    onPress={() => handleAcceptPickup(item.id)}
+                    style={styles.pickupAcceptButton}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      handleAcceptPickup(item.id);
+                    }}
                   >
-                    <Ionicons name="checkmark-circle" size={22} color="#fff" />
-                    <Text style={styles.approveActionText}>Accept Request</Text>
+                    <LinearGradient
+                      colors={["#10B981", "#059669"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.pickupAcceptGradient}
+                    >
+                      <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                      <Text style={styles.pickupAcceptText}>Accept Request</Text>
+                    </LinearGradient>
                   </TouchableOpacity>
                 </View>
               </View>
             )}
             ListEmptyComponent={
-              <View style={styles.emptyRequestsState}>
-                <View style={styles.emptyIconContainer}>
-                  <Ionicons name="checkmark-done-circle" size={64} color="#34C759" />
+              <View style={styles.pickupEmptyState}>
+                <View style={styles.pickupEmptyIcon}>
+                  <Ionicons name="checkmark-done-circle" size={72} color="#10B981" />
                 </View>
-                <Text style={styles.emptyRequestsTitle}>All Caught Up!</Text>
-                <Text style={styles.emptyRequestsMessage}>
+                <Text style={styles.pickupEmptyTitle}>All Caught Up!</Text>
+                <Text style={styles.pickupEmptyMessage}>
                   No pending pickup requests at the moment.
                 </Text>
               </View>
             }
           />
-        </SafeAreaView>
-        
+        </View>
+
         {/* Enhanced Route Map Modal */}
         {selectedRequest && (
           <Modal
@@ -1434,7 +1552,7 @@ export function ConductorScreen() {
                       selectedRequest.dest_lat || 0,
                       selectedRequest.dest_lng || 0
                     ))} />
-                    
+
                     <Text style={styles.distanceInfoText}>
                       {(() => {
                         const distance = calculateDistance(
@@ -1502,18 +1620,19 @@ export function ConductorScreen() {
   };
 
   const fetchPendingRequests = async () => {
-    if (!currentTrip?.buses?.id) {
+    const busId = currentTrip?.buses?.id || assignedBus?.id;
+    if (!busId) {
       console.log("No bus ID available for fetching pending requests.");
       return;
     }
 
-    console.log("Fetching pending requests for bus ID:", currentTrip.buses.id);
+    console.log("Fetching pending requests for bus ID:", busId);
 
     try {
       const { data, error } = await supabase
         .from("pickup_requests")
         .select("*")
-        .eq("bus_id", currentTrip.buses.id)
+        .eq("bus_id", busId)
         .eq("status", "pending");
 
       if (error) {
@@ -1535,11 +1654,16 @@ export function ConductorScreen() {
   }, [showPendingRequests]);
   // Pulse animation for pending requests button
   const pendingRequestsPulse = useRef(new Animated.Value(1)).current;
-  
+
   useEffect(() => {
+    let animationRef: Animated.CompositeAnimation | null = null;
+    let isMounted = true;
+    
     if (_pendingPickups.length > 0) {
-      const pulse = () => {
-        Animated.sequence([
+      const runPulse = () => {
+        if (!isMounted) return;
+        
+        animationRef = Animated.sequence([
           Animated.timing(pendingRequestsPulse, {
             toValue: 1.05,
             duration: 800,
@@ -1550,34 +1674,59 @@ export function ConductorScreen() {
             duration: 800,
             useNativeDriver: true,
           }),
-        ]).start(() => pulse());
+        ]);
+        
+        animationRef.start(({ finished }) => {
+          if (finished && isMounted) {
+            runPulse();
+          }
+        });
       };
-      pulse();
+      runPulse();
     } else {
       pendingRequestsPulse.setValue(1);
     }
-    
+
     return () => {
+      isMounted = false;
+      if (animationRef) {
+        animationRef.stop();
+      }
       pendingRequestsPulse.stopAnimation();
     };
-  }, [_pendingPickups.length]);
+  }, [_pendingPickups.length, pendingRequestsPulse]);
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style={theme === "dark" ? "light" : "dark"} />
-        <View style={styles.loadingContainer}>
-          <View style={styles.loadingContent}>
-            <Ionicons name="bus" size={48} color="#007AFF" />
-            <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 16 }} />
-            <Text style={styles.loadingText}>Loading conductor dashboard...</Text>
-            <View style={styles.loadingDots}>
-              <View style={[styles.dot, { animationDelay: "0s" }]} />
-              <View style={[styles.dot, { animationDelay: "0.2s" }]} />
-              <View style={[styles.dot, { animationDelay: "0.4s" }]} />
+      <View style={styles.loadingScreen}>
+        <StatusBar style="light" />
+        <LinearGradient
+          colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.loadingGradient}
+        >
+          <View style={styles.loadingIconContainer}>
+            <View style={styles.loadingIconBg}>
+              <Ionicons name="bus" size={56} color="#0891B2" />
             </View>
+            <View style={styles.loadingPulseRing} />
           </View>
-        </View>
-      </SafeAreaView>
+
+          <Text style={styles.loadingTitle}>Conductor Dashboard</Text>
+          <Text style={styles.loadingSubtitle}>Preparing your workspace...</Text>
+
+          <View style={styles.loadingIndicatorContainer}>
+            <ActivityIndicator size="large" color="#fff" />
+          </View>
+
+          <View style={styles.loadingDotsContainer}>
+            <View style={[styles.loadingDotActive]} />
+            <View style={[styles.loadingDotInactive]} />
+            <View style={[styles.loadingDotInactive]} />
+          </View>
+        </LinearGradient>
+      </View>
     );
   }
 
@@ -1590,16 +1739,72 @@ export function ConductorScreen() {
             <Ionicons name="person-circle" size={28} color="#fff" />
             <Text style={styles.headerTitle}>Conductor Dashboard</Text>
           </View>
+          {assignedBus && (
+            <Text style={styles.headerSubtitle}>
+              {assignedBus.plate_number} • {assignedBus.routes?.name || "No Route Assigned"}
+            </Text>
+          )}
         </View>
+
+        {/* Show assigned bus info card */}
+        {assignedBus && (
+          <View style={styles.assignedBusCard}>
+            <View style={styles.assignedBusHeader}>
+              <View style={styles.assignedBusIconContainer}>
+                <Ionicons name="bus" size={24} color="#007AFF" />
+              </View>
+              <View style={styles.assignedBusInfo}>
+                <Text style={styles.assignedBusTitle}>Your Assigned Bus</Text>
+                <Text style={styles.assignedBusPlate}>{assignedBus.plate_number}</Text>
+              </View>
+              <View style={styles.capacityBadge}>
+                <Ionicons name="people" size={14} color="#8e8e93" />
+                <Text style={styles.capacityBadgeText}>{assignedBus.capacity} seats</Text>
+              </View>
+            </View>
+            {assignedBus.routes && (
+              <View style={styles.assignedBusRoute}>
+                <View style={styles.routeInfoRow}>
+                  <View style={styles.routeInfoIconBg}>
+                    <Ionicons name="navigate" size={16} color="#007AFF" />
+                  </View>
+                  <View style={styles.routeInfoDetails}>
+                    <Text style={styles.routeInfoLabel}>Route</Text>
+                    <Text style={styles.routeInfoName}>{assignedBus.routes.name}</Text>
+                  </View>
+                </View>
+                <View style={styles.routeStops}>
+                  <View style={styles.routeStopItem}>
+                    <View style={[styles.routeStopDot, { backgroundColor: "#34C759" }]} />
+                    <Text style={styles.routeStopText} numberOfLines={2}>
+                      {assignedBus.routes.start_address}
+                    </Text>
+                  </View>
+                  <View style={styles.routeConnector} />
+                  <View style={styles.routeStopItem}>
+                    <View style={[styles.routeStopDot, { backgroundColor: "#FF3B30" }]} />
+                    <Text style={styles.routeStopText} numberOfLines={2}>
+                      {assignedBus.routes.end_address}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
         <View style={styles.emptyState}>
           <View style={styles.emptyStateIcon}>
-            <Ionicons name="bus-outline" size={64} color="#007AFF" />
+            <Ionicons name="time-outline" size={64} color="#FF9500" />
           </View>
           <Text style={styles.emptyTitle}>No Active Trip</Text>
           <Text style={styles.emptySubtitle}>
-            You don't have any active trips at the moment. Check back later or contact your driver.
+            {assignedBus
+              ? "Your bus doesn't have an active trip. Wait for the driver to start a trip."
+              : "You don't have any active trips at the moment. Check back later or contact your driver."
+            }
           </Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.refreshButton}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1617,20 +1822,115 @@ export function ConductorScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar style={theme === "dark" ? "light" : "dark"} />
+      <StatusBar style="light" />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <Ionicons name="person-circle" size={28} color="#fff" />
-          <Text style={styles.headerTitle}>Conductor Dashboard</Text>
+      {/* Premium Gradient Header */}
+      <LinearGradient
+        colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        <View style={styles.headerTop}>
+          <View style={styles.headerContent}>
+            <View style={styles.headerIconBg}>
+              <Ionicons name="bus" size={24} color="#0891B2" />
+            </View>
+            <View style={styles.headerTextContainer}>
+              <Text style={styles.headerTitle}>Conductor Dashboard</Text>
+              <Text style={styles.headerSubtitle}>
+                {currentTrip?.buses?.plate_number || "Unknown Plate"} • {currentTrip?.buses?.routes?.name || "Unknown Route"}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.tripStatusBadge}>
+            <View style={[styles.statusPulse, { backgroundColor: currentTrip?.status === "ongoing" ? "#34C759" : "#FF9500" }]} />
+            <Text style={styles.tripStatusText}>
+              {currentTrip?.status === "ongoing" ? "Active" : "Waiting"}
+            </Text>
+          </View>
         </View>
-        <Text style={styles.headerSubtitle}>
-          {currentTrip?.buses?.plate_number || "Unknown Plate"} • {currentTrip?.buses?.routes?.name || "Unknown Route"}
-        </Text>
-      </View>
 
-      <ScrollView>
+        {/* Quick Stats Row */}
+        <View style={styles.headerStats}>
+          <View style={styles.statItem}>
+            <View style={styles.statIconBg}>
+              <Ionicons name="people" size={18} color="#0891B2" />
+            </View>
+            <View>
+              <Text style={styles.statValue}>{passengerCount}</Text>
+              <Text style={styles.statLabel}>Passengers</Text>
+            </View>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <View style={styles.statIconBg}>
+              <Ionicons name="checkmark-circle" size={18} color="#34C759" />
+            </View>
+            <View>
+              <Text style={styles.statValue}>{passengers.filter(p => p.status === "boarded").length}</Text>
+              <Text style={styles.statLabel}>Boarded</Text>
+            </View>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <View style={styles.statIconBg}>
+              <Ionicons name="time" size={18} color="#FF9500" />
+            </View>
+            <View>
+              <Text style={styles.statValue}>{passengers.filter(p => p.status === "waiting").length}</Text>
+              <Text style={styles.statLabel}>Waiting</Text>
+            </View>
+          </View>
+        </View>
+      </LinearGradient>
+
+      <ScrollView showsVerticalScrollIndicator={false} style={styles.scrollContent}>
+        {/* Real-time Map Card */}
+        <View style={styles.mapCard}>
+          <LinearGradient
+            colors={["#0891B2", "#06B6D4"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.mapHeader}
+          >
+            <View style={styles.mapHeaderLeft}>
+              <View style={styles.mapIconBg}>
+                <Ionicons name="navigate" size={16} color="#0891B2" />
+              </View>
+              <Text style={styles.mapTitle}>Live Location</Text>
+            </View>
+            <View style={[styles.gpsIndicator, { backgroundColor: busLocation ? "rgba(52, 199, 89, 0.2)" : "rgba(255, 59, 48, 0.2)" }]}>
+              <View style={[styles.gpsDot, { backgroundColor: busLocation ? "#34C759" : "#FF3B30" }]} />
+              <Text style={[styles.gpsText, { color: busLocation ? "#34C759" : "#FF3B30" }]}>
+                {busLocation ? "GPS Active" : "No Signal"}
+              </Text>
+            </View>
+          </LinearGradient>
+          <MapView
+            style={styles.map}
+            region={mapRegion}
+            onRegionChangeComplete={setMapRegion}
+            showsUserLocation={true}
+            showsMyLocationButton={true}
+          >
+            {busLocation && (
+              <Marker
+                coordinate={busLocation}
+                title="Your Bus"
+                description={assignedBus?.plate_number}
+              >
+                <View style={styles.busMarkerContainer}>
+                  <View style={styles.busMarkerPulse} />
+                  <View style={styles.busMarkerCircle}>
+                    <Ionicons name="bus" size={16} color="#fff" />
+                  </View>
+                </View>
+              </Marker>
+            )}
+          </MapView>
+        </View>
+
         {/* Trip Info Card */}
         <View style={styles.tripCard}>
           <View style={styles.tripHeader}>
@@ -1641,162 +1941,162 @@ export function ConductorScreen() {
               <Text style={styles.busPlate}>
                 {currentTrip?.buses?.plate_number || "Unknown Plate"}
               </Text>
-          </View>
-          <View
-            style={[
-              styles.statusBadge,
-              {
-                backgroundColor:
-                  currentTrip.status === "ongoing" ? "#E8F5E8" : "#FFF3CD",
-              },
-            ]}
-          >
-            <Ionicons
-              name={currentTrip.status === "ongoing" ? "play-circle" : "time"}
-              size={16}
-              color={currentTrip.status === "ongoing" ? "#4CAF50" : "#FF9500"}
-            />
-            <Text
+            </View>
+            <View
               style={[
-                styles.statusText,
+                styles.statusBadge,
                 {
-                  color:
-                    currentTrip.status === "ongoing" ? "#4CAF50" : "#FF9500",
+                  backgroundColor:
+                    currentTrip.status === "ongoing" ? "#E8F5E8" : "#FFF3CD",
                 },
               ]}
             >
-              {currentTrip.status === "ongoing" ? "In Progress" : "Waiting"}
-            </Text>
+              <Ionicons
+                name={currentTrip.status === "ongoing" ? "play-circle" : "time"}
+                size={16}
+                color={currentTrip.status === "ongoing" ? "#4CAF50" : "#FF9500"}
+              />
+              <Text
+                style={[
+                  styles.statusText,
+                  {
+                    color:
+                      currentTrip.status === "ongoing" ? "#4CAF50" : "#FF9500",
+                  },
+                ]}
+              >
+                {currentTrip.status === "ongoing" ? "In Progress" : "Waiting"}
+              </Text>
+            </View>
           </View>
-        </View>
 
-        <View style={styles.routeDetails}>
-          <View style={styles.routeItem}>
-            <View
-              style={[styles.locationMarker, { backgroundColor: "#4CAF50" }]}
-            >
-              <Ionicons name="location" size={12} color="#fff" />
+          <View style={styles.routeDetails}>
+            <View style={styles.routeItem}>
+              <View
+                style={[styles.locationMarker, { backgroundColor: "#4CAF50" }]}
+              >
+                <Ionicons name="location" size={12} color="#fff" />
+              </View>
+              <Text style={styles.locationText}>
+                {currentTrip.buses.routes.start_address || "Unknown Start Address"}
+              </Text>
             </View>
-            <Text style={styles.locationText}>
-              {currentTrip.buses.routes.start_address || "Unknown Start Address"}
+            <View style={styles.routeItem}>
+              <View
+                style={[styles.locationMarker, { backgroundColor: "#FF3B30" }]}
+              >
+                <Ionicons name="location" size={12} color="#fff" />
+              </View>
+              <Text style={styles.locationText}>
+                {currentTrip.buses.routes.end_address || "Unknown End Address"}
+              </Text>
+            </View>
+          </View>
+        </View>
+        {/* Passenger Count Card */}
+        <View style={styles.passengerCountCard}>
+          <View style={styles.countHeader}>
+            <Ionicons name="people" size={24} color="#007AFF" />
+            <Text style={styles.countTitle}>Boarded Passengers</Text>
+          </View>
+          <View style={styles.countDisplay}>
+            <Text style={styles.countNumber}>{passengerCount}</Text>
+            <Text style={styles.countTotal}>
+              / {currentTrip?.buses?.capacity || "0"}
             </Text>
           </View>
-          <View style={styles.routeItem}>
-            <View
-              style={[styles.locationMarker, { backgroundColor: "#FF3B30" }]}
-            >
-              <Ionicons name="location" size={12} color="#fff" />
+
+          {/* Capacity Progress Bar */}
+          <View style={styles.capacityProgress}>
+            <View style={styles.progressBarContainer}>
+              <Animated.View
+                style={[
+                  styles.progressBar,
+                  {
+                    width: `${Math.min((passengerCount / (currentTrip?.buses?.capacity || 1)) * 100, 100)}%`,
+                    backgroundColor:
+                      passengerCount / (currentTrip?.buses?.capacity || 1) >= 0.9
+                        ? "#FF3B30"
+                        : passengerCount / (currentTrip?.buses?.capacity || 1) >= 0.7
+                          ? "#FF9500"
+                          : "#34C759"
+                  }
+                ]}
+              />
             </View>
-            <Text style={styles.locationText}>
-              {currentTrip.buses.routes.end_address || "Unknown End Address"}
+            <Text style={styles.capacityText}>
+              {Math.round((passengerCount / (currentTrip?.buses?.capacity || 1)) * 100)}% Capacity
             </Text>
           </View>
-        </View>
-      </View>
-      {/* Passenger Count Card */}
-      <View style={styles.passengerCountCard}>
-        <View style={styles.countHeader}>
-          <Ionicons name="people" size={24} color="#007AFF" />
-          <Text style={styles.countTitle}>Boarded Passengers</Text>
-        </View>
-        <View style={styles.countDisplay}>
-          <Text style={styles.countNumber}>{passengerCount}</Text>
-          <Text style={styles.countTotal}>
-            / {currentTrip?.buses?.capacity || "0"}
-          </Text>
-        </View>
-        
-        {/* Capacity Progress Bar */}
-        <View style={styles.capacityProgress}>
-          <View style={styles.progressBarContainer}>
-            <Animated.View 
+
+          {/* Show waiting passengers count if any */}
+          {passengers.filter((p) => p.status === "waiting").length > 0 ? (
+            <View style={styles.waitingBanner}>
+              <Ionicons name="alert-circle" size={20} color="#FF9500" />
+              <Text style={styles.waitingText}>
+                {passengers
+                  .filter((p) => p.status === "waiting")
+                  .reduce((sum, p) => sum + (p.passenger_count || 1), 0)}
+                {" "}passenger(s) waiting to board - Scan QR to board
+              </Text>
+            </View>
+          ) : null}
+          <View style={styles.countActions}>
+            <TouchableOpacity
               style={[
-                styles.progressBar,
-                {
-                  width: `${Math.min((passengerCount / (currentTrip?.buses?.capacity || 1)) * 100, 100)}%`,
-                  backgroundColor: 
-                    passengerCount / (currentTrip?.buses?.capacity || 1) >= 0.9 
-                      ? "#FF3B30" 
-                      : passengerCount / (currentTrip?.buses?.capacity || 1) >= 0.7
-                      ? "#FF9500"
-                      : "#34C759"
-                }
+                styles.actionButton,
+                !hasPermission && styles.disabledButton
               ]}
-            />
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setShowQRScanner(true);
+              }}
+              disabled={!hasPermission}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="qr-code" size={20} color="#fff" />
+              <Text style={styles.actionButtonText}>Scan QR</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.guestButton]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setShowGuestModal(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="person-add" size={20} color="#fff" />
+              <Text style={styles.actionButtonText}>Add Guest</Text>
+            </TouchableOpacity>
           </View>
-          <Text style={styles.capacityText}>
-            {Math.round((passengerCount / (currentTrip?.buses?.capacity || 1)) * 100)}% Capacity
-          </Text>
         </View>
 
-        {/* Show waiting passengers count if any */}
-        {passengers.filter((p) => p.status === "waiting").length > 0 && (
-          <View style={styles.waitingBanner}>
-            <Ionicons name="alert-circle" size={20} color="#FF9500" />
-            <Text style={styles.waitingText}>
-              {passengers
-                .filter((p) => p.status === "waiting")
-                .reduce((sum, p) => sum + (p.passenger_count || 1), 0)}
-              passenger(s) waiting to board - Scan QR to board
+        {/* Passengers List */}
+        <View style={styles.passengersSection}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              All Passengers ({passengers.length})
             </Text>
+            <TouchableOpacity
+              style={styles.reloadButton}
+              onPress={fetchCurrentTrip}
+              disabled={loading}
+            >
+              <Ionicons
+                name="refresh"
+                size={20}
+                color={loading ? "#8e8e93" : "#007AFF"}
+              />
+            </TouchableOpacity>
           </View>
-        )}
-        <View style={styles.countActions}>
-          <TouchableOpacity
-            style={[
-              styles.actionButton,
-              !hasPermission && styles.disabledButton
-            ]}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              setShowQRScanner(true);
-            }}
-            disabled={!hasPermission}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="qr-code" size={20} color="#fff" />
-            <Text style={styles.actionButtonText}>Scan QR</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.guestButton]}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              setShowGuestModal(true);
-            }}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="person-add" size={20} color="#fff" />
-            <Text style={styles.actionButtonText}>Add Guest</Text>
-          </TouchableOpacity>
+          <ScrollView style={styles.passengersList} showsVerticalScrollIndicator={true}>
+            {passengers.map((item) => (
+              <View key={item.id} style={styles.passengerItem}>
+                {renderPassengerItem({ item })}
+              </View>
+            ))}
+          </ScrollView>
         </View>
-      </View>
-      
-      {/* Passengers List */}
-      <View style={styles.passengersSection}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>
-            All Passengers ({passengers.length})
-          </Text>
-          <TouchableOpacity
-            style={styles.reloadButton}
-            onPress={fetchCurrentTrip}
-            disabled={loading}
-          >
-            <Ionicons 
-              name="refresh" 
-              size={20} 
-              color={loading ? "#8e8e93" : "#007AFF"} 
-            />
-          </TouchableOpacity>
-        </View>
-        <ScrollView style={styles.passengersList} showsVerticalScrollIndicator={true}>
-          {passengers.map((item) => (
-            <View key={item.id} style={styles.passengerItem}>
-              {renderPassengerItem({ item })}
-            </View>
-          ))}
-        </ScrollView>
-      </View>
       </ScrollView>
 
       {/* QR Scanner Modal */}
@@ -1819,7 +2119,7 @@ export function ConductorScreen() {
             </TouchableOpacity>
             <View style={styles.scannerHeaderContent}>
               <Text style={styles.scannerTitle}>Scan QR Code</Text>
-              <Text style={styles.scannerSubtitle}>Position passenger's QR code within the frame</Text>
+              <Text style={styles.scannerSubtitle}>Position passenger&apos;s QR code within the frame</Text>
             </View>
           </View>
 
@@ -1849,11 +2149,11 @@ export function ConductorScreen() {
                 <View style={styles.scannerFrame}>
 
                   {/* Corner indicators */}
-                  <View style={[styles.corner, styles.topLeft]}/>
-                  <View style={[styles.corner, styles.topRight]}/>
-                  <View style={[styles.corner, styles.bottomLeft]}/>
-                  <View style={[styles.corner, styles.bottomRight]}/>
-                  
+                  <View style={[styles.corner, styles.topLeft]} />
+                  <View style={[styles.corner, styles.topRight]} />
+                  <View style={[styles.corner, styles.bottomLeft]} />
+                  <View style={[styles.corner, styles.bottomRight]} />
+
                   <Animated.View
                     style={[
                       styles.scanLine,
@@ -1883,61 +2183,133 @@ export function ConductorScreen() {
         </View>
       </Modal>
 
-      {/* Guest Passenger Modal */}
+      {/* Guest Passenger Modal - Enhanced */}
       <Modal
         visible={showGuestModal}
         transparent={true}
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setShowGuestModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <Text style={styles.modalTitle}>Add Guest Passengers</Text>
-            <Text style={styles.modalSubtitle}>
-              How many guests are boarding without using the app?
-            </Text>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Number of Guests</Text>
-              <View style={styles.numberInput}>
-                <TouchableOpacity
-                  style={styles.numberButton}
-                  onPress={() => setGuestCount(Math.max(1, guestCount - 1))}
-                >
-                  <Ionicons name="remove" size={20} color="#007AFF" />
-                </TouchableOpacity>
-                <Text style={styles.numberDisplay}>{guestCount}</Text>
-                <TouchableOpacity
-                  style={styles.numberButton}
-                  onPress={() =>
-                    setGuestCount(
-                      Math.min(
-                        currentTrip.buses.capacity - passengerCount,
-                        guestCount + 1
-                      )
-                    )
-                  }
-                >
-                  <Ionicons name="add" size={20} color="#007AFF" />
-                </TouchableOpacity>
+        <View style={styles.guestModalOverlay}>
+          <View style={styles.guestModalContainer}>
+            {/* Modal Header with Gradient */}
+            <LinearGradient
+              colors={["#0891B2", "#06B6D4"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.guestModalHeader}
+            >
+              <View style={styles.guestModalIconBg}>
+                <Ionicons name="people" size={28} color="#0891B2" />
               </View>
-            </View>
-
-            <View style={styles.modalActions}>
+              <View style={styles.guestModalHeaderText}>
+                <Text style={styles.guestModalTitle}>Add Guests</Text>
+                <Text style={styles.guestModalSubtitle}>Walk-on passengers</Text>
+              </View>
               <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
+                style={styles.guestModalClose}
                 onPress={() => {
                   setShowGuestModal(false);
                   setGuestCount(1);
                 }}
               >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </LinearGradient>
+
+            {/* Modal Content */}
+            <View style={styles.guestModalContent}>
+              <Text style={styles.guestModalDescription}>
+                How many guests are boarding without using the app?
+              </Text>
+
+              {/* Number Picker */}
+              <View style={styles.guestNumberPicker}>
+                <TouchableOpacity
+                  style={styles.guestNumberButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setGuestCount(Math.max(1, guestCount - 1));
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="remove" size={28} color="#0891B2" />
+                </TouchableOpacity>
+
+                <View style={styles.guestNumberDisplay}>
+                  <Text style={styles.guestNumberValue}>{guestCount}</Text>
+                  <Text style={styles.guestNumberLabel}>
+                    {guestCount === 1 ? "guest" : "guests"}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.guestNumberButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setGuestCount(
+                      Math.min(
+                        currentTrip.buses.capacity - passengerCount,
+                        guestCount + 1
+                      )
+                    );
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="add" size={28} color="#0891B2" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Capacity Indicator */}
+              <View style={styles.guestCapacityInfo}>
+                <View style={styles.guestCapacityRow}>
+                  <Ionicons name="bus-outline" size={16} color="#64748B" />
+                  <Text style={styles.guestCapacityText}>
+                    {passengerCount + guestCount} / {currentTrip?.buses?.capacity || 0} seats after adding
+                  </Text>
+                </View>
+                <View style={styles.guestCapacityBar}>
+                  <View
+                    style={[
+                      styles.guestCapacityFill,
+                      {
+                        width: `${Math.min(((passengerCount + guestCount) / (currentTrip?.buses?.capacity || 1)) * 100, 100)}%`,
+                        backgroundColor: (passengerCount + guestCount) / (currentTrip?.buses?.capacity || 1) > 0.9 ? "#EF4444" : "#0891B2"
+                      }
+                    ]}
+                  />
+                </View>
+              </View>
+            </View>
+
+            {/* Modal Actions */}
+            <View style={styles.guestModalActions}>
+              <TouchableOpacity
+                style={styles.guestCancelButton}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowGuestModal(false);
+                  setGuestCount(1);
+                }}
+              >
+                <Text style={styles.guestCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={addGuestPassenger}
+                style={styles.guestConfirmButton}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  addGuestPassenger();
+                }}
               >
-                <Text style={styles.confirmButtonText}>Add Guests</Text>
+                <LinearGradient
+                  colors={["#0891B2", "#06B6D4"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.guestConfirmGradient}
+                >
+                  <Ionicons name="person-add" size={18} color="#fff" />
+                  <Text style={styles.guestConfirmText}>Add {guestCount} Guest{guestCount > 1 ? "s" : ""}</Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
@@ -2032,8 +2404,7 @@ export function ConductorScreen() {
               <Text style={styles.notificationMessage}>
                 {notificationData.name}
                 {notificationData.count > 1 &&
-                  ` (+${notificationData.count - 1} guest${
-                    notificationData.count > 2 ? "s" : ""
+                  ` (+${notificationData.count - 1} guest${notificationData.count > 2 ? "s" : ""
                   })`}
               </Text>
             </View>
@@ -2056,18 +2427,18 @@ export function ConductorScreen() {
           }}
           activeOpacity={0.8}
         >
-        <Ionicons 
-          name={_pendingPickups.length > 0 ? "notifications" : "notifications-outline"} 
-          size={20} 
-          color="#fff" 
-        />
-        <Text style={styles.showRequestsButtonText}>
-          Pending Requests {_pendingPickups.length > 0 && `(${_pendingPickups.length})`}
-        </Text>
-        {_pendingPickups.length > 0 && (
-          <View style={styles.requestsBadge}>
-            <Text style={styles.requestsBadgeText}>{_pendingPickups.length}</Text>
-          </View>        )}
+          <Ionicons
+            name={_pendingPickups.length > 0 ? "notifications" : "notifications-outline"}
+            size={20}
+            color="#fff"
+          />
+          <Text style={styles.showRequestsButtonText}>
+            Pending Requests {_pendingPickups.length > 0 && `(${_pendingPickups.length})`}
+          </Text>
+          {_pendingPickups.length > 0 && (
+            <View style={styles.requestsBadge}>
+              <Text style={styles.requestsBadgeText}>{_pendingPickups.length}</Text>
+            </View>)}
         </TouchableOpacity>
       </Animated.View>
 
@@ -2080,7 +2451,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f2f2f7",
-  },  loadingContainer: {
+  }, loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
@@ -2108,36 +2479,275 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: "#007AFF",
     opacity: 0.3,
-  },header: {
-    backgroundColor: "#007AFF",
-    paddingTop: 20,
-    paddingBottom: 24,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    marginBottom: 20,
-    elevation: 8,
-    shadowColor: "#007AFF",
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
+  },
+  // Enhanced Loading Screen Styles
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: "#0891B2",
+  },
+  loadingGradient: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 40,
+  },
+  loadingIconContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 32,
+  },
+  loadingIconBg: {
+    width: 110,
+    height: 110,
+    borderRadius: 30,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
+  },
+  loadingPulseRing: {
+    position: "absolute",
+    width: 130,
+    height: 130,
+    borderRadius: 35,
+    borderWidth: 3,
+    borderColor: "rgba(255, 255, 255, 0.3)",
+  },
+  loadingTitle: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: "#fff",
+    textAlign: "center",
+    marginBottom: 8,
+    letterSpacing: -0.5,
+  },
+  loadingSubtitle: {
+    fontSize: 16,
+    color: "rgba(255, 255, 255, 0.85)",
+    textAlign: "center",
+    fontWeight: "500",
+    marginBottom: 40,
+  },
+  loadingIndicatorContainer: {
+    marginBottom: 30,
+  },
+  loadingDotsContainer: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  loadingDotActive: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#fff",
+  },
+  loadingDotInactive: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+  },
+  mapCard: {
+    height: 180,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 16,
+    overflow: "hidden",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  mapHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  mapHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  mapIconBg: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  mapTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.3,
+  },
+  gpsIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    gap: 6,
+  },
+  gpsDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  gpsText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  map: {
+    flex: 1,
+    minHeight: 140,
+  },
+  busMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  busMarkerPulse: {
+    position: "absolute",
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(0, 122, 255, 0.2)",
+  },
+  busMarkerCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#0891B2",
+    borderWidth: 2,
+    borderColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+  },
+  header: {
+    paddingTop: 16,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    elevation: 12,
+    shadowColor: "#0891B2",
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    marginBottom: 10,
+  },
+  headerTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 10,
   },
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    flex: 1,
+  },
+  headerIconBg: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  headerTextContainer: {
+    flex: 1,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
+    fontSize: 20,
+    fontWeight: "800",
     color: "#fff",
-    marginLeft: 12,
+    letterSpacing: -0.3,
+    marginBottom: 10,
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.85)",
+    fontWeight: "600",
+  },
+  tripStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  statusPulse: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  tripStatusText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  headerStats: {
+    flexDirection: "row",
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 16,
+    padding: 14,
+    justifyContent: "space-around",
+  },
+  statItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  statIconBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#fff",
+  },
+  statLabel: {
+    fontSize: 11,
     color: "rgba(255, 255, 255, 0.8)",
-    fontWeight: "500",
-  },  emptyState: {
+    fontWeight: "600",
+  },
+  statDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  },
+  scrollContent: {
+    flex: 1,
+    marginTop: -10,
+  }, emptyState: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
@@ -2183,6 +2793,115 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#007AFF",
+  },
+  assignedBusCard: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 20,
+    marginHorizontal: 20,
+    marginTop: 10,
+    marginBottom: 20,
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E3F2FD",
+  },
+  assignedBusHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  assignedBusIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#F0F8FF",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 16,
+  },
+  assignedBusInfo: {
+    flex: 1,
+  },
+  assignedBusTitle: {
+    fontSize: 13,
+    color: "#8e8e93",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  assignedBusPlate: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#1c1c1e",
+  },
+  capacityBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f2f2f7",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  capacityBadgeText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8e8e93",
+    marginLeft: 4,
+  },
+  assignedBusRoute: {
+    backgroundColor: "#f8faff",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#eef2ff",
+  },
+  routeInfoIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#eef2ff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  routeInfoDetails: {
+    flex: 1,
+  },
+  routeInfoName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#007AFF",
+  },
+  routeStops: {
+    marginLeft: 4,
+  },
+  routeStopItem: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  routeStopDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 12,
+  },
+  routeStopText: {
+    fontSize: 13,
+    color: "#1c1c1e",
+    fontWeight: "500",
+    flex: 1,
+  },
+  routeConnector: {
+    width: 2,
+    height: 12,
+    backgroundColor: "#eef2ff",
+    marginLeft: 3,
+    marginVertical: 4,
   },
   tripCard: {
     backgroundColor: "#fff",
@@ -2282,7 +3001,7 @@ const styles = StyleSheet.create({
     fontSize: 48,
     fontWeight: "bold",
     color: "#007AFF",
-  },  countTotal: {
+  }, countTotal: {
     fontSize: 24,
     color: "#8e8e93",
     marginLeft: 8,
@@ -2296,7 +3015,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: "hidden",
     marginBottom: 8,
-  },  progressBar: {
+  }, progressBar: {
     height: "100%",
     borderRadius: 4,
   },
@@ -2333,7 +3052,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-  },  guestButton: {
+  }, guestButton: {
     backgroundColor: "#34C759",
   },
   disabledButton: {
@@ -2345,7 +3064,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     marginLeft: 8,
-  },  passengersSection: {
+  }, passengersSection: {
     flex: 1,
     marginHorizontal: 20,
   },
@@ -2404,7 +3123,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#8e8e93",
     marginBottom: 2,
-  },  passengerContact: {
+  }, passengerContact: {
     fontSize: 12,
     color: "#8e8e93",
   },
@@ -2478,7 +3197,7 @@ const styles = StyleSheet.create({
   scannerContainer: {
     flex: 1,
     backgroundColor: "#000",
-  },  scannerHeader: {
+  }, scannerHeader: {
     flexDirection: "row",
     alignItems: "center",
     paddingTop: 50,
@@ -2533,7 +3252,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: "center",
     alignItems: "center",
-  },  scannerFrame: {
+  }, scannerFrame: {
     width: 280,
     height: 280,
     borderRadius: 16,
@@ -2755,7 +3474,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#ffffff",
-  },  notificationContainer: {
+  }, notificationContainer: {
     position: "absolute",
     top: 60,
     left: 20,
@@ -2775,7 +3494,7 @@ const styles = StyleSheet.create({
   notificationContent: {
     flexDirection: "row",
     alignItems: "center",
-  },  notificationIcon: {
+  }, notificationIcon: {
     width: 48,
     height: 48,
     borderRadius: 24,
@@ -2788,7 +3507,7 @@ const styles = StyleSheet.create({
   },
   notificationText: {
     flex: 1,
-  },  notificationTitle: {
+  }, notificationTitle: {
     fontSize: 18,
     fontWeight: "800",
     color: "#fff",
@@ -2799,22 +3518,23 @@ const styles = StyleSheet.create({
     color: "rgba(255, 255, 255, 0.95)",
     fontWeight: "600",
     lineHeight: 20,
-  },showRequestsButton: {
-    backgroundColor: "#007AFF",
-    borderRadius: 12,
+  },
+  showRequestsButton: {
+    backgroundColor: "#0891B2",
+    borderRadius: 16,
     paddingVertical: 16,
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     marginHorizontal: 20,
-    marginBottom: 16,
-    shadowColor: "#007AFF",
+    marginBottom: 90, // Increased to account for bottom navbar
+    shadowColor: "#0891B2",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-    gap: 8,
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 6,
+    gap: 10,
     position: "relative",
   },
   showRequestsButtonActive: {
@@ -2843,7 +3563,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: "#fff",
-  },  modalHeader: {
+  }, modalHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -2969,7 +3689,7 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     flex: 1,
     lineHeight: 20,
-  },  locationInfo: {
+  }, locationInfo: {
     backgroundColor: "#F8F9FA",
     borderRadius: 12,
     padding: 12,
@@ -3009,7 +3729,7 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "#E5E5EA",
     marginVertical: 10,
-  },  viewMapButton: {
+  }, viewMapButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3223,16 +3943,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#f2f2f7",
   },
-  map: {
-    flex: 1,
-  },
   cardShadow: {
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
-  },  buttonShadow: {
+  }, buttonShadow: {
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -3516,7 +4233,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     letterSpacing: 0.3,
-  },  acceptButtonGlow: {
+  },
+  acceptButtonGlow: {
     position: "absolute",
     top: -2,
     left: -2,
@@ -3525,6 +4243,419 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(52, 199, 89, 0.3)",
     borderRadius: 18,
     zIndex: -1,
+  },
+  // Enhanced Guest Modal Styles
+  guestModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  guestModalContainer: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: -10 },
+    elevation: 20,
+  },
+  guestModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+  },
+  guestModalIconBg: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  guestModalHeaderText: {
+    flex: 1,
+  },
+  guestModalTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#fff",
+    marginBottom: 2,
+  },
+  guestModalSubtitle: {
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.8)",
+    fontWeight: "500",
+  },
+  guestModalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  guestModalContent: {
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 16,
+  },
+  guestModalDescription: {
+    fontSize: 15,
+    color: "#64748B",
+    textAlign: "center",
+    marginBottom: 28,
+    lineHeight: 22,
+  },
+  guestNumberPicker: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 28,
+    gap: 24,
+  },
+  guestNumberButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 16,
+    backgroundColor: "#F0FDFA",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#0891B2",
+  },
+  guestNumberDisplay: {
+    alignItems: "center",
+    minWidth: 80,
+  },
+  guestNumberValue: {
+    fontSize: 48,
+    fontWeight: "800",
+    color: "#0891B2",
+    lineHeight: 56,
+  },
+  guestNumberLabel: {
+    fontSize: 14,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  guestCapacityInfo: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    padding: 16,
+  },
+  guestCapacityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  guestCapacityText: {
+    fontSize: 13,
+    color: "#64748B",
+    fontWeight: "500",
+  },
+  guestCapacityBar: {
+    height: 8,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  guestCapacityFill: {
+    height: "100%",
+    borderRadius: 4,
+  },
+  guestModalActions: {
+    flexDirection: "row",
+    padding: 20,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#F1F5F9",
+  },
+  guestCancelButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+  },
+  guestCancelText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  guestConfirmButton: {
+    flex: 2,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  guestConfirmGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    gap: 8,
+  },
+  guestConfirmText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  // Enhanced Pickup Request Styles
+  pickupRequestsContainer: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+  pickupRequestsHeader: {
+    paddingTop: 50,
+    paddingBottom: 24,
+    paddingHorizontal: 20,
+  },
+  pickupHeaderContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  pickupHeaderIconBg: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  pickupHeaderTextContainer: {
+    flex: 1,
+  },
+  pickupHeaderTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#fff",
+    marginBottom: 4,
+  },
+  pickupHeaderSubtitle: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.85)",
+    fontWeight: "600",
+  },
+  pickupHeaderClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pickupRequestsList: {
+    padding: 16,
+    paddingBottom: 100,
+  },
+  pickupRequestCard: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  pickupCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 16,
+  },
+  pickupCommuterInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  pickupAvatarContainer: {
+    marginRight: 12,
+  },
+  pickupAvatarGradient: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pickupCommuterDetails: {
+    flex: 1,
+  },
+  pickupCommuterName: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#1E293B",
+    marginBottom: 4,
+  },
+  pickupPassengerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F0FDFA",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+    gap: 4,
+  },
+  pickupPassengerText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#0891B2",
+  },
+  pickupStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF7ED",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    gap: 6,
+  },
+  pickupStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#F97316",
+  },
+  pickupStatusText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#F97316",
+  },
+  pickupNotesContainer: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#F1F5F9",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 8,
+  },
+  pickupNotesText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#64748B",
+    lineHeight: 18,
+  },
+  pickupLocationCard: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  pickupLocationRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  pickupLocationIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  pickupLocationDetails: {
+    flex: 1,
+  },
+  pickupLocationLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748B",
+    marginBottom: 2,
+  },
+  pickupLocationCoords: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#1E293B",
+  },
+  pickupLocationConnector: {
+    marginLeft: 16,
+    paddingVertical: 8,
+  },
+  pickupConnectorLine: {
+    width: 2,
+    height: 20,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 1,
+  },
+  pickupViewMapButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F0FDFA",
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 8,
+  },
+  pickupViewMapText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0891B2",
+  },
+  pickupActionButtons: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  pickupDeclineButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FEF2F2",
+    paddingVertical: 14,
+    borderRadius: 14,
+    gap: 6,
+  },
+  pickupDeclineText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#EF4444",
+  },
+  pickupAcceptButton: {
+    flex: 2,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  pickupAcceptGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    gap: 8,
+  },
+  pickupAcceptText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  pickupEmptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 80,
+  },
+  pickupEmptyIcon: {
+    marginBottom: 20,
+  },
+  pickupEmptyTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#1E293B",
+    marginBottom: 8,
+  },
+  pickupEmptyMessage: {
+    fontSize: 15,
+    color: "#64748B",
+    textAlign: "center",
   },
 });
 

@@ -6,8 +6,7 @@ export default {
     slug: "miniway",
     version: "1.0.0",
     orientation: "portrait",
-    icon: "./assets/images/icon.png",
-    scheme: "miniway",
+    icon: "./assets/images/icon.png",    scheme: "miniway",
     userInterfaceStyle: "automatic",
     newArchEnabled: false,
     ios: {

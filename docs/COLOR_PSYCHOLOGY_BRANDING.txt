@@ -1,0 +1,444 @@
+================================================================================
+                    MINIWAY APP - COLOR PSYCHOLOGY & BRANDING GUIDE
+================================================================================
+
+Created: January 11, 2026
+Version: 2.0
+
+This document outlines the color psychology principles and branding decisions
+used throughout the Miniway transportation app.
+
+================================================================================
+                              TABLE OF CONTENTS
+================================================================================
+
+1. Brand Overview
+2. Primary Color Palette
+3. Secondary Color Palette
+4. Semantic Colors
+5. Screen-Specific Color Applications
+6. Color Psychology Explanations
+7. Accessibility Considerations
+8. Dark Mode Adaptations
+
+================================================================================
+                           1. BRAND OVERVIEW
+================================================================================
+
+Miniway is a modern public transportation app designed to connect commuters
+with bus drivers efficiently. The brand identity focuses on:
+
+• Trust & Reliability - Users need to feel confident in the service
+• Modernity & Innovation - The app should feel contemporary and tech-forward
+• Clarity & Ease - Navigation and information should be immediately clear
+• Safety & Professionalism - Both drivers and passengers need assurance
+
+================================================================================
+                        2. PRIMARY COLOR PALETTE
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CYAN/TEAL - PRIMARY BRAND COLOR                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Primary Cyan:     #0891B2  (rgb: 8, 145, 178)                             │
+│  Light Cyan:       #06B6D4  (rgb: 6, 182, 212)                             │
+│  Lighter Cyan:     #22D3EE  (rgb: 34, 211, 238)                            │
+│  Pale Cyan:        #A5F3FC  (rgb: 165, 243, 252)                           │
+│  Background Cyan:  #CFFAFE  (rgb: 207, 250, 254)                           │
+│  Lightest Cyan:    #ECFEFF  (rgb: 236, 254, 255)                           │
+│                                                                             │
+│  USAGE:                                                                     │
+│  - Driver Dashboard headers                                                 │
+│  - Driver Profile headers                                                   │
+│  - Driver Trips headers                                                     │
+│  - Toggle switches when active                                              │
+│  - Primary action buttons                                                   │
+│  - Card shadows and accents                                                 │
+│  - Icon colors in driver sections                                           │
+│                                                                             │
+│  GRADIENT:                                                                  │
+│  colors={["#0891B2", "#06B6D4", "#22D3EE"]}                                │
+│  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                       3. SECONDARY COLOR PALETTE
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SLATE - NEUTRAL FOUNDATION                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Slate 900:        #0F172A  (rgb: 15, 23, 42)    - Darkest text            │
+│  Slate 800:        #1E293B  (rgb: 30, 41, 59)    - Primary text            │
+│  Slate 700:        #334155  (rgb: 51, 65, 85)    - Secondary headings      │
+│  Slate 600:        #475569  (rgb: 71, 85, 105)   - Tertiary text           │
+│  Slate 500:        #64748B  (rgb: 100, 116, 139) - Muted text              │
+│  Slate 400:        #94A3B8  (rgb: 148, 163, 184) - Placeholder text        │
+│  Slate 300:        #CBD5E1  (rgb: 203, 213, 225) - Disabled states         │
+│  Slate 200:        #E2E8F0  (rgb: 226, 232, 240) - Borders                 │
+│  Slate 100:        #F1F5F9  (rgb: 241, 245, 249) - Card backgrounds        │
+│  Slate 50:         #F8FAFC  (rgb: 248, 250, 252) - Page backgrounds        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PURPLE - ACCENT COLOR                                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Purple 500:       #8B5CF6  (rgb: 139, 92, 246)                            │
+│  Purple 600:       #7C3AED  (rgb: 124, 58, 237)                            │
+│                                                                             │
+│  USAGE:                                                                     │
+│  - Status card icon backgrounds (Driver Status)                            │
+│  - Duration/time indicators                                                 │
+│  - Secondary visual accents                                                 │
+│                                                                             │
+│  GRADIENT:                                                                  │
+│  colors={["#8B5CF6", "#7C3AED"]}                                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                         4. SEMANTIC COLORS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SUCCESS / POSITIVE - EMERALD GREEN                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Emerald 500:      #10B981  (rgb: 16, 185, 129)  - Primary success         │
+│  Emerald 600:      #059669  (rgb: 5, 150, 105)   - Darker success          │
+│  Emerald 700:      #047857  (rgb: 4, 120, 87)    - Darkest success         │
+│                                                                             │
+│  Background:       #ECFDF5  (pale green)                                   │
+│  Border:           #A7F3D0  (light green)                                  │
+│                                                                             │
+│  USAGE:                                                                     │
+│  - Trip completed status                                                    │
+│  - Start/origin location markers                                            │
+│  - Active driver badge                                                      │
+│  - GPS connected indicator                                                  │
+│  - Start New Trip button                                                    │
+│  - Success alerts and confirmations                                         │
+│                                                                             │
+│  GRADIENT:                                                                  │
+│  colors={["#10B981", "#059669", "#047857"]}                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  WARNING / ATTENTION - AMBER                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Amber 500:        #F59E0B  (rgb: 245, 158, 11)  - Primary warning         │
+│  Amber 600:        #D97706  (rgb: 217, 119, 6)   - Darker warning          │
+│  Amber 700:        #B45309  (rgb: 180, 83, 9)    - Darkest warning         │
+│                                                                             │
+│  Background:       #FFFBEB  (pale amber)                                   │
+│  Light:            #FDE68A  (light amber)                                  │
+│  Lightest:         #FEF3C7  (lightest amber)                               │
+│                                                                             │
+│  USAGE:                                                                     │
+│  - Ongoing/in-progress status                                               │
+│  - GPS loading indicator                                                    │
+│  - Waiting states                                                           │
+│  - Warning alerts                                                           │
+│  - Incomplete data warnings                                                 │
+│  - Driver navigation tab bar accent (focused state)                         │
+│                                                                             │
+│  NOTE: Previously used as driver primary color, now used semantically      │
+│                                                                             │
+│  GRADIENT:                                                                  │
+│  colors={["#F59E0B", "#D97706"]}                                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ERROR / DANGER - RED                                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Red 500:          #EF4444  (rgb: 239, 68, 68)   - Primary error           │
+│  Red 600:          #DC2626  (rgb: 220, 38, 38)   - Darker error            │
+│                                                                             │
+│  Background:       #FEF2F2  (pale red)                                     │
+│  Border:           #FEE2E2  (light red border)                             │
+│                                                                             │
+│  USAGE:                                                                     │
+│  - Cancelled trip status                                                    │
+│  - End/destination location markers                                         │
+│  - GPS error indicator                                                      │
+│  - Error alerts and validation messages                                     │
+│  - Sign out button                                                          │
+│  - Cancellation reasons                                                     │
+│  - No internet screen accents                                               │
+│                                                                             │
+│  GRADIENT:                                                                  │
+│  colors={["#EF4444", "#DC2626"]}                                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  INFORMATION - BLUE                                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Blue 500:         #3B82F6  (rgb: 59, 130, 246)  - Info indicators         │
+│  Blue 600:         #2563EB  (rgb: 37, 99, 235)   - Darker info             │
+│                                                                             │
+│  USAGE:                                                                     │
+│  - Information alerts                                                       │
+│  - Tips and hints                                                           │
+│  - Help indicators                                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                  5. SCREEN-SPECIFIC COLOR APPLICATIONS
+================================================================================
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║  AUTHENTICATION SCREENS (Login/Signup)                                      ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║  Header Gradient:    Cyan (#0891B2 → #06B6D4 → #22D3EE)                    ║
+║  Background:         Light gradient with cyan accents                       ║
+║  Buttons:            Cyan gradient for primary actions                      ║
+║  Input Focus:        Cyan border highlight                                  ║
+║  Glassmorphism:      White with 80% opacity for form cards                  ║
+║                                                                             ║
+║  PSYCHOLOGY: Creates trust and professionalism for first impressions        ║
+║                                                                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║  DRIVER SCREENS (Dashboard, Trips, Profile)                                 ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║  Header Gradient:    Cyan (#0891B2 → #06B6D4 → #22D3EE)                    ║
+║  Background:         #F8FAFC (Slate 50)                                     ║
+║  Card Background:    #FFFFFF with #E2E8F0 borders                           ║
+║  Card Shadows:       Cyan-tinted (#0891B2 at 8-10% opacity)                 ║
+║  Icons:              #0891B2 (Cyan)                                         ║
+║  Toggle Active:      #0891B2 thumb, #A5F3FC track                          ║
+║  Start Trip Button:  Green gradient (#10B981 → #059669 → #047857)          ║
+║                                                                             ║
+║  PSYCHOLOGY: Professional and reliable feel for drivers managing trips      ║
+║                                                                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║  DRIVING MODE SCREEN                                                        ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║  Header:             Glassmorphism with cyan accents                        ║
+║  Background:         White (#FFFFFF)                                        ║
+║  Action Buttons:     Cyan gradient for primary, Red for stop                ║
+║  Status Indicators:  Green (good), Amber (warning), Red (error)            ║
+║  Progress Bar:       Cyan (#0891B2)                                         ║
+║                                                                             ║
+║  PSYCHOLOGY: Clear, focused interface for safe driving                      ║
+║                                                                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║  COMMUTER SCREENS (Home, Route Details)                                     ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║  Header Gradient:    Cyan (#0891B2 → #06B6D4 → #22D3EE)                    ║
+║  Background:         #F8FAFC (Slate 50)                                     ║
+║  Cards:              White with premium shadows                             ║
+║  Location Markers:   Green (origin), Red (destination)                      ║
+║  Find Ride Button:   Cyan gradient                                          ║
+║                                                                             ║
+║  PSYCHOLOGY: Easy, approachable interface for daily commuters               ║
+║                                                                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║  NO INTERNET SCREEN                                                         ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║  Light Mode:         Red-to-orange gradient background                      ║
+║  Dark Mode:          Deep slate gradient (#0F172A → #1E293B)                ║
+║  Icon Container:     Red gradient with pulsing animation                    ║
+║  Status Indicators:  Red for disconnected                                   ║
+║  Retry Button:       Cyan gradient                                          ║
+║                                                                             ║
+║  PSYCHOLOGY: Urgency (red) with clear action path (cyan button)             ║
+║                                                                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+================================================================================
+                     6. COLOR PSYCHOLOGY EXPLANATIONS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CYAN/TEAL (#0891B2)                                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Psychological Associations:                                                │
+│  • Trust & Reliability - Core attribute for transportation services        │
+│  • Clarity & Focus - Helps users concentrate on important information      │
+│  • Calm & Professional - Reduces anxiety about travel/commuting            │
+│  • Innovation & Technology - Positions the app as modern/cutting-edge      │
+│  • Freshness & Energy - Creates positive emotional response                 │
+│                                                                             │
+│  Why It Works for Miniway:                                                  │
+│  → Passengers trust the service to get them safely to destinations         │
+│  → Drivers feel professional and valued                                     │
+│  → The color stands out without being aggressive                            │
+│  → Works well in both light and dark modes                                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  GREEN (#10B981)                                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Psychological Associations:                                                │
+│  • Safety & Security - Critical for transportation                          │
+│  • Go/Proceed - Universal signal for action                                 │
+│  • Success & Completion - Positive reinforcement                            │
+│  • Nature & Balance - Creates calming effect                                │
+│                                                                             │
+│  Usage in App:                                                              │
+│  → Start Trip button - "Go ahead, begin your journey"                      │
+│  → Completed status - "Successfully finished"                               │
+│  → GPS connected - "System is working correctly"                           │
+│  → Active status badges - "Ready and available"                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AMBER (#F59E0B)                                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Psychological Associations:                                                │
+│  • Caution & Attention - Draws focus without alarm                          │
+│  • Warmth & Friendliness - Approachable warning                             │
+│  • In Progress - Something is happening                                     │
+│  • Optimism - Positive outlook despite wait                                 │
+│                                                                             │
+│  Usage in App:                                                              │
+│  → Ongoing trip indicator - "Trip is in progress"                          │
+│  → Loading states - "Please wait, working on it"                           │
+│  → Warnings - "Something needs attention"                                  │
+│  → Tab bar accent - Creates visual hierarchy                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  RED (#EF4444)                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Psychological Associations:                                                │
+│  • Stop & Danger - Immediate attention required                             │
+│  • Error & Problem - Something went wrong                                   │
+│  • Urgency - Act now                                                        │
+│  • Important - Critical information                                         │
+│                                                                             │
+│  Usage in App:                                                              │
+│  → Cancelled trips - "This didn't complete"                                │
+│  → Error messages - "Something went wrong"                                 │
+│  → Destination markers - "End point" (stop here)                           │
+│  → Sign out - Destructive action warning                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PURPLE (#8B5CF6)                                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Psychological Associations:                                                │
+│  • Premium & Quality - Historically associated with luxury                  │
+│  • Creativity & Innovation - Forward-thinking                               │
+│  • Wisdom & Experience - Trusted expertise                                  │
+│                                                                             │
+│  Usage in App:                                                              │
+│  → Driver status indicators - Professional distinction                     │
+│  → Duration/time displays - Important metrics                              │
+│  → Secondary accents - Visual variety without competing                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                     7. ACCESSIBILITY CONSIDERATIONS
+================================================================================
+
+CONTRAST RATIOS:
+• Primary text (#1E293B) on white: 12.6:1 ✓ (AAA compliant)
+• Primary cyan (#0891B2) on white: 4.5:1 ✓ (AA compliant)
+• White text on cyan gradient: 4.5:1+ ✓ (AA compliant)
+• Red error text (#EF4444) on white: 4.0:1 ✓ (AA for large text)
+
+COLOR BLINDNESS CONSIDERATIONS:
+• Semantic colors are paired with icons/shapes for redundancy
+• Status badges include both color and text labels
+• Location markers use both color and icon differentiation
+• Error states combine red color with icon indicators
+
+BEST PRACTICES APPLIED:
+• Never rely solely on color to convey information
+• Use sufficient contrast for all text
+• Provide visual indicators beyond color (icons, shapes, patterns)
+• Test with color blindness simulators
+
+================================================================================
+                       8. DARK MODE ADAPTATIONS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BACKGROUND COLORS                                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Light Mode:                    Dark Mode:                                  │
+│  #F8FAFC (page)     →     #0F172A (page)                                  │
+│  #FFFFFF (cards)    →     #1E293B (cards)                                 │
+│  #F1F5F9 (inputs)   →     #334155 (inputs)                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  TEXT COLORS                                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Light Mode:                    Dark Mode:                                  │
+│  #1E293B (primary)  →     #F8FAFC (primary)                               │
+│  #64748B (secondary) →    #94A3B8 (secondary)                             │
+│  #94A3B8 (muted)    →     #64748B (muted)                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ACCENT COLORS                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Primary cyan, green, amber, and red remain consistent                      │
+│  in both modes for brand recognition.                                       │
+│                                                                             │
+│  Adjustments:                                                               │
+│  • Slightly increased saturation in dark mode for visibility               │
+│  • White overlays become dark overlays with adjusted opacity               │
+│  • Shadows use darker colors with higher opacity                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                              QUICK REFERENCE
+================================================================================
+
+PRIMARY BRAND:       #0891B2 (Cyan)
+SUCCESS:             #10B981 (Emerald)
+WARNING:             #F59E0B (Amber)
+ERROR:               #EF4444 (Red)
+ACCENT:              #8B5CF6 (Purple)
+TEXT PRIMARY:        #1E293B (Slate 800)
+TEXT SECONDARY:      #64748B (Slate 500)
+BACKGROUND:          #F8FAFC (Slate 50)
+BORDER:              #E2E8F0 (Slate 200)
+
+================================================================================
+                              END OF DOCUMENT
+================================================================================

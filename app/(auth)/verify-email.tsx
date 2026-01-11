@@ -67,10 +67,12 @@ export default function VerifyEmailScreen() {
       }
     }
   }, [message]);
-
   // --- Verify the OTP ---
   async function handleVerifyOtp() {
     setMessage(null);
+    setShowErrorModal(false);
+    setShowSuccessModal(false);
+
     if (!otp.trim()) {
       setMessage({
         type: "error",
@@ -88,29 +90,34 @@ export default function VerifyEmailScreen() {
     }
 
     setIsLoading(true);
+    
     try {
-      // Try signup verification first, then email verification
+      console.log("Attempting to verify OTP:", otp, "for email:", email);
+      
+      // Try signup verification first
       let { data, error } = await supabase.auth.verifyOtp({
         email: email,
         token: otp,
         type: "signup",
       });
 
+      console.log("Signup verification response:", { data, error });
+
       // If signup verification fails, try email verification
-      if (error && error.message.includes("Invalid token")) {
-        console.log("Trying email verification type...");
+      if (error) {
+        console.log("Signup verification failed, trying email type...");
         const emailResult = await supabase.auth.verifyOtp({
           email: email,
           token: otp,
           type: "email",
         });
+        console.log("Email verification response:", emailResult);
         data = emailResult.data;
         error = emailResult.error;
       }
 
-      console.log("Verification response:", { data, error });
-
       if (error) {
+        console.error("Verification failed:", error);
         throw error;
       }
 
@@ -128,8 +135,17 @@ export default function VerifyEmailScreen() {
         router.replace("/(commuter)");
       }, 1000);
     } catch (error) {
+      console.error("Verification error:", error);
       if (error instanceof Error) {
-        setMessage({ type: "error", text: error.message });
+        setMessage({ 
+          type: "error", 
+          text: error.message || "Verification failed. Please try again." 
+        });
+      } else {
+        setMessage({
+          type: "error",
+          text: "Verification failed. Please try again."
+        });
       }
     } finally {
       setIsLoading(false);
@@ -165,9 +181,7 @@ export default function VerifyEmailScreen() {
     } finally {
       setIsResending(false);
     }
-  }
-
-  // --- Handle OTP input with auto-formatting ---
+  }  // --- Handle OTP input with auto-formatting ---
   const handleOtpChange = (text: string) => {
     // Remove non-numeric characters
     const numericText = text.replace(/[^0-9]/g, "");
@@ -175,9 +189,9 @@ export default function VerifyEmailScreen() {
     const limitedText = numericText.slice(0, 6);
     setOtp(limitedText);
 
-    // Auto-submit when 6 digits are entered
-    if (limitedText.length === 6) {
-      handleVerifyOtp();
+    // Clear any previous error messages when user starts typing
+    if (message?.type === "error") {
+      setMessage(null);
     }
   };
 
@@ -244,7 +258,6 @@ export default function VerifyEmailScreen() {
               <Text style={styles.buttonText}>Verify Account</Text>
             )}
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.resendButton, isResending && styles.buttonDisabled]}
             onPress={handleResendEmail}
@@ -255,7 +268,8 @@ export default function VerifyEmailScreen() {
             ) : (
               <Text style={styles.resendButtonText}>Resend Code</Text>
             )}
-          </TouchableOpacity>          <View style={styles.footer}>
+          </TouchableOpacity>
+          <View style={styles.footer}>
             <Text style={[styles.footerText, { color: textColor }]}>
               Didn&apos;t receive the code? Check your spam folder or
             </Text>
@@ -268,12 +282,11 @@ export default function VerifyEmailScreen() {
           </View>
         </Animated.View>
       </ImageBackground>
-
       {/* Error Modal */}
       <ErrorModal
         visible={showErrorModal}
-        title={typeof message?.text === 'string' ? "Verification Error" : "Error"}
-        message={typeof message?.text === 'string' ? message.text : "An error occurred during verification"}
+        title="Verification Error"
+        message={message?.text || "An error occurred during verification"}
         onClose={() => setShowErrorModal(false)}
         icon="close-circle"
         iconColor="#FF3B30"
@@ -281,8 +294,8 @@ export default function VerifyEmailScreen() {
       {/* Success Modal */}
       <SuccessModal
         visible={showSuccessModal}
-        title={typeof message?.text === 'string' ? "Verification Successful" : "Success"}
-        message={typeof message?.text === 'string' ? message.text : "Your email has been verified successfully"}
+        title="Verification Successful"
+        message={message?.text || "Your email has been verified successfully"}
         onClose={() => setShowSuccessModal(false)}
         icon="checkmark-circle"
         iconColor="#34C759"

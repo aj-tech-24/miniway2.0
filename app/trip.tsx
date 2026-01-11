@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -77,17 +78,8 @@ export default function TripScreen() {
   const passengerCount = parseInt(params.passengerCount as string) || 1;
 
   // State for bus plate number (can be updated if initially unknown)
-  const [busPlateNumber, setBusPlateNumber] = useState<string>(initialPlateNumber);
-
-  console.log("🚌 Trip screen debug - busPlateNumber:", busPlateNumber);
-  console.log("🚌 Trip screen debug - raw params.busPlateNumber:", params.busPlateNumber);
-  console.log(
-    "Trip screen - Passenger count from params:",
-    passengerCount,
-    "Raw param:",
-    params.passengerCount
-  );
-  console.log("🗺️ All trip params:", params);
+  const [busPlateNumber, setBusPlateNumber] =
+    useState<string>(initialPlateNumber);
   const pickupCoords: LatLng = {
     latitude: parseFloat(params.pickupLat as string),
     longitude: parseFloat(params.pickupLng as string),
@@ -100,7 +92,6 @@ export default function TripScreen() {
   let completeRoutePath: LatLng[] = [];
   try {
     const routePathParam = params.routePath as string;
-    console.log("🗺️ Route path parameter:", routePathParam);
 
     if (routePathParam && routePathParam !== "[]") {
       const routePath: [number, number][] = JSON.parse(routePathParam);
@@ -108,16 +99,8 @@ export default function TripScreen() {
         latitude: lat,
         longitude: lng,
       }));
-      console.log(
-        `🗺️ Complete route path has ${completeRoutePath.length} points`
-      );
-    } else {
-      console.log(
-        "🗺️ Route path is empty or missing, will fetch from database"
-      );
     }
   } catch (e) {
-    console.log("Error parsing route path:", e);
     completeRoutePath = [];
   }
 
@@ -159,6 +142,34 @@ export default function TripScreen() {
 
   // added: off-route warning state
   const [offRouteWarning, setOffRouteWarning] = useState(false);
+
+  // Trip Summary Modal State
+  const [showTripSummary, setShowTripSummary] = useState(false);
+  const [tripSummaryData, setTripSummaryData] = useState<{
+    startTime: Date | null;
+    endTime: Date | null;
+    duration: string;
+    distance: string;
+    pickupLocation: string;
+    destination: string;
+    busPlate: string;
+    status: "completed" | "cancelled";
+  }>({
+    startTime: null,
+    endTime: null,
+    duration: "0 min",
+    distance: "0 km",
+    pickupLocation: "Unknown",
+    destination: "Unknown",
+    busPlate: "Unknown",
+    status: "completed",
+  });
+
+  // Track trip start time
+  const [tripStartTime, setTripStartTime] = useState<Date | null>(null);
+
+  // Drop off / Cancel confirmation modal state
+  const [showConfirmationModal, setShowConfirmationModal] = useState(false);
 
   // added: reverse geocoding with caching
   const geocodeCache = useRef<Map<string, string>>(new Map());
@@ -224,7 +235,6 @@ export default function TripScreen() {
     }
 
     try {
-      console.log("🔍 Fetching bus plate number for busId:", busId);
       const { data: busData, error } = await supabase
         .from("buses")
         .select("plate_number")
@@ -232,18 +242,14 @@ export default function TripScreen() {
         .single();
 
       if (error) {
-        console.error("❌ Error fetching bus plate number:", error);
         return;
       }
 
       if (busData?.plate_number) {
-        console.log("✅ Found bus plate number:", busData.plate_number);
         setBusPlateNumber(busData.plate_number);
-      } else {
-        console.log("⚠️ No plate number found for bus ID:", busId);
       }
     } catch (error) {
-      console.error("❌ Error in fetchBusPlateNumber:", error);
+      // Silently handle error
     }
   };
 
@@ -259,10 +265,7 @@ export default function TripScreen() {
 
       // Fetch complete route from database if missing
       if (completeRoutePath.length === 0) {
-        console.log("🗺️ Calling fetchCompleteRouteFromDatabase...");
         await fetchCompleteRouteFromDatabase();
-      } else {
-        console.log("🗺️ Route path already available, skipping database fetch");
       }
 
       // Fetch pickup-to-destination route so user can see the route they'll take
@@ -298,7 +301,6 @@ export default function TripScreen() {
       passengerCount: passengerCount,
       ts: Date.now(),
     };
-    console.log("QR Payload generated:", payload);
     return JSON.stringify(payload);
   }, [
     busId,
@@ -335,8 +337,6 @@ export default function TripScreen() {
     if (!busId) return;
 
     try {
-      console.log("🗺️ Fetching complete route from database for bus:", busId);
-
       // First get the route_id from the bus
       const { data: busData, error: busError } = await supabase
         .from("buses")
@@ -345,12 +345,8 @@ export default function TripScreen() {
         .single();
 
       if (busError || !busData) {
-        console.error("Error fetching bus data:", busError);
-        console.log("🗺️ Bus data received:", busData);
         return;
       }
-
-      console.log("🗺️ Bus data fetched successfully:", busData);
 
       // Now fetch the route using the same RPC function as route-details.tsx
       const { data: routeData, error: routeError } = await supabase.rpc(
@@ -359,21 +355,17 @@ export default function TripScreen() {
       );
 
       if (routeError) {
-        console.error("Error fetching route data:", routeError);
         return;
       }
 
       if (!routeData || !routeData[0]) {
-        console.log("🗺️ No route data found for route_id:", busData.route_id);
         return;
       }
 
       const rawRoute = routeData[0];
-      console.log("🗺️ Route data fetched successfully:", rawRoute);
 
       // Use the same logic as route-details.tsx
       if (rawRoute && rawRoute.geojson) {
-        console.log("🗺️ Using stored route geojson from database");
         const routeCoordinates = rawRoute.geojson.coordinates;
         const routePath: LatLng[] = routeCoordinates.map(
           ([lng, lat]: [number, number]) => ({
@@ -383,25 +375,19 @@ export default function TripScreen() {
         );
 
         setCompleteRoute(routePath);
-        console.log(
-          `🗺️ Fetched complete route from database with ${routePath.length} points`
-        );
       } else {
-        console.log("🗺️ No geojson data found in route, using fallback");
         // Fallback to direct line from pickup to destination
         const fallbackRoute: LatLng[] = [pickupCoords, destCoords];
         setCompleteRoute(fallbackRoute);
-        console.log("🗺️ Using fallback route with 2 points");
       }
     } catch (error) {
-      console.error("Error fetching complete route from database:", error);
+      // Silently handle error
     }
   };
 
   // Fetch pickup to destination route using Google Directions
   const fetchPickupToDestinationRoute = async (start: LatLng, end: LatLng) => {
     if (!GOOGLE_MAPS_API_KEY) {
-      console.log("No Google Maps API key available for route fetching");
       return;
     }
 
@@ -422,21 +408,9 @@ export default function TripScreen() {
         }
 
         setPickupToDestinationRoute(routePoints);
-        console.log(
-          `✅ Fetched pickup-to-destination route with ${routePoints.length} points`
-        );
-        console.log(
-          "🗺️ Pickup-to-destination route points:",
-          routePoints.slice(0, 3),
-          "..."
-        );
-      } else {
-        console.log(
-          "No pickup-to-destination route found from Google Directions API"
-        );
       }
     } catch (error) {
-      console.error("Error fetching pickup-to-destination route:", error);
+      // Silently handle error
     } finally {
       setRouteLoading(false);
     }
@@ -481,8 +455,54 @@ export default function TripScreen() {
     return points;
   };
 
+  // Calculate trip summary data
+  const calculateTripSummary = useCallback(
+    (endReason: "driver_ended" | "arrived" | "cancelled") => {
+      const endTime = new Date();
+      const startTime = tripStartTime || new Date(Date.now() - 30 * 60 * 1000); // Default to 30 mins ago if no start time
+
+      // Calculate duration
+      const durationMs = endTime.getTime() - startTime.getTime();
+      const durationMinutes = Math.round(durationMs / (1000 * 60));
+      const hours = Math.floor(durationMinutes / 60);
+      const minutes = durationMinutes % 60;
+      const durationText = hours > 0 ? `${hours}h ${minutes}m` : `${minutes} min`;
+
+      // Calculate approximate distance (using haversine)
+      const distanceMeters = haversineMeters(pickupCoords, destCoords);
+      const distanceKm = (distanceMeters / 1000).toFixed(1);
+
+      const statusValue = (endReason === "cancelled" ? "cancelled" : "completed") as "cancelled" | "completed";
+
+      return {
+        startTime,
+        endTime,
+        duration: durationText,
+        distance: `${distanceKm} km`,
+        pickupLocation: pickupName || "Pickup location",
+        destination: destinationName || "Destination",
+        busPlate: busPlateNumber,
+        status: statusValue,
+      };
+    },
+    [tripStartTime, pickupCoords, destCoords, pickupName, destinationName, busPlateNumber]
+  );
+
   const finalizeTrip = useCallback(
-    async (reason: "driver_ended" | "arrived" | "cancelled") => {
+    async (reason: "driver_ended" | "arrived" | "cancelled", skipSummary = false) => {
+      // If not skipping summary, show the trip summary modal first
+      if (!skipSummary) {
+        // Prevent multiple summary modals from showing
+        if (showTripSummary) {
+          return;
+        }
+
+        const summaryData = calculateTripSummary(reason);
+        setTripSummaryData(summaryData);
+        setShowTripSummary(true);
+        return; // Don't finalize yet, let user see summary
+      }
+
       if (tripFinalizedRef.current) return;
       tripFinalizedRef.current = true;
       if (!session?.user?.id) {
@@ -492,25 +512,22 @@ export default function TripScreen() {
 
       try {
         setSaving(true);
-        
+
         // FIRST: Update trip_passengers status to completed/cancelled
         const newStatus = reason === "cancelled" ? "cancelled" : "completed";
         const { error: tripPassengerError } = await supabase
           .from("trip_passengers")
-          .update({ 
+          .update({
             status: newStatus,
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
           })
           .eq("passenger_id", session.user.id)
           .eq("bus_id", busId);
 
         if (tripPassengerError) {
-          console.error("Error updating trip_passengers status:", tripPassengerError);
           throw new Error("Failed to update trip status");
         }
 
-        console.log(`✅ Trip passenger status updated to: ${newStatus}`);
-        
         // SECOND: Save to travel history
         const startName = pickupName || "Pickup location";
         const endName = destinationName || "Destination";
@@ -524,37 +541,21 @@ export default function TripScreen() {
             route_name: `Bus ${busPlateNumber}`,
             status: reason === "cancelled" ? "cancelled" : "completed",
           });
-          
+
         if (historyError) {
-          console.error("Error saving to travel history:", historyError);
           // Don't throw here - trip status is already updated, history is less critical
         }
 
-        // Show success message based on reason
-        if (reason === "arrived") {
-          Alert.alert(
-            "Trip Completed! 🎉",
-            "Thank you for using our service. Have a great day!",
-            [{ text: "OK", onPress: () => router.replace("/(commuter)/history") }]
-          );
-        } else if (reason === "cancelled") {
-          Alert.alert(
-            "Trip Cancelled",
-            "Your trip has been cancelled.",
-            [{ text: "OK", onPress: () => router.replace("/(commuter)/history") }]
-          );
-        } else {
-          router.replace("/(commuter)/history");
-        }
+        // Navigate directly to history without showing additional alerts
+        router.replace("/(commuter)/history");
       } catch (e) {
-        console.error("Error in finalizeTrip:", e);
         Alert.alert("Error", "Could not complete your trip. Please try again.");
         tripFinalizedRef.current = false;
       } finally {
         setSaving(false);
       }
     },
-    [session?.user?.id, pickupName, destinationName, busPlateNumber, busId]
+    [session?.user?.id, pickupName, destinationName, busPlateNumber, busId, calculateTripSummary, showTripSummary]
   );
 
   // QR code is now imported directly, no need for dynamic loading
@@ -598,7 +599,6 @@ export default function TripScreen() {
         } else {
           // No trip_passengers record found - this shouldn't happen if user came from route-details
           // Don't create a new record, just set status to waiting and let the conductor handle it
-          console.log("No trip_passengers record found - user may have accessed trip directly");
           setTripStatus("waiting");
         }
 
@@ -679,12 +679,12 @@ export default function TripScreen() {
         setLoading(false);
       }
     };
-    
+
     const initializeTrip = async () => {
       await fetchInitialLocation();
       await fetchBusPlateNumber(); // Fetch plate number if unknown
     };
-    
+
     initializeTrip();
   }, [busId, session?.user?.id]);
 
@@ -692,9 +692,6 @@ export default function TripScreen() {
     if (!busId || !session?.user?.id) return;
 
     // Listen for trip_passengers table changes to detect boarding and cancellation
-    console.log(
-      `🔔 Setting up passenger channel for user ${session.user.id} on bus ${busId}`
-    );
     const passengerChannel = supabase
       .channel(`passenger-boarding-${session.user.id}-${busId}`)
       .on(
@@ -706,35 +703,21 @@ export default function TripScreen() {
           filter: `passenger_id=eq.${session.user.id}`,
         },
         async (payload) => {
-          console.log("🔔 Real-time trip_passengers update received:", {
-            eventType: payload.eventType,
-            new: payload.new,
-            old: payload.old,
-            table: payload.table,
-            schema: payload.schema,
-          });
-
           const newStatus = payload.new.status;
           const recordId = payload.new.id;
           const recordBusId = payload.new.bus_id;
 
           // Only process updates for the current bus
           if (recordBusId !== busId) {
-            console.log(
-              `🚫 Ignoring update for different bus: ${recordBusId} (current: ${busId})`
-            );
             return;
           }
 
-          console.log(
-            `📊 Status change detected: ${newStatus} for record ${recordId} on bus ${recordBusId}`
-          );
-
           if (newStatus === "boarded") {
-            console.log("✅ Boarding detected! Updating UI...");
             // Immediately update UI to show boarded status
             setTripStatus("picked_up");
             setShowQRCode(false); // Hide QR code immediately
+            // Set trip start time when passenger is picked up
+            setTripStartTime(new Date());
 
             // Fetch pickup to destination route
             await fetchPickupToDestinationRoute(pickupCoords, destCoords);
@@ -750,27 +733,20 @@ export default function TripScreen() {
             // Only mark pickup request as resolved
             pickupRequestResolved.current = true;
           } else if (newStatus === "cancelled") {
-            console.log("❌ Trip cancelled detected!");
             Alert.alert(
               "Trip Cancelled",
               "The driver has cancelled your trip. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
           } else if (newStatus === "completed") {
-            console.log("🏁 Trip completed detected!");
             // Unsubscribe from passenger channel since trip is now complete
             supabase.removeChannel(passengerChannel);
-            Alert.alert(
-              "Trip Completed! 🎉",
-              "You have reached your destination. Thank you for using our service!",
-              [{ text: "OK", onPress: () => finalizeTrip("arrived") }]
-            );
+            // Show trip summary directly without alert
+            await finalizeTrip("arrived");
           }
         }
       )
-      .subscribe((status) => {
-        console.log("📡 Passenger channel subscription status:", status);
-      });
+      .subscribe((status) => { });
 
     // Return cleanup function
     return () => {
@@ -834,7 +810,7 @@ export default function TripScreen() {
             }
           }
         )
-        .subscribe((status) => {});
+        .subscribe((status) => { });
 
       // Return cleanup function for pickup request channel
       return () => {
@@ -863,15 +839,7 @@ export default function TripScreen() {
         const boardingRecord = boardingRecords?.[0];
 
         if (boardingRecord && !error) {
-          console.log(
-            "🔄 Polling check - Current status:",
-            boardingRecord.status,
-            "for record:",
-            boardingRecord.id
-          );
-
           if (boardingRecord.status === "boarded") {
-            console.log("✅ Polling detected boarding! Updating UI...");
             setTripStatus("picked_up");
             setShowQRCode(false); // Hide QR code immediately
 
@@ -887,26 +855,19 @@ export default function TripScreen() {
 
             pickupRequestResolved.current = true; // Mark pickup request as resolved
           } else if (boardingRecord.status === "cancelled") {
-            console.log("❌ Polling detected cancellation!");
             Alert.alert(
               "Trip Cancelled",
               "The driver has cancelled your trip. You will be redirected to the home screen."
             );
             await finalizeTrip("cancelled");
           } else if (boardingRecord.status === "completed") {
-            console.log("🏁 Polling detected completion!");
-            Alert.alert(
-              "Trip Completed! 🎉",
-              "You have reached your destination. Thank you for using our service!",
-              [{ text: "OK", onPress: () => finalizeTrip("arrived") }]
-            );
+            // Show trip summary directly without alert
+            await finalizeTrip("arrived");
           }
         } else if (error) {
-          console.error("❌ Polling error:", error);
-        } else {
-          console.log("🔄 Polling - No boarding record found");
+          // Silently handle polling errors
         }
-      } catch (err) {}
+      } catch (err) { }
     };
 
     // Fallback: Poll for pickup request status every 10 seconds
@@ -959,7 +920,7 @@ export default function TripScreen() {
             );
           }
         }
-      } catch (err) {}
+      } catch (err) { }
     };
 
     // Check immediately and then every 8 seconds for boarding, every 15 seconds for pickup requests
@@ -1014,8 +975,8 @@ export default function TripScreen() {
               zoom: tripStatus === "picked_up" ? 16 : 18, // Slightly zoomed out when boarded to see more route
             };
 
-            // Smooth camera animation with shorter duration for more responsive feel
-            mapRef.current?.animateCamera(camera, { duration: 800 });
+            // Smooth camera animation matched to update interval
+            mapRef.current?.animateCamera(camera, { duration: 1000 });
             previousLocationRef.current = newLocation;
 
             // Auto-finish near destination
@@ -1025,7 +986,7 @@ export default function TripScreen() {
                 if (d <= 60) {
                   await finalizeTrip("arrived");
                 }
-              } catch {}
+              } catch { }
             }
           }
 
@@ -1046,7 +1007,7 @@ export default function TripScreen() {
           }
         }
       )
-      .subscribe((status) => {});
+      .subscribe((status) => { });
 
     return () => {
       supabase.removeChannel(tripChannel);
@@ -1168,9 +1129,6 @@ export default function TripScreen() {
             title={busPlateNumber || "Bus"}
             description="Your bus location"
             anchor={{ x: 0.5, y: 0.5 }}
-            onPress={() => {
-              console.log("Bus marker pressed:", busPlateNumber);
-            }}
           >
             <View
               style={[
@@ -1347,43 +1305,194 @@ export default function TripScreen() {
         )}
       </View>
 
-      {/* End Trip Button - Centered below bottom panel */}
+      {/* Drop off / Cancel Trip Button - Centered below bottom panel */}
       <TouchableOpacity
-        onPress={() => {
-          if (tripStatus === "picked_up") {
-            Alert.alert("End Trip", "Are you sure you want to end this trip?", [
-              { text: "No", style: "cancel" },
-              {
-                text: "Yes, end trip",
-                style: "destructive",
-                onPress: () => finalizeTrip("arrived"),
-              },
-            ]);
-          } else {
-            Alert.alert("Cancel Trip", "Are you sure you want to cancel?", [
-              { text: "No", style: "cancel" },
-              {
-                text: "Yes, cancel",
-                style: "destructive",
-                onPress: () => finalizeTrip("cancelled"),
-              },
-            ]);
-          }
-        }}
+        onPress={() => setShowConfirmationModal(true)}
         style={[
           styles.endTripButton,
           tripStatus === "picked_up" && styles.endTripButtonActive,
         ]}
       >
         <Ionicons
-          name={tripStatus === "picked_up" ? "stop-circle" : "close-circle"}
+          name={tripStatus === "picked_up" ? "location" : "close-circle"}
           size={20}
           color="#fff"
         />
         <Text style={styles.endTripButtonText}>
-          {tripStatus === "picked_up" ? "End Trip" : "Cancel Trip"}
+          {tripStatus === "picked_up" ? "Drop off" : "Cancel Trip"}
         </Text>
       </TouchableOpacity>
+
+      {/* Drop off / Cancel Confirmation Modal */}
+      <Modal
+        visible={showConfirmationModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowConfirmationModal(false)}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalContent}>
+            {/* Decorative circles */}
+            <View style={styles.confirmModalDecoCircle1} />
+            <View style={styles.confirmModalDecoCircle2} />
+            
+            {/* Icon */}
+            <View style={styles.confirmModalIconWrapper}>
+              <View style={[
+                styles.confirmModalIconContainer,
+                { backgroundColor: tripStatus === "picked_up" ? "#10B981" : "#EF4444" }
+              ]}>
+                <Ionicons
+                  name={tripStatus === "picked_up" ? "location" : "close-circle"}
+                  size={36}
+                  color="#fff"
+                />
+              </View>
+              <View style={[
+                styles.confirmModalPulseRing,
+                { borderColor: tripStatus === "picked_up" ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.2)" }
+              ]} />
+            </View>
+
+            {/* Title */}
+            <Text style={styles.confirmModalTitle}>
+              {tripStatus === "picked_up" ? "Drop off Here?" : "Cancel Trip?"}
+            </Text>
+
+            {/* Description */}
+            <Text style={styles.confirmModalDescription}>
+              {tripStatus === "picked_up"
+                ? "Are you sure you want to end your trip and drop off at your current location?"
+                : "Are you sure you want to cancel this trip? This action cannot be undone."}
+            </Text>
+
+            {/* Info Card */}
+            <View style={[
+              styles.confirmModalInfoCard,
+              { backgroundColor: tripStatus === "picked_up" ? "#ECFDF5" : "#FEF2F2", borderColor: tripStatus === "picked_up" ? "#A7F3D0" : "#FECACA" }
+            ]}>
+              <View style={styles.confirmModalInfoRow}>
+                <View style={[
+                  styles.confirmModalInfoIcon,
+                  { backgroundColor: tripStatus === "picked_up" ? "#D1FAE5" : "#FEE2E2" }
+                ]}>
+                  <Ionicons name="bus" size={18} color={tripStatus === "picked_up" ? "#059669" : "#DC2626"} />
+                </View>
+                <View style={styles.confirmModalInfoTextContainer}>
+                  <Text style={styles.confirmModalInfoLabel}>Current Bus</Text>
+                  <Text style={[styles.confirmModalInfoValue, { color: tripStatus === "picked_up" ? "#065F46" : "#991B1B" }]}>
+                    {busPlateNumber}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Buttons */}
+            <View style={styles.confirmModalButtonGroup}>
+              <TouchableOpacity
+                style={styles.confirmModalButtonSecondary}
+                onPress={() => setShowConfirmationModal(false)}
+              >
+                <Text style={styles.confirmModalButtonSecondaryText}>Go Back</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.confirmModalButtonPrimary,
+                  { backgroundColor: tripStatus === "picked_up" ? "#10B981" : "#EF4444" }
+                ]}
+                onPress={() => {
+                  setShowConfirmationModal(false);
+                  finalizeTrip(tripStatus === "picked_up" ? "arrived" : "cancelled");
+                }}
+              >
+                <Ionicons
+                  name={tripStatus === "picked_up" ? "checkmark" : "close"}
+                  size={18}
+                  color="#fff"
+                />
+                <Text style={styles.confirmModalButtonPrimaryText}>
+                  {tripStatus === "picked_up" ? "Yes, Drop off" : "Yes, Cancel"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Trip Summary Modal */}
+      <Modal
+        visible={showTripSummary}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowTripSummary(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Ionicons
+                name={tripSummaryData.status === "completed" ? "checkmark-circle" : "close-circle"}
+                size={48}
+                color={tripSummaryData.status === "completed" ? "#28a745" : "#dc3545"}
+              />
+              <Text style={styles.modalTitle}>
+                {tripSummaryData.status === "completed" ? "Trip Completed!" : "Trip Cancelled"}
+              </Text>
+              <Text style={styles.modalSubtitle}>Here's your trip summary</Text>
+            </View>
+
+            <View style={styles.tripSummaryContainer}>
+              <View style={styles.summaryRow}>
+                <Ionicons name="time-outline" size={20} color="#666" />
+                <Text style={styles.summaryLabel}>Duration:</Text>
+                <Text style={styles.summaryValue}>{tripSummaryData.duration}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="speedometer-outline" size={20} color="#666" />
+                <Text style={styles.summaryLabel}>Distance:</Text>
+                <Text style={styles.summaryValue}>{tripSummaryData.distance}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="bus-outline" size={20} color="#666" />
+                <Text style={styles.summaryLabel}>Bus:</Text>
+                <Text style={styles.summaryValue}>{tripSummaryData.busPlate}</Text>
+              </View>
+
+              <View style={styles.summaryDivider} />
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="location-outline" size={20} color="#007AFF" />
+                <Text style={styles.summaryLabel}>From:</Text>
+                <Text style={[styles.summaryValue, styles.summaryLocation]} numberOfLines={2}>
+                  {tripSummaryData.pickupLocation}
+                </Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="flag-outline" size={20} color="#28a745" />
+                <Text style={styles.summaryLabel}>To:</Text>
+                <Text style={[styles.summaryValue, styles.summaryLocation]} numberOfLines={2}>
+                  {tripSummaryData.destination}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => {
+                setShowTripSummary(false);
+                // Finalize trip with skipSummary=true to actually complete the trip
+                finalizeTrip(tripSummaryData.status === "completed" ? "arrived" : "cancelled", true);
+              }}
+            >
+              <Text style={styles.modalCloseButtonText}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
@@ -1422,7 +1531,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 22,
   },
-  // End Trip Button Styles
+  // Drop off / Cancel Button Styles
   endTripButton: {
     position: "absolute",
     bottom: 20,
@@ -1436,13 +1545,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     borderRadius: 25,
     elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
+    shadowColor: "#dc3545",
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
     zIndex: 1000,
   },
   endTripButtonActive: {
-    backgroundColor: "#ff4d4f", // Green color for end trip
+    backgroundColor: "#10B981", // Green color for drop off
+    shadowColor: "#10B981",
   },
   endTripButtonText: {
     color: "white",
@@ -1738,5 +1849,227 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     fontSize: 16,
     flex: 1,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    width: "90%",
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 20,
+    alignItems: "center",
+    elevation: 10,
+  },
+  modalHeader: {
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#333",
+    marginTop: 10,
+  },
+  modalSubtitle: {
+    fontSize: 16,
+    color: "#666",
+    marginTop: 5,
+  },
+  tripSummaryContainer: {
+    width: "100%",
+    marginBottom: 20,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  summaryLabel: {
+    fontSize: 16,
+    color: "#666",
+    marginLeft: 10,
+    flex: 1,
+  },
+  summaryValue: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#333",
+  },
+  summaryDivider: {
+    height: 1,
+    backgroundColor: "#e9ecef",
+    marginVertical: 10,
+  },
+  summaryLocation: {
+    flex: 1,
+    textAlign: "right",
+  },
+  modalCloseButton: {
+    backgroundColor: "#007AFF",
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+  },
+  modalCloseButtonText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  // Drop off / Cancel Confirmation Modal Styles
+  confirmModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  confirmModalContent: {
+    width: "88%",
+    maxWidth: 380,
+    backgroundColor: "#ffffff",
+    borderRadius: 28,
+    padding: 28,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.25,
+    shadowRadius: 32,
+    elevation: 24,
+    overflow: "hidden",
+    position: "relative",
+  },
+  confirmModalDecoCircle1: {
+    position: "absolute",
+    top: -50,
+    right: -50,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(16, 185, 129, 0.08)",
+  },
+  confirmModalDecoCircle2: {
+    position: "absolute",
+    bottom: -30,
+    left: -30,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(239, 68, 68, 0.06)",
+  },
+  confirmModalIconWrapper: {
+    position: "relative",
+    marginBottom: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmModalIconContainer: {
+    width: 72,
+    height: 72,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 10,
+    zIndex: 2,
+  },
+  confirmModalPulseRing: {
+    position: "absolute",
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 3,
+    zIndex: 1,
+  },
+  confirmModalTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#1F2937",
+    marginBottom: 12,
+    textAlign: "center",
+    letterSpacing: -0.5,
+  },
+  confirmModalDescription: {
+    fontSize: 15,
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: 20,
+    paddingHorizontal: 8,
+  },
+  confirmModalInfoCard: {
+    width: "100%",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
+    borderWidth: 1,
+  },
+  confirmModalInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  confirmModalInfoIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  confirmModalInfoTextContainer: {
+    flex: 1,
+  },
+  confirmModalInfoLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#6B7280",
+    marginBottom: 2,
+  },
+  confirmModalInfoValue: {
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  confirmModalButtonGroup: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  confirmModalButtonSecondary: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F3F4F6",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 14,
+    paddingVertical: 14,
+  },
+  confirmModalButtonSecondaryText: {
+    color: "#4B5563",
+    fontWeight: "600",
+    fontSize: 15,
+  },
+  confirmModalButtonPrimary: {
+    flex: 1.2,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 14,
+    paddingVertical: 14,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  confirmModalButtonPrimaryText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 15,
   },
 });

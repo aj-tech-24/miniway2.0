@@ -22,8 +22,8 @@ import Svg, { G, Path } from "react-native-svg";
 
 type LatLng = { latitude: number; longitude: number };
 
-const LOCATION_UPDATE_INTERVAL = 2000; // ms
-
+const LOCATION_UPDATE_INTERVAL = 1000; // ms
+const DATABASE_SYNC_INTERVAL = 1000; // ms - how often to sync location to database
 // Custom SVG Map Marker Component
 const CustomMapMarker = ({
   size = 40,
@@ -99,9 +99,9 @@ const DrivingModeScreen = () => {
   try {
     polylineCoords = path
       ? JSON.parse(path).map(([lng, lat]: [number, number]) => ({
-          latitude: lat,
-          longitude: lng,
-        }))
+        latitude: lat,
+        longitude: lng,
+      }))
       : [];
   } catch (e) {
     polylineCoords = [];
@@ -137,10 +137,10 @@ const DrivingModeScreen = () => {
     title: "",
     message: "",
     type: "info" as "info" | "error" | "warning" | "success",
-    onConfirm: () => {},
+    onConfirm: () => { },
     confirmText: "OK",
     showCancel: false,
-    onCancel: () => {},
+    onCancel: () => { },
     cancelText: "Cancel",
   });
 
@@ -149,10 +149,10 @@ const DrivingModeScreen = () => {
     title: string,
     message: string,
     type: "info" | "error" | "warning" | "success" = "info",
-    onConfirm: () => void = () => {},
+    onConfirm: () => void = () => { },
     confirmText: string = "OK",
     showCancel: boolean = false,
-    onCancel: () => void = () => {},
+    onCancel: () => void = () => { },
     cancelText: string = "Cancel"
   ) => {
     setAlertConfig({
@@ -217,6 +217,22 @@ const DrivingModeScreen = () => {
   const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(
     new Set()
   );
+
+  // Trip Summary State
+  const [showTripSummary, setShowTripSummary] = useState(false);
+  const [tripSummaryData, setTripSummaryData] = useState<{
+    routeName: string;
+    departureTime: string;
+    endTime: string;
+    duration: string;
+    passengerCount: number;
+    capacity: number;
+    tripStatus: string;
+    startDate: string;
+  } | null>(null);
+
+  // Track actual trip start time
+  const [actualTripStartTime, setActualTripStartTime] = useState<Date | null>(null);
 
   // Function to fetch active pickup requests for this bus
   const fetchPickupRequests = async () => {
@@ -488,6 +504,19 @@ const DrivingModeScreen = () => {
   const calculateDynamicDepartureTime = () => {
     const now = new Date();
 
+    // If trip is already ongoing, show arrival information instead
+    if (tripStatus === "ongoing") {
+      // Estimate arrival time based on route length and average speed
+      // For now, use a simple estimate of 20-30 minutes for arrival
+      const estimatedTripDuration = 25; // minutes (you can make this more sophisticated)
+      const arrivalTime = new Date(now.getTime() + estimatedTripDuration * 60000);
+      setDynamicDepartureTime(
+        `Arriving at ${arrivalTime.toLocaleTimeString()} - Trip in progress`
+      );
+      setCanStartNow(false); // No start button needed when trip is ongoing
+      return;
+    }
+
     // Check if bus is full
     const isBusFull = passengerCount >= parsedCapacity;
 
@@ -520,6 +549,41 @@ const DrivingModeScreen = () => {
   // All useEffect hooks here!
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
+    let lastSyncTime = 0; // Track last database sync time
+
+    // Function to sync location to database
+    const syncLocationToDatabase = async (coords: LatLng) => {
+      const now = Date.now();
+      // Only sync if enough time has passed since last sync
+      if (now - lastSyncTime < DATABASE_SYNC_INTERVAL) {
+        return;
+      }
+      lastSyncTime = now;
+
+      // Only sync if we have a valid tripId
+      if (!tripId) {
+        console.log("📍 Location sync skipped: No tripId available");
+        return;
+      }
+
+      try {
+        // Update the trips table with current location using PostGIS Point format
+        const { error } = await supabase
+          .from("trips")
+          .update({
+            current_location: `POINT(${coords.longitude} ${coords.latitude})`,
+          })
+          .eq("id", tripId);
+
+        if (error) {
+          console.error("📍 Error syncing location to database:", error);
+        } else {
+          console.log("📍 Location synced to database:", coords);
+        }
+      } catch (error) {
+        console.error("📍 Error in syncLocationToDatabase:", error);
+      }
+    };
 
     async function startLocationUpdates() {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -529,7 +593,7 @@ const DrivingModeScreen = () => {
         {
           accuracy: Location.Accuracy.High,
           timeInterval: LOCATION_UPDATE_INTERVAL,
-          distanceInterval: 5,
+          distanceInterval: 2,
         },
         (location) => {
           const coords = {
@@ -537,6 +601,9 @@ const DrivingModeScreen = () => {
             longitude: location.coords.longitude,
           };
           setDriverLocation(coords);
+
+          // Sync location to database for commuters to see real-time updates
+          syncLocationToDatabase(coords);
 
           // Animate camera to follow driver with 3D effect
           mapRef.current?.animateCamera(
@@ -546,7 +613,7 @@ const DrivingModeScreen = () => {
               zoom: 14, // Higher zoom for closer view
               heading: location.coords.heading || 0, // Use device heading if available
             },
-            { duration: 800 }
+            { duration: 1000 }
           );
         }
       );
@@ -557,7 +624,7 @@ const DrivingModeScreen = () => {
     return () => {
       locationSubscription?.remove();
     };
-  }, []);
+  }, [tripId]);
 
   useEffect(() => {
     if (!driverLocation || !polylineCoords.length) return;
@@ -617,10 +684,10 @@ const DrivingModeScreen = () => {
     };
   }, [busId]);
 
-  // NEW: Recalculate departure time when passenger count or opposite buses change
+  // NEW: Recalculate departure time when passenger count, opposite buses, or trip status change
   useEffect(() => {
     calculateDynamicDepartureTime();
-  }, [passengerCount, oppositeRouteBuses, parsedCapacity]);
+  }, [passengerCount, oppositeRouteBuses, parsedCapacity, tripStatus]);
 
   // NEW: Initialize trip status and passenger data from database
   useEffect(() => {
@@ -631,7 +698,7 @@ const DrivingModeScreen = () => {
         // Fetch trip status
         const { data: tripData, error } = await supabase
           .from("trips")
-          .select("status")
+          .select("status, started_at")
           .eq("id", tripId)
           .single();
 
@@ -644,6 +711,11 @@ const DrivingModeScreen = () => {
           setTripStatus(
             tripData.status as "waiting" | "ongoing" | "completed" | "cancelled"
           );
+
+          // If trip is ongoing and we have a start time, save it
+          if (tripData.status === "ongoing" && tripData.started_at) {
+            setActualTripStartTime(new Date(tripData.started_at));
+          }
         }
 
         // Fetch current passenger count and scanned passengers from database
@@ -945,15 +1017,15 @@ const DrivingModeScreen = () => {
     const alertTitle = isEarlyStart ? "Start Trip Early" : "Start Trip";
     const alertMessage = isEarlyStart
       ? "Are you sure you want to start this trip early? This will begin the journey before the recommended departure time. You currently have " +
-        passengerCount +
-        "/" +
-        parsedCapacity +
-        " passengers."
+      passengerCount +
+      "/" +
+      parsedCapacity +
+      " passengers."
       : "Are you sure you want to officially start this trip? This will begin the journey with " +
-        passengerCount +
-        "/" +
-        parsedCapacity +
-        " passengers.";
+      passengerCount +
+      "/" +
+      parsedCapacity +
+      " passengers.";
 
     showAlert(
       alertTitle,
@@ -962,11 +1034,12 @@ const DrivingModeScreen = () => {
       async () => {
         try {
           // Update trip status to ongoing
+          const tripStartTime = new Date();
           const { error: tripError } = await supabase
             .from("trips")
             .update({
               status: "ongoing",
-              started_at: new Date().toISOString(),
+              started_at: tripStartTime.toISOString(),
             })
             .eq("id", tripId);
 
@@ -981,6 +1054,7 @@ const DrivingModeScreen = () => {
           }
 
           setTripStatus("ongoing");
+          setActualTripStartTime(tripStartTime); // Save the actual start time
           showAlert(
             "Trip Started Successfully! 🚌",
             "The trip has been officially started! You can now begin the journey. Safe travels!",
@@ -997,7 +1071,7 @@ const DrivingModeScreen = () => {
       },
       isEarlyStart ? "Start Early" : "Start Trip",
       true,
-      () => {},
+      () => { },
       "Cancel"
     );
   };
@@ -1008,11 +1082,11 @@ const DrivingModeScreen = () => {
     const isTripOfficiallyStarted = tripStatus === "ongoing";
     const alertMessage = isTripOfficiallyStarted
       ? "Are you sure you want to end this trip? This will complete the journey for all " +
-        passengerCount +
-        " passengers."
+      passengerCount +
+      " passengers."
       : "Are you sure you want to cancel this trip? This will remove all " +
-        passengerCount +
-        " boarded passengers and they will need to book again.";
+      passengerCount +
+      " boarded passengers and they will need to book again.";
 
     showAlert(
       isTripOfficiallyStarted ? "End Trip" : "Cancel Trip",
@@ -1042,8 +1116,7 @@ const DrivingModeScreen = () => {
             console.error("Error updating passengers:", passengersError);
             showAlert(
               "Passenger Update Failed",
-              `Unable to ${
-                isTripOfficiallyStarted ? "complete" : "cancel"
+              `Unable to ${isTripOfficiallyStarted ? "complete" : "cancel"
               } passenger bookings. Please try again or contact support.`,
               "error"
             );
@@ -1052,8 +1125,7 @@ const DrivingModeScreen = () => {
           }
 
           console.log(
-            `Successfully ${
-              isTripOfficiallyStarted ? "completed" : "cancelled"
+            `Successfully ${isTripOfficiallyStarted ? "completed" : "cancelled"
             } ${updateResult?.length || 0} passenger bookings:`,
             updateResult
           );
@@ -1114,16 +1186,37 @@ const DrivingModeScreen = () => {
           // Reset scanned passengers for next trip
           setScannedPassengers(new Set());
 
-          showAlert(
-            isTripOfficiallyStarted
-              ? "Trip Completed! ✅"
-              : "Trip Cancelled! ⚠️",
-            isTripOfficiallyStarted
-              ? "Trip completed successfully! All passengers have reached their destinations. Great job!"
-              : "Trip cancelled successfully! All passengers have been notified and can book again.",
-            "success"
-          );
-          router.replace("/(driver)");
+          // Prepare trip summary data
+          const endTime = new Date();
+
+          // Use actual start time if trip was started, otherwise use current time (for cancellation)
+          const startTime = isTripOfficiallyStarted && actualTripStartTime
+            ? actualTripStartTime
+            : new Date(); // For cancelled trips, just use current time
+
+          const durationMs = endTime.getTime() - startTime.getTime();
+          const hours = Math.floor(durationMs / (1000 * 60 * 60));
+          const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+          const durationString = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+
+          const summaryData = {
+            routeName: routeName || "Unknown Route",
+            departureTime: startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            endTime: endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            duration: isTripOfficiallyStarted ? durationString : "N/A",
+            passengerCount: passengerCount,
+            capacity: parsedCapacity,
+            tripStatus: isTripOfficiallyStarted ? "completed" : "cancelled",
+            startDate: endTime.toLocaleDateString([], {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })
+          };
+
+          setTripSummaryData(summaryData);
+          setShowTripSummary(true);
         } catch (error) {
           console.error("Unexpected error ending trip:", error);
           showAlert(
@@ -1137,9 +1230,16 @@ const DrivingModeScreen = () => {
       },
       isTripOfficiallyStarted ? "End Trip" : "Cancel Trip",
       true,
-      () => {},
+      () => { },
       "Cancel"
     );
+  };
+
+  // Handle Trip Summary Close
+  const handleTripSummaryClose = () => {
+    setShowTripSummary(false);
+    setTripSummaryData(null);
+    router.replace("/(driver)");
   };
 
   // Only return UI after all hooks
@@ -1154,35 +1254,66 @@ const DrivingModeScreen = () => {
     );
   }
 
+  // Calculate camera position to show route start at bottom and end at top
+  const routeStart = polylineCoords[0];
+  const routeEnd = polylineCoords[polylineCoords.length - 1];
+
+  // Calculate the bearing from start to end
+  const calculateBearing = (start: { latitude: number; longitude: number }, end: { latitude: number; longitude: number }) => {
+    const dLng = (end.longitude - start.longitude) * Math.PI / 180;
+    const lat1 = start.latitude * Math.PI / 180;
+    const lat2 = end.latitude * Math.PI / 180;
+
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+
+    const bearing = Math.atan2(y, x) * 180 / Math.PI;
+    return (bearing + 360) % 360;
+  };
+
+  // Calculate center point between start and end
+  const routeCenter = {
+    latitude: (routeStart.latitude + routeEnd.latitude) / 2,
+    longitude: (routeStart.longitude + routeEnd.longitude) / 2,
+  };
+
   const initialCamera = {
-    center: driverLocation,
-    pitch: 85, // 3D tilted view
-    heading: 0,
-    zoom: 17, // Adjust zoom as needed (higher = closer)
-    altitude: 1000, // Optional: camera altitude in meters
+    center: routeCenter,
+    pitch: 80, // Good 3D angle to see the route clearly
+    heading: calculateBearing(routeStart, routeEnd), // Point camera in route direction
+    zoom: 19, // Zoom level to see both start and end points
   };
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#f2f2f7" }}>
-      {/* Collapsible Top Header */}
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+      {/* Collapsible Top Header - Premium Design */}
       <TouchableOpacity
         onPress={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
-        activeOpacity={0.8}
+        activeOpacity={0.9}
       >
         <LinearGradient
-          colors={["#007AFF", "#00c6ff"]}
+          colors={["#0891B2", "#06B6D4", "#22D3EE"]}
           start={[0, 0]}
           end={[1, 1]}
           style={[styles.topBar, isHeaderCollapsed && styles.topBarCollapsed]}
         >
+          {/* Decorative Elements */}
+          <View style={styles.headerDecoCircle1} />
+          <View style={styles.headerDecoCircle2} />
+
           {/* Route Title - Always Visible */}
           <View style={styles.routeHeader}>
-            <Ionicons name="bus" size={24} color="#fff" />
-            <Text style={styles.routeName}>{routeName}</Text>
+            <View style={styles.routeIconContainer}>
+              <Ionicons name="bus" size={22} color="#fff" />
+            </View>
+            <View style={styles.routeTitleContainer}>
+              <Text style={styles.routeName}>{routeName}</Text>
+              <Text style={styles.routeSubtitle}>Active Trip</Text>
+            </View>
             <View style={styles.headerToggle}>
               <Ionicons
                 name={isHeaderCollapsed ? "chevron-down" : "chevron-up"}
                 size={20}
-                color="#fff"
+                color="rgba(255,255,255,0.8)"
               />
             </View>
           </View>
@@ -1194,31 +1325,37 @@ const DrivingModeScreen = () => {
               <View style={styles.statusCard}>
                 <View style={styles.statusRow}>
                   <View style={styles.statusItem}>
-                    <Ionicons
-                      name={
-                        tripStatus === "waiting"
-                          ? "time"
-                          : tripStatus === "ongoing"
-                          ? "play-circle"
-                          : "checkmark-circle"
-                      }
-                      size={20}
-                      color="#fff"
-                    />
+                    <View style={styles.statusIconWrapper}>
+                      <Ionicons
+                        name={
+                          tripStatus === "waiting"
+                            ? "time"
+                            : tripStatus === "ongoing"
+                              ? "play-circle"
+                              : "checkmark-circle"
+                        }
+                        size={20}
+                        color="#22D3EE"
+                      />
+                    </View>
                     <Text style={styles.statusLabel}>Status</Text>
                     <Text style={styles.statusValue}>
                       {tripStatus === "waiting"
-                        ? "Waiting to Start"
+                        ? "Waiting"
                         : tripStatus === "ongoing"
-                        ? "Trip in Progress"
-                        : tripStatus === "completed"
-                        ? "Completed"
-                        : "Cancelled"}
+                          ? "In Progress"
+                          : tripStatus === "completed"
+                            ? "Completed"
+                            : "Cancelled"}
                     </Text>
                   </View>
 
+                  <View style={styles.statusDivider} />
+
                   <View style={styles.statusItem}>
-                    <Ionicons name="people" size={20} color="#fff" />
+                    <View style={styles.statusIconWrapper}>
+                      <Ionicons name="people" size={20} color="#22D3EE" />
+                    </View>
                     <Text style={styles.statusLabel}>Passengers</Text>
                     <Text style={styles.statusValue}>
                       {passengerCount}/{parsedCapacity}
@@ -1229,18 +1366,13 @@ const DrivingModeScreen = () => {
                   </View>
                 </View>
 
-                {/* Departure Time */}
-                <View style={styles.departureSection}>
-                  <Ionicons name="time-outline" size={18} color="#fff" />
-                  <Text style={styles.departureText}>
-                    {dynamicDepartureTime}
-                  </Text>
-                </View>
-
                 {/* Progress Bar */}
                 <View style={styles.progressContainer}>
                   <View style={styles.progressBar}>
-                    <View
+                    <LinearGradient
+                      colors={["#10B981", "#34D399"]}
+                      start={[0, 0]}
+                      end={[1, 0]}
                       style={[
                         styles.progressFill,
                         {
@@ -1250,17 +1382,30 @@ const DrivingModeScreen = () => {
                     />
                   </View>
                   <Text style={styles.progressText}>
-                    {Math.round((passengerCount / parsedCapacity) * 100)}% Full
+                    {Math.round((passengerCount / parsedCapacity) * 100)}% Capacity
+                  </Text>
+                </View>
+
+                {/* Departure Time */}
+                <View style={styles.departureSection}>
+                  <Ionicons name="time-outline" size={16} color="rgba(255,255,255,0.7)" />
+                  <Text style={styles.departureText}>
+                    {dynamicDepartureTime}
                   </Text>
                 </View>
               </View>
 
               {/* Warning Panel */}
               {offRouteWarning && (
-                <View style={styles.warningPanel}>
-                  <Ionicons name="warning" size={20} color="#fff" />
+                <LinearGradient
+                  colors={["#EF4444", "#DC2626"]}
+                  style={styles.warningPanel}
+                  start={[0, 0]}
+                  end={[1, 0]}
+                >
+                  <Ionicons name="warning" size={18} color="#fff" />
                   <Text style={styles.warningText}>You are off the route!</Text>
-                </View>
+                </LinearGradient>
               )}
             </>
           )}
@@ -1269,35 +1414,44 @@ const DrivingModeScreen = () => {
           {isHeaderCollapsed && (
             <View style={styles.quickInfoBar}>
               <View style={styles.quickInfoItem}>
-                <Ionicons name="people" size={16} color="#fff" />
+                <View style={styles.quickInfoIconBg}>
+                  <Ionicons name="people" size={14} color="#fff" />
+                </View>
                 <Text style={styles.quickInfoText}>
-                  {passengerCount}/{parsedCapacity} ({scannedPassengers.size})
+                  {passengerCount}/{parsedCapacity}
                 </Text>
               </View>
               <View style={styles.quickInfoItem}>
-                <Ionicons
-                  name={
-                    tripStatus === "waiting"
-                      ? "time"
-                      : tripStatus === "ongoing"
-                      ? "play-circle"
-                      : "checkmark-circle"
-                  }
-                  size={16}
-                  color="#fff"
-                />
+                <View style={[
+                  styles.quickInfoIconBg,
+                  tripStatus === "ongoing" && { backgroundColor: "#10B981" }
+                ]}>
+                  <Ionicons
+                    name={
+                      tripStatus === "waiting"
+                        ? "time"
+                        : tripStatus === "ongoing"
+                          ? "play-circle"
+                          : "checkmark-circle"
+                    }
+                    size={14}
+                    color="#fff"
+                  />
+                </View>
                 <Text style={styles.quickInfoText}>
                   {tripStatus === "waiting"
                     ? "Waiting"
                     : tripStatus === "ongoing"
-                    ? "Active"
-                    : "Done"}
+                      ? "Active"
+                      : "Done"}
                 </Text>
               </View>
               {offRouteWarning && (
                 <View style={styles.quickInfoItem}>
-                  <Ionicons name="warning" size={16} color="#ff4d4f" />
-                  <Text style={[styles.quickInfoText, { color: "#ff4d4f" }]}>
+                  <View style={[styles.quickInfoIconBg, { backgroundColor: "#EF4444" }]}>
+                    <Ionicons name="warning" size={14} color="#fff" />
+                  </View>
+                  <Text style={[styles.quickInfoText, { color: "#FCA5A5" }]}>
                     Off Route
                   </Text>
                 </View>
@@ -1356,6 +1510,42 @@ const DrivingModeScreen = () => {
               </View>
             </Marker>
           ))}
+
+          {/* Route Start Marker */}
+          {polylineCoords.length > 0 && (
+            <Marker
+              coordinate={polylineCoords[0]}
+              title="Route Start"
+              description="Starting point of the route"
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.routeMarkerContainer}>
+                <Image
+                  source={require("../assets/images/start-route.png")}
+                  style={styles.routeMarkerIcon}
+                  resizeMode="contain"
+                />
+              </View>
+            </Marker>
+          )}
+
+          {/* Route End Marker */}
+          {polylineCoords.length > 0 && (
+            <Marker
+              coordinate={polylineCoords[polylineCoords.length - 1]}
+              title="Route End"
+              description="End point of the route"
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.routeMarkerContainer}>
+                <Image
+                  source={require("../assets/images/end-route.png")}
+                  style={styles.routeMarkerIcon}
+                  resizeMode="contain"
+                />
+              </View>
+            </Marker>
+          )}
         </MapView>
 
         {/* Pickup Requests Panel */}
@@ -1466,8 +1656,8 @@ const DrivingModeScreen = () => {
                 endingTrip
                   ? "hourglass"
                   : tripStatus === "waiting"
-                  ? "close-circle"
-                  : "stop-circle"
+                    ? "close-circle"
+                    : "stop-circle"
               }
               size={20}
               color={endingTrip ? "#8e8e93" : "#ff4d4f"}
@@ -1481,8 +1671,8 @@ const DrivingModeScreen = () => {
               {endingTrip
                 ? "Processing..."
                 : tripStatus === "waiting"
-                ? "Cancel Trip"
-                : "End Trip"}
+                  ? "Cancel Trip"
+                  : "End Trip"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1716,233 +1906,429 @@ const DrivingModeScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Trip Summary Modal - Premium Design */}
+      <Modal
+        visible={showTripSummary}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={handleTripSummaryClose}
+      >
+        <View style={styles.tripSummaryOverlay}>
+          <View style={styles.tripSummaryContainer}>
+            {/* Premium Header with Gradient */}
+            <LinearGradient
+              colors={tripSummaryData?.tripStatus === "completed"
+                ? ["#10B981", "#059669", "#047857"]
+                : ["#F59E0B", "#D97706", "#B45309"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.tripSummaryHeader}
+            >
+              <View style={styles.tripSummaryHeaderDecor} />
+              <View style={styles.tripSummaryIconWrapper}>
+                <Ionicons
+                  name={tripSummaryData?.tripStatus === "completed" ? "checkmark-circle" : "close-circle"}
+                  size={40}
+                  color="#fff"
+                />
+              </View>
+              <Text style={styles.tripSummaryTitle}>
+                {tripSummaryData?.tripStatus === "completed" ? "Trip Completed!" : "Trip Cancelled"}
+              </Text>
+              <Text style={styles.tripSummarySubtitle}>
+                {tripSummaryData?.tripStatus === "completed"
+                  ? "Great job! Here's your trip summary"
+                  : "Trip was ended before starting"}
+              </Text>
+            </LinearGradient>
+
+            {/* Content */}
+            <View style={styles.tripSummaryContent}>
+              {/* Route Name - Featured */}
+              <View style={styles.tripSummaryRouteCard}>
+                <Ionicons name="map" size={20} color="#0891B2" />
+                <View style={styles.tripSummaryRouteInfo}>
+                  <Text style={styles.tripSummaryRouteLabel}>Route</Text>
+                  <Text style={styles.tripSummaryRouteName}>{tripSummaryData?.routeName}</Text>
+                </View>
+              </View>
+
+              {/* Date */}
+              <View style={styles.tripSummaryRow}>
+                <View style={styles.tripSummaryRowLeft}>
+                  <Ionicons name="calendar-outline" size={18} color="#6B7280" />
+                  <Text style={styles.tripSummaryLabel}>Date</Text>
+                </View>
+                <Text style={styles.tripSummaryValue}>{tripSummaryData?.startDate}</Text>
+              </View>
+
+              {/* Time Row */}
+              <View style={styles.tripSummaryTimeRow}>
+                <View style={styles.tripSummaryTimeItem}>
+                  <View style={styles.tripSummaryTimeIcon}>
+                    <Ionicons name="play-circle" size={18} color="#10B981" />
+                  </View>
+                  <Text style={styles.tripSummaryTimeLabel}>Start</Text>
+                  <Text style={styles.tripSummaryTimeValue}>{tripSummaryData?.departureTime}</Text>
+                </View>
+                <View style={styles.tripSummaryTimeDivider}>
+                  <View style={styles.tripSummaryTimeLine} />
+                  <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
+                  <View style={styles.tripSummaryTimeLine} />
+                </View>
+                <View style={styles.tripSummaryTimeItem}>
+                  <View style={styles.tripSummaryTimeIcon}>
+                    <Ionicons name="stop-circle" size={18} color="#EF4444" />
+                  </View>
+                  <Text style={styles.tripSummaryTimeLabel}>End</Text>
+                  <Text style={styles.tripSummaryTimeValue}>{tripSummaryData?.endTime}</Text>
+                </View>
+              </View>
+
+              {/* Stats Row */}
+              <View style={styles.tripSummaryStatsRow}>
+                <View style={styles.tripSummaryStatItem}>
+                  <LinearGradient
+                    colors={["#8B5CF6", "#7C3AED"]}
+                    style={styles.tripSummaryStatIcon}
+                  >
+                    <Ionicons name="time" size={18} color="#fff" />
+                  </LinearGradient>
+                  <Text style={styles.tripSummaryStatLabel}>Duration</Text>
+                  <Text style={styles.tripSummaryStatValue}>{tripSummaryData?.duration}</Text>
+                </View>
+                <View style={styles.tripSummaryStatItem}>
+                  <LinearGradient
+                    colors={["#0891B2", "#06B6D4"]}
+                    style={styles.tripSummaryStatIcon}
+                  >
+                    <Ionicons name="people" size={18} color="#fff" />
+                  </LinearGradient>
+                  <Text style={styles.tripSummaryStatLabel}>Passengers</Text>
+                  <Text style={styles.tripSummaryStatValue}>
+                    {tripSummaryData?.passengerCount}/{tripSummaryData?.capacity}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Footer Button */}
+            <TouchableOpacity
+              style={styles.tripSummaryCloseButtonWrapper}
+              onPress={handleTripSummaryClose}
+              activeOpacity={0.8}
+            >
+              <LinearGradient
+                colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.tripSummaryCloseButton}
+              >
+                <Ionicons name="home" size={20} color="#fff" />
+                <Text style={styles.tripSummaryCloseButtonText}>Back to Dashboard</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
   centered: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#f2f2f7",
+    backgroundColor: "#FFFFFF",
   },
   map: { flex: 1 },
 
-  // Enhanced Top Bar Styles
+  // Premium Top Bar Styles
   topBar: {
-    paddingTop: 20,
-    paddingBottom: 20,
+    paddingTop: 16,
+    paddingBottom: 16,
     paddingHorizontal: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    elevation: 6,
-    shadowColor: "#007AFF",
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    elevation: 8,
+    shadowColor: "#06B6D4",
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    overflow: "hidden",
+    position: "relative",
   },
   topBarCollapsed: {
     paddingBottom: 12,
   },
+  headerDecoCircle1: {
+    position: "absolute",
+    top: -40,
+    right: -40,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecoCircle2: {
+    position: "absolute",
+    bottom: -30,
+    left: 30,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+  },
   routeHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
   },
-  routeName: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#fff",
-    marginLeft: 8,
+  routeIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  routeTitleContainer: {
     flex: 1,
   },
+  routeName: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.3,
+  },
+  routeSubtitle: {
+    fontSize: 12,
+    color: "rgba(255, 255, 255, 0.7)",
+    marginTop: 2,
+  },
   headerToggle: {
-    marginLeft: "auto",
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
   },
 
   // Quick Info Bar (when collapsed)
   quickInfoBar: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    justifyContent: "flex-start",
     alignItems: "center",
-    marginTop: 8,
+    marginTop: 12,
+    gap: 16,
   },
   quickInfoItem: {
     flexDirection: "row",
     alignItems: "center",
   },
+  quickInfoIconBg: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 6,
+  },
   quickInfoText: {
     color: "#fff",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
-    marginLeft: 4,
   },
 
-  // Status Card Styles
+  // Status Card Styles - Premium
   statusCard: {
-    backgroundColor: "rgba(255, 255, 255, 0.15)",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 8,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
   },
   statusRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 12,
+    justifyContent: "space-around",
+    marginBottom: 20,
   },
   statusItem: {
     alignItems: "center",
     flex: 1,
   },
+  statusDivider: {
+    width: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    marginVertical: 8,
+  },
+  statusIconWrapper: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: "rgba(34, 211, 238, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
   statusLabel: {
-    fontSize: 12,
-    color: "#e6f0fa",
-    marginTop: 4,
-    fontWeight: "500",
+    fontSize: 10,
+    color: "rgba(255, 255, 255, 0.6)",
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
   statusValue: {
-    fontSize: 16,
+    fontSize: 15,
     color: "#fff",
-    fontWeight: "bold",
-    marginTop: 2,
+    fontWeight: "700",
+    marginTop: 4,
   },
   statusSubtext: {
     fontSize: 10,
-    color: "#e6f0fa",
+    color: "rgba(255, 255, 255, 0.5)",
     marginTop: 2,
-    fontWeight: "400",
-  },
-  departureSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  departureText: {
-    fontSize: 16,
-    color: "#fff",
-    marginLeft: 8,
-    fontWeight: "600",
   },
   progressContainer: {
-    marginTop: 8,
+    marginBottom: 16,
   },
   progressBar: {
-    height: 6,
-    backgroundColor: "rgba(255, 255, 255, 0.3)",
-    borderRadius: 3,
+    height: 8,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 4,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#4CAF50",
-    borderRadius: 3,
+    borderRadius: 4,
   },
   progressText: {
-    fontSize: 12,
-    color: "#e6f0fa",
-    textAlign: "center",
-    marginTop: 4,
+    fontSize: 11,
+    color: "rgba(255, 255, 255, 0.7)",
+    textAlign: "right",
+    marginTop: 6,
     fontWeight: "500",
+  },
+  departureSection: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  departureText: {
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.9)",
+    marginLeft: 10,
+    fontWeight: "500",
+    flex: 1,
   },
 
   warningPanel: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#ff4d4f",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 8,
-    alignSelf: "flex-start",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginTop: 12,
   },
   warningText: {
     color: "#fff",
-    marginLeft: 8,
-    fontWeight: "bold",
-    fontSize: 14,
+    marginLeft: 10,
+    fontWeight: "600",
+    fontSize: 13,
   },
 
   // Enhanced Action Button Styles
   actionContainer: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: "#ffffffff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     paddingTop: 20,
-    paddingBottom: 20,
+    paddingBottom: 24,
     paddingHorizontal: 20,
-    elevation: 8,
+    elevation: 10,
     shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
   },
   primaryActions: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 16,
+    gap: 12,
   },
   primaryButton: {
     flex: 1,
     alignItems: "center",
-    paddingVertical: 16,
+    paddingVertical: 18,
     paddingHorizontal: 12,
-    borderRadius: 16,
-    marginHorizontal: 4,
-    elevation: 3,
+    borderRadius: 18,
+    elevation: 4,
     shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
   },
   scanButton: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#0891B2",
   },
   startButton: {
-    backgroundColor: "#4CAF50",
+    backgroundColor: "#10B981",
   },
   buttonIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     backgroundColor: "rgba(255, 255, 255, 0.2)",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 10,
   },
   primaryButtonText: {
     color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
+    fontSize: 15,
+    fontWeight: "700",
     textAlign: "center",
   },
   buttonSubtext: {
-    color: "rgba(255, 255, 255, 0.8)",
-    fontSize: 12,
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 11,
     textAlign: "center",
-    marginTop: 2,
+    marginTop: 4,
   },
   secondaryButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#ff4d4f",
-    backgroundColor: "transparent",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: "#EF4444",
+    backgroundColor: "rgba(239, 68, 68, 0.1)",
   },
   secondaryButtonText: {
-    color: "#ff4d4f",
-    fontSize: 16,
+    color: "#EF4444",
+    fontSize: 15,
     fontWeight: "600",
     marginLeft: 8,
   },
   disabledButton: {
-    borderColor: "#8e8e93",
+    borderColor: "#475569",
+    backgroundColor: "rgba(71, 85, 105, 0.1)",
     opacity: 0.6,
   },
   disabledText: {
-    color: "#8e8e93",
+    color: "#64748B",
   },
 
   // Improved QR Scanner Modal Styles
@@ -2238,6 +2624,17 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
   },
+
+  // Route Marker Styles
+  routeMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  routeMarkerIcon: {
+    width: 36,
+    height: 36,
+    zIndex: 2,
+  },
   pickupRequestsPanel: {
     backgroundColor: "#fff",
     borderTopLeftRadius: 20,
@@ -2418,6 +2815,222 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
+  },
+
+  // Trip Summary Modal Styles - Premium Design
+  tripSummaryOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  tripSummaryContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    width: "100%",
+    maxWidth: 380,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 16,
+    overflow: "hidden",
+  },
+  tripSummaryHeader: {
+    paddingTop: 32,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    position: "relative",
+    overflow: "hidden",
+  },
+  tripSummaryHeaderDecor: {
+    position: "absolute",
+    top: -50,
+    right: -50,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  tripSummaryIconWrapper: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  tripSummaryTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#fff",
+    textAlign: "center",
+    letterSpacing: -0.3,
+  },
+  tripSummarySubtitle: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.85)",
+    textAlign: "center",
+    marginTop: 6,
+  },
+  tripSummaryContent: {
+    padding: 20,
+  },
+  tripSummaryRouteCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F0FDFA",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#CCFBF1",
+  },
+  tripSummaryRouteInfo: {
+    marginLeft: 14,
+    flex: 1,
+  },
+  tripSummaryRouteLabel: {
+    fontSize: 11,
+    color: "#6B7280",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  tripSummaryRouteName: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginTop: 2,
+  },
+  tripSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+  },
+  tripSummaryRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  tripSummaryLabel: {
+    fontSize: 14,
+    color: "#6B7280",
+    fontWeight: "500",
+  },
+  tripSummaryValue: {
+    fontSize: 14,
+    color: "#1F2937",
+    fontWeight: "600",
+  },
+  tripSummaryTimeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+  },
+  tripSummaryTimeItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+  tripSummaryTimeIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "#F9FAFB",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  tripSummaryTimeLabel: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    fontWeight: "500",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  tripSummaryTimeValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginTop: 2,
+  },
+  tripSummaryTimeDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: 10,
+  },
+  tripSummaryTimeLine: {
+    width: 16,
+    height: 1,
+    backgroundColor: "#E5E7EB",
+  },
+  tripSummaryStatsRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingTop: 20,
+    gap: 16,
+  },
+  tripSummaryStatItem: {
+    flex: 1,
+    alignItems: "center",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+  },
+  tripSummaryStatIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  tripSummaryStatLabel: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  tripSummaryStatValue: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginTop: 4,
+  },
+  tripSummaryCloseButtonWrapper: {
+    margin: 20,
+    marginTop: 0,
+    borderRadius: 14,
+    overflow: "hidden",
+    shadowColor: "#06B6D4",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  tripSummaryCloseButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    gap: 10,
+  },
+  tripSummaryCloseButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
 });
 

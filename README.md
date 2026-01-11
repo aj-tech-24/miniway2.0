@@ -45,60 +45,184 @@ Miniway follows a modern client-server architecture with real-time capabilities,
 ### **High-Level Architecture Diagram**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     MINIWAY SYSTEM ARCHITECTURE                  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                            MINIWAY SYSTEM ARCHITECTURE                                       │
+│                        (Real-Time Mini Bus Tracking System)                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 
-                    ┌──────────────────────┐
-                    │  Google Maps Platform │
-                    │  • Directions API     │
-                    │  • Geocoding API      │
-                    └──────────┬───────────┘
-                               │
-                               │ HTTP/REST
-                               │
-    ┌──────────────────────────┼──────────────────────────┐
-    │                          │                          │
-    ▼                          ▼                          ▼
-┌────────────────┐    ┌────────────────┐       ┌────────────────┐
-│  Commuter App  │    │   Driver App   │       │   Admin App    │
-│  (React Native)│    │ (React Native) │       │ (React Native) │
-└────────┬───────┘    └────────┬───────┘       └────────┬───────┘
-         │                     │                        │
-         │                     │                        │
-         └─────────────────────┼────────────────────────┘
-                               │
-                    REST API / Realtime WebSocket
-                               │
-                               ▼
-                ┌──────────────────────────────┐
-                │       SUPABASE BACKEND       │
-                │  ┌────────────────────────┐  │
-                │  │   PostgreSQL + PostGIS │  │
-                │  │   • routes table       │  │
-                │  │   • users table        │  │
-                │  │   • trips table        │  │
-                │  │   • bus_locations      │  │
-                │  └────────────────────────┘  │
-                │                              │
-                │  ┌────────────────────────┐  │
-                │  │    Realtime Engine     │  │
-                │  │  • Live bus tracking   │  │
-                │  │  • Position updates    │  │
-                │  └────────────────────────┘  │
-                │                              │
-                │  ┌────────────────────────┐  │
-                │  │   Authentication       │  │
-                │  │  • Email/Password      │  │
-                │  │  • Role-based access   │  │
-                │  └────────────────────────┘  │
-                │                              │
-                │  ┌────────────────────────┐  │
-                │  │    Storage (Assets)    │  │
-                │  │  • User avatars        │  │
-                │  │  • Route images        │  │
-                │  └────────────────────────┘  │
-                └──────────────────────────────┘
+┌─────────────────────────────────────────── EXTERNAL SERVICES ──────────────────────────────────────────┐
+│                                                                                                          │
+│   ┌─────────────────────────────┐        ┌──────────────────────────────┐                              │
+│   │   Google Maps Platform      │        │  Push Notification Services  │                              │
+│   │  ┌────────────────────────┐ │        │  ┌────────────────────────┐  │                              │
+│   │  │ • Directions API       │ │        │  │ Expo Push Notifications│  │                              │
+│   │  │ • Geocoding API        │ │        │  │   (projectId: 0d76c..) │  │                              │
+│   │  │ • Places Autocomplete  │ │        │  │                        │  │                              │
+│   │  │ • Polyline Encoding    │ │        │  │ NativeNotify Service   │  │
+│   │  └────────────────────────┘ │        │  │   (appId: 32035)       │  │                              │
+│   └──────────────┬──────────────┘        │  └────────────────────────┘  │                              │
+│                  │ HTTP/REST             └──────────────┬───────────────┘                               │
+│                  │                                      │ Push Messages                                 │
+└──────────────────┼──────────────────────────────────────┼───────────────────────────────────────────────┘
+                   │                                      │
+                   │                                      │
+┌──────────────────┼──────────────────────────────────────┼─────── MOBILE FRONTEND ──────────────────────┐
+│                  │                                      │                                               │
+│                  ▼                                      ▼                                               │
+│  ┌───────────────────────────┐   ┌───────────────────────────┐   ┌───────────────────────────┐        │
+│  │    COMMUTER APP           │   │      DRIVER APP           │   │    CONDUCTOR APP          │        │
+│  │  (React Native + Expo)    │   │  (React Native + Expo)    │   │  (React Native + Expo)    │        │
+│  │ ┌───────────────────────┐ │   │ ┌───────────────────────┐ │   │ ┌───────────────────────┐ │        │
+│  │ │ • Live Bus Tracking   │ │   │ │ • Driving Mode Screen │ │   │ │ • QR Code Scanner     │ │        │
+│  │ │ • Route Finder        │ │   │ │ • GPS Broadcasting    │ │   │ │ • Passenger Manager   │ │        │
+│  │ │ • Pickup Requests     │ │   │ │ • Pickup Handler      │ │   │ │ • Boarding Verification│ │       │
+│  │ │ • Trip History        │ │   │ │ • Trip Management     │ │   │ │ • Guest Addition      │ │        │
+│  │ │ • Places Autocomplete │ │   │ │ • Route Selection     │ │   │ │ • Trip Monitoring     │ │        │
+│  │ │ • 3D Bus Markers      │ │   │ │ • Off-Route Warning   │ │   │ │ • Realtime Updates    │ │        │
+│  │ │ • Dark/Light Theme    │ │   │ │ • QR Scanner          │ │   │ │ • Passenger Stats     │ │        │
+│  │ └───────────────────────┘ │   │ └───────────────────────┘ │   │ └───────────────────────┘ │        │
+│  └─────────────┬─────────────┘   └─────────────┬─────────────┘   └─────────────┬─────────────┘        │
+│                │                               │                               │                        │
+│                │    Components & Contexts:     │                               │                        │
+│                │    • AuthContext (Session, Role, Push Registration)           │                        │
+│                │    • ThemeContext (Light/Dark/System with AsyncStorage)       │                        │
+│                │    • react-native-maps + Custom 3D Markers (Three.js)         │                        │
+│                │    • expo-location (GPS), expo-camera (QR), expo-haptics      │                        │
+│                │                                                                │                        │
+│                └────────────────────────────────┬───────────────────────────────┘                        │
+│                                                 │                                                        │
+│                                     REST API / WebSocket                                                │
+│                                                 │                                                        │
+└─────────────────────────────────────────────────┼──────────────────────────────────────────────────────┘
+                                                  │
+                                                  ▼
+┌────────────────────────────────────────── SUPABASE BACKEND ─────────────────────────────────────────────┐
+│                                    (Cloud-Hosted BaaS Platform)                                          │
+│                                                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                          PostgreSQL 15+ DATABASE with PostGIS Extension                           │  │
+│  │                                                                                                    │  │
+│  │  ┌────────────────────────────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  TABLES:                                                                                     │  │  │
+│  │  │  • routes (id, name, path[LineString], start_address, end_address)                          │  │  │
+│  │  │  • users (id, email, role[commuter|driver|conductor|admin], fullName, contact_number)       │  │  │
+│  │  │  • trips (id, bus_id, status[waiting|ongoing|completed], current_location[Point])           │  │  │
+│  │  │  • buses (id, plate_number, capacity, passengers, route_id)                                 │  │  │
+│  │  │  • trip_passengers (id, trip_id, passenger_id, status[waiting|boarded|completed])           │  │  │
+│  │  │  • pickup_requests (id, commuter_id, bus_id, status, pickup_lat/lng, dest_lat/lng)          │  │  │
+│  │  │                                                                                              │  │  │
+│  │  │  VIEWS:                                                                                      │  │  │
+│  │  │  • trips_with_geojson (converts PostGIS geography → GeoJSON for mobile consumption)         │  │  │
+│  │  │                                                                                              │  │  │
+│  │  │  INDEXES:                                                                                    │  │  │
+│  │  │  • GIST spatial index on routes.path (for fast ST_Distance queries)                         │  │  │
+│  │  └────────────────────────────────────────────────────────────────────────────────────────────┘  │  │
+│  │                                                                                                    │  │
+│  │  ┌────────────────────────────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  SQL FUNCTIONS (RPC):                                                                        │  │  │
+│  │  │  • find_route_near_destination(lat, lon) → Uses ST_Distance for spatial search             │  │  │
+│  │  │  • add_new_route(name, geojson) → Converts GeoJSON to PostGIS geometry                     │  │  │
+│  │  │  • get_active_trips_with_geojson() → Fetches active trips with formatted locations         │  │  │
+│  │  └────────────────────────────────────────────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                            REALTIME ENGINE (WebSocket Pub/Sub)                                    │  │
+│  │                                                                                                    │  │
+│  │  Active Channels:                                                                                 │  │
+│  │  • public:trips ──────────────────────────── Broadcasts all trip updates to commuters            │  │
+│  │  • realtime-trips ────────────────────────── Trip status & location changes                       │  │
+│  │  • pickup_requests_{busId} ───────────────── Driver/conductor pickup notifications               │  │
+│  │  • passenger-boarding-{userId}-{busId} ────── Boarding confirmation updates                       │  │
+│  │  • pickup-request-{userId} ───────────────── Commuter request status updates                      │  │
+│  │  • trip_passengers_{tripId} ──────────────── Passenger list updates for conductors               │  │
+│  │  • realtime-trip-{busId} ─────────────────── Individual bus location tracking                     │  │
+│  │  • trip-passenger-{passengerId}-{busId} ──── Passenger-specific trip updates                      │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                         AUTHENTICATION & AUTHORIZATION                                            │  │
+│  │                                                                                                    │  │
+│  │  • Email/Password Authentication                                                                  │  │
+│  │  • JWT Tokens with Auto-Refresh                                                                   │  │
+│  │  • Row Level Security (RLS) Policies per Role                                                     │  │
+│  │  • Session Management via AsyncStorage                                                            │  │
+│  │  • Role-based Access Control (commuter, driver, conductor, admin)                                │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                              STORAGE SERVICE                                                      │  │
+│  │                                                                                                    │  │
+│  │  • User Profile Avatars (JPEG/PNG)                                                                │  │
+│  │  • Route Documentation Images                                                                     │  │
+│  │  • Uploaded Files via FileUpload Component                                                        │  │
+│  │  • CDN-backed for Fast Global Delivery                                                            │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌───────────────────────────────────────── DATA FLOW EXAMPLES ────────────────────────────────────────────┐
+│                                                                                                          │
+│  [1] REAL-TIME BUS TRACKING:                                                                            │
+│      Driver App (GPS every 2s) → Update trips.current_location (PostGIS Point)                         │
+│      → Supabase Realtime broadcasts to "public:trips" WebSocket channel                                │
+│      → All subscribed Commuter Apps receive update → Map markers refresh position                       │
+│                                                                                                          │
+│  [2] PICKUP REQUEST FLOW:                                                                               │
+│      Commuter requests pickup → Insert pickup_requests table                                            │
+│      → Realtime broadcasts to "pickup_requests_{busId}" channel                                         │
+│      → Driver/Conductor receives notification → Accept/Decline                                          │
+│      → Status update broadcasts back to "pickup-request-{userId}" channel                               │
+│      → Conductor scans QR code → Update trip_passengers.status to "boarded"                             │
+│      → Realtime updates "trip_passengers_{tripId}" channel                                              │
+│                                                                                                          │
+│  [3] ROUTE DISCOVERY:                                                                                   │
+│      Commuter searches destination → Google Places Autocomplete → Get coordinates                       │
+│      → Call Supabase RPC: find_route_near_destination(lat, lon)                                        │
+│      → PostGIS executes ST_Distance on all routes with GIST index                                       │
+│      → Returns nearest route with GeoJSON path → Render polyline on map                                 │
+│                                                                                                          │
+│  [4] ADMIN ROUTE CREATION:                                                                              │
+│      Admin enters origin/destination → Google Geocoding API (addresses → coordinates)                   │
+│      → Google Directions API (waypoints → optimized polyline with alternatives)                         │
+│      → Admin selects route → Call add_new_route(name, geojson)                                         │
+│      → PostGIS stores as geography LineString → Route available to all users                            │
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────── TECHNOLOGY STACK ────────────────────────────────────────────────┐
+│                                                                                                          │
+│  FRONTEND:           React Native 0.79.6 • Expo SDK 53 • TypeScript 5.x                                │
+│  NAVIGATION:         Expo Router 5.1 (file-based) • React Navigation 7.1                               │
+│  STATE MANAGEMENT:   React Context API • AsyncStorage 2.1.2                                             │
+│  MAPPING:            react-native-maps 1.20.1 • Google Maps Platform                                   │
+│  3D GRAPHICS:        Three.js via @react-three/fiber 9.3 • expo-gl 15.1                                │
+│  BACKEND:            Supabase (PostgreSQL 15+ with PostGIS extension)                                   │
+│  REALTIME:           Supabase Realtime (WebSocket channels)                                             │
+│  AUTHENTICATION:     Supabase Auth (JWT with refresh tokens)                                            │
+│  PUSH NOTIFICATIONS: Expo Notifications 0.31.4 • NativeNotify 4.0.9                                     │
+│  LOCATION:           expo-location 18.1.6 (GPS tracking)                                                │
+│  CAMERA:             expo-camera 16.1.11 (QR code scanning)                                             │
+│  UTILITIES:          @mapbox/polyline 1.2.1 • expo-haptics 14.1.4                                       │
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌──────────────────────────────────── SECURITY & PERFORMANCE ─────────────────────────────────────────────┐
+│                                                                                                          │
+│  SECURITY:                                       PERFORMANCE:                                           │
+│  ✓ Environment variables (.env)                 ✓ PostGIS GIST spatial indexing                        │
+│  ✓ Row Level Security (RLS) policies            ✓ Location updates throttled (2-5s)                    │
+│  ✓ JWT token validation                         ✓ AsyncStorage caching (routes, theme)                 │
+│  ✓ HTTPS-only API communication                 ✓ Database view: trips_with_geojson                    │
+│  ✓ Google API key restrictions                  ✓ Selective Realtime subscriptions                     │
+│  ✓ Camera/location permission handling          ✓ 3D GLB models (optimized format)                     │
+│  ✓ AsyncStorage encryption                      ✓ Lazy loading of routes                               │
+│                                                  ✓ Connection pooling (Supabase managed)               │
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### **Component Breakdown**

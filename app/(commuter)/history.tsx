@@ -3,6 +3,7 @@ import { useAppTheme } from "@/contexts/ThemeContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -16,15 +17,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// --- FIX 1: Update the 'routes' property type ---
-// 'routes' should be an array of objects, not a single object.
 type HistoryItem = {
   id: string;
   start_location_name: string | null;
   end_location_name: string | null;
   travel_date: string;
   route_name: string | null;
-  status?: string; // 'completed' | 'cancelled' | other
+  status?: string;
 };
 
 export function TravelHistoryScreen() {
@@ -38,13 +37,12 @@ export function TravelHistoryScreen() {
   >("all");
 
   const backgroundColor = useThemeColor({}, "background");
-  const borderColor = useThemeColor({}, "borderColor");
   const textColor = useThemeColor({}, "text");
   const primaryColor = useThemeColor({}, "tint");
-  const tabIconDefault = useThemeColor({}, "tabIconDefault");
   const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
-  const separatorColor = useThemeColor({}, "separatorColor");
   const { theme } = useAppTheme();
+
+  const isDark = theme === "dark";
 
   const fetchHistory = useCallback(async () => {
     if (!session?.user) return;
@@ -84,6 +82,7 @@ export function TravelHistoryScreen() {
       setRefreshing(false);
     }
   }, [session?.user]);
+
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
@@ -93,13 +92,11 @@ export function TravelHistoryScreen() {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Filter history based on selected filter
   const filteredHistory = history.filter((item) => {
     if (selectedFilter === "all") return true;
     return item.status?.toLowerCase() === selectedFilter;
   });
 
-  // Get statistics
   const stats = {
     total: history.length,
     completed: history.filter(
@@ -120,23 +117,20 @@ export function TravelHistoryScreen() {
       if (s === "completed") {
         return {
           icon: "checkmark-circle" as const,
-          color: "#34C759",
-          backgroundColor: "rgba(52,199,89,0.1)",
+          colors: ["#10B981", "#059669"] as const,
           label: "Completed",
         };
       }
       if (s === "cancelled") {
         return {
           icon: "close-circle" as const,
-          color: "#FF3B30",
-          backgroundColor: "rgba(255,59,48,0.1)",
+          colors: ["#EF4444", "#DC2626"] as const,
           label: "Cancelled",
         };
       }
       return {
         icon: "time" as const,
-        color: "#007AFF",
-        backgroundColor: "rgba(0,122,255,0.1)",
+        colors: ["#3B82F6", "#2563EB"] as const,
         label: s ? s.charAt(0).toUpperCase() + s.slice(1) : "Completed",
       };
     };
@@ -147,7 +141,6 @@ export function TravelHistoryScreen() {
       weekday: "short",
       month: "short",
       day: "numeric",
-      year: "numeric",
     });
     const formattedTime = travelDate.toLocaleTimeString("en-US", {
       hour: "2-digit",
@@ -156,19 +149,19 @@ export function TravelHistoryScreen() {
 
     return (
       <TouchableOpacity
-        style={[styles.historyCard, { backgroundColor }]}
+        style={[styles.historyCard, isDark && styles.historyCardDark]}
         activeOpacity={0.7}
       >
         {/* Card Header */}
         <View style={styles.cardHeader}>
           <View style={styles.routeInfo}>
-            <View
-              style={[
-                styles.routeIconContainer,
-                { backgroundColor: statusConfig.backgroundColor },
-              ]}
-            >
-              <Ionicons name="bus" size={20} color={statusConfig.color} />
+            <View style={styles.routeIconWrapper}>
+              <LinearGradient
+                colors={statusConfig.colors}
+                style={styles.routeIconGradient}
+              >
+                <Ionicons name="bus" size={20} color="#fff" />
+              </LinearGradient>
             </View>
             <View style={styles.routeDetails}>
               <Text
@@ -177,41 +170,51 @@ export function TravelHistoryScreen() {
               >
                 {routeName}
               </Text>
-              <Text
-                style={[styles.routeSubtitle, { color: placeholderTextColor }]}
-              >
-                {formattedDate} • {formattedTime}
-              </Text>
+              <View style={styles.dateTimeRow}>
+                <Ionicons
+                  name="calendar-outline"
+                  size={12}
+                  color={isDark ? "#9CA3AF" : "#6B7280"}
+                />
+                <Text style={[styles.dateTimeText, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                  {formattedDate} • {formattedTime}
+                </Text>
+              </View>
             </View>
           </View>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: statusConfig.backgroundColor },
-            ]}
+          <LinearGradient
+            colors={statusConfig.colors}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.statusBadge}
           >
             <Ionicons
               name={statusConfig.icon}
-              size={14}
-              color={statusConfig.color}
+              size={12}
+              color="#fff"
             />
-            <Text style={[styles.statusText, { color: statusConfig.color }]}>
+            <Text style={styles.statusText}>
               {statusConfig.label}
             </Text>
-          </View>
+          </LinearGradient>
         </View>
 
-        {/* Route Details */}
-        <View style={styles.routeDetailsContainer}>
+        {/* Route Path */}
+        <View style={styles.routePathContainer}>
+          {/* From Location */}
           <View style={styles.locationRow}>
-            <View
-              style={[styles.locationDot, { backgroundColor: "#34C759" }]}
-            />
-            <View style={styles.locationInfo}>
-              <Text
-                style={[styles.locationLabel, { color: placeholderTextColor }]}
+            <View style={styles.locationIndicator}>
+              <LinearGradient
+                colors={["#10B981", "#059669"]}
+                style={styles.locationDot}
               >
-                From
+                <View style={styles.locationDotInner} />
+              </LinearGradient>
+              <View style={[styles.connectionLine, isDark && styles.connectionLineDark]} />
+            </View>
+            <View style={styles.locationInfo}>
+              <Text style={[styles.locationLabel, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                Pickup
               </Text>
               <Text
                 style={[styles.locationText, { color: textColor }]}
@@ -221,18 +224,19 @@ export function TravelHistoryScreen() {
               </Text>
             </View>
           </View>
-
-          <View style={styles.connectionLine} />
-
+          {/* To Location */}
           <View style={styles.locationRow}>
-            <View
-              style={[styles.locationDot, { backgroundColor: "#FF3B30" }]}
-            />
-            <View style={styles.locationInfo}>
-              <Text
-                style={[styles.locationLabel, { color: placeholderTextColor }]}
+            <View style={styles.locationIndicator}>
+              <LinearGradient
+                colors={["#EF4444", "#DC2626"]}
+                style={styles.locationDot}
               >
-                To
+                <Ionicons name="flag" size={10} color="#fff" />
+              </LinearGradient>
+            </View>
+            <View style={styles.locationInfo}>
+              <Text style={[styles.locationLabel, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                Drop-off
               </Text>
               <Text
                 style={[styles.locationText, { color: textColor }]}
@@ -243,30 +247,6 @@ export function TravelHistoryScreen() {
             </View>
           </View>
         </View>
-
-        {/* Card Footer */}
-        <View style={[styles.cardFooter, { borderTopColor: separatorColor }]}>
-          <View style={styles.footerLeft}>
-            <Ionicons
-              name="calendar-outline"
-              size={16}
-              color={placeholderTextColor}
-            />
-            <Text style={[styles.footerText, { color: placeholderTextColor }]}>
-              {formattedDate}
-            </Text>
-          </View>
-          <View style={styles.footerRight}>
-            <Ionicons
-              name="time-outline"
-              size={16}
-              color={placeholderTextColor}
-            />
-            <Text style={[styles.footerText, { color: placeholderTextColor }]}>
-              {formattedTime}
-            </Text>
-          </View>
-        </View>
       </TouchableOpacity>
     );
   };
@@ -274,80 +254,114 @@ export function TravelHistoryScreen() {
   const renderFilterButton = (
     filter: "all" | "completed" | "cancelled",
     label: string,
-    count: number
-  ) => (
-    <TouchableOpacity
-      style={[
-        styles.filterButton,
-        selectedFilter === filter && styles.filterButtonActive,
-        {
-          borderColor: selectedFilter === filter ? primaryColor : borderColor,
-        },
-        { backgroundColor },
-      ]}
-      onPress={() => setSelectedFilter(filter)}
-    >
-      <Text
-        style={[
-          styles.filterButtonText,
-          { color: selectedFilter === filter ? primaryColor : textColor },
-        ]}
-      >
-        {label}
-      </Text>
-      <View
-        style={[
-          styles.filterCount,
-          {
-            backgroundColor:
-              selectedFilter === filter ? primaryColor : separatorColor,
-          },
-          { backgroundColor },
-        ]}
-      >
-        <Text
-          style={[
-            styles.filterCountText,
-            { color: selectedFilter === filter ? "#fff" : textColor },
-            { color: textColor },
-          ]}
-        >
-          {count}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
+    count: number,
+    colors: readonly [string, string]
+  ) => {
+    const isActive = selectedFilter === filter;
 
+    return (
+      <TouchableOpacity
+        style={[
+          styles.filterButton,
+          isDark && styles.filterButtonDark,
+          isActive && styles.filterButtonActive,
+        ]}
+        onPress={() => setSelectedFilter(filter)}
+        activeOpacity={0.7}
+      >
+        {isActive ? (
+          <LinearGradient
+            colors={colors}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.filterButtonGradient}
+          >
+            <Text style={styles.filterButtonTextActive}>{label}</Text>
+            <View style={styles.filterCountActive}>
+              <Text style={styles.filterCountTextActive}>{count}</Text>
+            </View>
+          </LinearGradient>
+        ) : (
+          <View style={styles.filterButtonInner}>
+            <Text style={[styles.filterButtonText, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+              {label}
+            </Text>
+            <View style={[styles.filterCount, isDark && styles.filterCountDark]}>
+              <Text style={[styles.filterCountText, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                {count}
+              </Text>
+            </View>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
   const renderStatsCard = () => (
-    <View style={[styles.statsCard, { backgroundColor }]}>
+    <View style={[styles.statsCard, isDark && styles.statsCardDark]}>
+      <LinearGradient
+        colors={isDark
+          ? ["rgba(59, 130, 246, 0.1)", "rgba(37, 99, 235, 0.05)"]
+          : ["rgba(59, 130, 246, 0.08)", "rgba(37, 99, 235, 0.02)"]}
+        style={StyleSheet.absoluteFill}
+      />
       <View style={styles.statsHeader}>
-        <Ionicons name="analytics-outline" size={24} color={primaryColor} />
-        <Text style={[styles.statsTitle, { color: textColor }]}>
-          Travel Summary
-        </Text>
+        <View style={styles.statsIconWrapper}>
+          <LinearGradient
+            colors={["#3B82F6", "#2563EB"]}
+            style={styles.statsIconGradient}
+          >
+            <Ionicons name="analytics" size={20} color="#fff" />
+          </LinearGradient>
+        </View>
+        <View>
+          <Text style={[styles.statsTitle, { color: textColor }]}>
+            Travel Summary
+          </Text>
+          <Text style={[styles.statsSubtitle, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+            Your journey statistics
+          </Text>
+        </View>
       </View>
       <View style={styles.statsGrid}>
-        <View style={styles.statItem}>
+        <View style={[styles.statItem, isDark && styles.statItemDark]}>
+          <LinearGradient
+            colors={["#3B82F6", "#2563EB"]}
+            style={styles.statIconBg}
+          >
+            <Ionicons name="layers" size={16} color="#fff" />
+          </LinearGradient>
           <Text style={[styles.statNumber, { color: textColor }]}>
             {stats.total}
           </Text>
-          <Text style={[styles.statLabel, { color: placeholderTextColor }]}>
-            Total Trips
+          <Text style={[styles.statLabel, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+            Total
           </Text>
         </View>
-        <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: "#34C759" }]}>
+        <View style={[styles.statItem, isDark && styles.statItemDark]}>
+          <LinearGradient
+            colors={["#10B981", "#059669"]}
+            style={styles.statIconBg}
+          >
+            <Ionicons name="checkmark" size={16} color="#fff" />
+          </LinearGradient>
+          <Text style={[styles.statNumber, { color: "#10B981" }]}>
             {stats.completed}
           </Text>
-          <Text style={[styles.statLabel, { color: placeholderTextColor }]}>
+          <Text style={[styles.statLabel, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
             Completed
           </Text>
         </View>
-        <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: "#FF3B30" }]}>
+        <View style={[styles.statItem, isDark && styles.statItemDark]}>
+          <LinearGradient
+            colors={["#EF4444", "#DC2626"]}
+            style={styles.statIconBg}
+          >
+            <Ionicons name="close" size={16} color="#fff" />
+          </LinearGradient>
+          <Text style={[styles.statNumber, { color: "#EF4444" }]}>
             {stats.cancelled}
           </Text>
-          <Text style={[styles.statLabel, { color: placeholderTextColor }]}>
+          <Text style={[styles.statLabel, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
             Cancelled
           </Text>
         </View>
@@ -355,6 +369,7 @@ export function TravelHistoryScreen() {
     </View>
   );
 
+  // Premium Loading State
   if (loading) {
     return (
       <SafeAreaView
@@ -363,15 +378,29 @@ export function TravelHistoryScreen() {
       >
         <StatusBar style={theme === "dark" ? "light" : "dark"} />
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={primaryColor} />
-          <Text style={[styles.loadingText, { color: textColor }]}>
-            Loading your travel history...
+          <LinearGradient
+            colors={["#3B82F6", "#2563EB"]}
+            style={styles.loadingIconContainer}
+          >
+            <Ionicons name="time" size={32} color="#fff" />
+          </LinearGradient>
+          <Text style={[styles.loadingTitle, { color: textColor }]}>
+            Loading History
           </Text>
+          <Text style={[styles.loadingSubtitle, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+            Fetching your travel records...
+          </Text>
+          <ActivityIndicator
+            size="small"
+            color={isDark ? "#60A5FA" : "#3B82F6"}
+            style={styles.loadingSpinner}
+          />
         </View>
       </SafeAreaView>
     );
   }
 
+  // Premium Error State
   if (error) {
     return (
       <SafeAreaView
@@ -380,19 +409,30 @@ export function TravelHistoryScreen() {
       >
         <StatusBar style={theme === "dark" ? "light" : "dark"} />
         <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle-outline" size={60} color="#FF3B30" />
+          <LinearGradient
+            colors={["#EF4444", "#DC2626"]}
+            style={styles.errorIconContainer}
+          >
+            <Ionicons name="alert" size={32} color="#fff" />
+          </LinearGradient>
           <Text style={[styles.errorTitle, { color: textColor }]}>
-            Oops! Something went wrong
+            Connection Error
           </Text>
-          <Text style={[styles.errorMessage, { color: placeholderTextColor }]}>
+          <Text style={[styles.errorMessage, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
             {error}
           </Text>
           <TouchableOpacity
-            style={[styles.retryButton, { backgroundColor: primaryColor }]}
+            style={styles.retryButtonWrapper}
             onPress={fetchHistory}
+            activeOpacity={0.8}
           >
-            <Ionicons name="refresh" size={20} color="#fff" />
-            <Text style={styles.retryButtonText}>Try Again</Text>
+            <LinearGradient
+              colors={["#3B82F6", "#2563EB"]}
+              style={styles.retryButton}
+            >
+              <Ionicons name="refresh" size={18} color="#fff" />
+              <Text style={styles.retryButtonText}>Try Again</Text>
+            </LinearGradient>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -405,23 +445,43 @@ export function TravelHistoryScreen() {
       edges={["top", "left", "right"]}
     >
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
+      {/* Premium Gradient Header */}
+      <LinearGradient
+        colors={isDark
+          ? ["#1a365d", "#2563eb", "#3b82f6"]
+          : ["#0052d4", "#4364f7", "#6fb1fc"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        {/* Decorative elements */}
+        <View style={styles.headerDecorativeCircle1} />
+        <View style={styles.headerDecorativeCircle2} />
 
-      {/* Header */}
-      <View style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerIconContainer}>
-            <Ionicons name="time-outline" size={28} color="#007AFF" />
+            <LinearGradient
+              colors={["#ffffff", "#f0f9ff"]}
+              style={styles.headerIconGradient}
+            >
+              <Ionicons name="time" size={26} color="#3B82F6" />
+            </LinearGradient>
           </View>
           <View style={styles.headerTextContainer}>
             <Text style={styles.headerTitle}>Travel History</Text>
             <Text style={styles.headerSubtitle}>
               {refreshing
                 ? "Refreshing..."
-                : "Your completed trips and journeys"}
+                : "Your journey timeline"}
             </Text>
           </View>
+          {stats.total > 0 && (
+            <View style={styles.headerBadge}>
+              <Text style={styles.headerBadgeText}>{stats.total}</Text>
+            </View>
+          )}
         </View>
-      </View>
+      </LinearGradient>
 
       <FlatList
         data={filteredHistory}
@@ -431,11 +491,9 @@ export function TravelHistoryScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={["#007AFF"]}
-            tintColor="#007AFF"
-            title="Pull to refresh history"
-            titleColor="#8e8e93"
-            progressBackgroundColor="#ffffff"
+            colors={["#3B82F6"]}
+            tintColor="#3B82F6"
+            progressBackgroundColor={isDark ? "#1F2937" : "#ffffff"}
           />
         }
         contentContainerStyle={styles.listContent}
@@ -443,26 +501,35 @@ export function TravelHistoryScreen() {
           <View>
             {renderStatsCard()}
             <View style={styles.filtersContainer}>
-              {renderFilterButton("all", "All", stats.total)}
-              {renderFilterButton("completed", "Completed", stats.completed)}
-              {renderFilterButton("cancelled", "Cancelled", stats.cancelled)}
+              {renderFilterButton("all", "All", stats.total, ["#3B82F6", "#2563EB"])}
+              {renderFilterButton("completed", "Done", stats.completed, ["#10B981", "#059669"])}
+              {renderFilterButton("cancelled", "Cancelled", stats.cancelled, ["#EF4444", "#DC2626"])}
             </View>
           </View>
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Ionicons name="trail-sign-outline" size={80} color="#d1d1d6" />
+            <LinearGradient
+              colors={["rgba(59, 130, 246, 0.1)", "rgba(37, 99, 235, 0.05)"]}
+              style={styles.emptyIconWrapper}
+            >
+              <Ionicons
+                name="trail-sign-outline"
+                size={48}
+                color={isDark ? "#6B7280" : "#9CA3AF"}
+              />
+            </LinearGradient>
             <Text style={[styles.emptyTitle, { color: textColor }]}>
               {selectedFilter === "all"
                 ? "No trips yet"
                 : `No ${selectedFilter} trips`}
             </Text>
             <Text
-              style={[styles.emptySubtitle, { color: placeholderTextColor }]}
+              style={[styles.emptySubtitle, { color: isDark ? "#6B7280" : "#9CA3AF" }]}
             >
               {selectedFilter === "all"
-                ? "Your completed trips will appear here."
-                : `You don't have any ${selectedFilter} trips yet.`}
+                ? "Your journey history will appear here"
+                : `No ${selectedFilter} trips found`}
             </Text>
           </View>
         }
@@ -475,199 +542,377 @@ export function TravelHistoryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
   },
+
+  // Premium Header Styles
   header: {
-    backgroundColor: "#007AFF",
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingVertical: 20,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    position: "relative",
+    overflow: "hidden",
+  },
+  headerDecorativeCircle1: {
+    position: "absolute",
+    top: -30,
+    right: -30,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecorativeCircle2: {
+    position: "absolute",
+    top: 50,
+    right: 60,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
   },
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
   },
   headerIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgb(255, 255, 255)",
+    marginRight: 14,
+  },
+  headerIconGradient: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
   },
   headerTextContainer: {
     flex: 1,
   },
   headerTitle: {
     fontSize: 24,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#fff",
+    letterSpacing: -0.5,
   },
   headerSubtitle: {
     fontSize: 14,
     color: "rgba(255, 255, 255, 0.8)",
-    marginTop: 2,
+    marginTop: 3,
+    fontWeight: "500",
   },
+  headerBadge: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  headerBadgeText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+
+  // List Content
   listContent: {
-    paddingBottom: 100,
+    paddingBottom: 120,
   },
+
+  // Loading State
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 20,
+  },  loadingIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+    shadowColor: "#3B82F6",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
   },
-  loadingText: {
-    fontSize: 16,
-    marginTop: 16,
-    textAlign: "center",
+  loadingTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 8,
   },
+  loadingSubtitle: {
+    fontSize: 15,
+    marginBottom: 24,
+  },
+  loadingSpinner: {
+    marginTop: 8,
+  },
+
+  // Error State
   errorContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 20,
   },
+  errorIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+    shadowColor: "#EF4444",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+  },
   errorTitle: {
-    fontSize: 20,
-    fontWeight: "600",
-    marginTop: 16,
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 8,
     textAlign: "center",
   },
   errorMessage: {
-    fontSize: 16,
-    marginTop: 8,
+    fontSize: 15,
     textAlign: "center",
     lineHeight: 22,
+    marginBottom: 24,
+  },
+  retryButtonWrapper: {
+    borderRadius: 16,
+    overflow: "hidden",
   },
   retryButton: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginTop: 20,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    gap: 8,
   },
   retryButtonText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
-    marginLeft: 8,
   },
+
+  // Stats Card
   statsCard: {
     margin: 20,
-    padding: 20,
-    borderRadius: 16,
+    marginBottom: 16,
+    padding: 18,
+    borderRadius: 20,
+    backgroundColor: "#fff",
     shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.04)",
+  },  statsCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "rgba(59, 130, 246, 0.15)",
   },
   statsHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 18,
+  },
+  statsIconWrapper: {
+    marginRight: 14,
+  },
+  statsIconGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
   },
   statsTitle: {
     fontSize: 18,
     fontWeight: "700",
-    marginLeft: 12,
+    letterSpacing: -0.3,
+  },
+  statsSubtitle: {
+    fontSize: 13,
+    fontWeight: "400",
+    marginTop: 2,
   },
   statsGrid: {
     flexDirection: "row",
     justifyContent: "space-between",
+    gap: 12,
   },
   statItem: {
-    alignItems: "center",
     flex: 1,
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.02)",
+    paddingVertical: 16,
+    borderRadius: 16,
+  },
+  statItemDark: {
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+  },
+  statIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 10,
   },
   statNumber: {
-    fontSize: 20,
-    fontWeight: "700",
+    fontSize: 24,
+    fontWeight: "800",
     marginBottom: 4,
+    letterSpacing: -0.5,
   },
   statLabel: {
     fontSize: 12,
     fontWeight: "500",
   },
+
+  // Filter Buttons
   filtersContainer: {
     flexDirection: "row",
     paddingHorizontal: 20,
-    marginBottom: 20,
-    gap: 12,
+    marginBottom: 16,
+    gap: 10,
   },
   filterButton: {
     flex: 1,
+    borderRadius: 14,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.06)",
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  filterButtonDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  filterButtonActive: {
+    borderWidth: 0,
+  },
+  filterButtonGradient: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    gap: 8,
   },
-  filterButtonActive: {
-    backgroundColor: "rgb(0, 123, 255)",
+  filterButtonInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    gap: 8,
   },
   filterButtonText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
-    marginRight: 8,
+  },
+  filterButtonTextActive: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#fff",
   },
   filterCount: {
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 6,
+    backgroundColor: "rgba(0, 0, 0, 0.05)",
+  },
+  filterCountDark: {
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  filterCountActive: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
   },
   filterCountText: {
     fontSize: 12,
     fontWeight: "600",
   },
+  filterCountTextActive: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#fff",
+  },
+
+  // History Card
   historyCard: {
     marginHorizontal: 20,
-    marginBottom: 16,
-    borderRadius: 16,
+    marginBottom: 14,
+    borderRadius: 20,
+    backgroundColor: "#fff",
     shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
     overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.04)",
+  },
+  historyCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "rgba(255, 255, 255, 0.08)",
   },
   cardHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 20,
-    paddingBottom: 16,
+    padding: 16,
+    paddingBottom: 12,
   },
   routeInfo: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
   },
-  routeIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  routeIconWrapper: {
+    marginRight: 14,
+  },
+  routeIconGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
   },
   routeDetails: {
     flex: 1,
   },
   routeName: {
     fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 2,
+    fontWeight: "700",
+    marginBottom: 4,
+    letterSpacing: -0.2,
   },
-  routeSubtitle: {
+  dateTimeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  dateTimeText: {
     fontSize: 12,
     fontWeight: "500",
   },
@@ -675,72 +920,69 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 16,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    gap: 4,
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: "600",
-    marginLeft: 4,
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.3,
   },
-  routeDetailsContainer: {
-    paddingHorizontal: 20,
+
+  // Route Path
+  routePathContainer: {
+    paddingHorizontal: 16,
     paddingBottom: 16,
   },
   locationRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    marginBottom: 12,
+  },
+  locationIndicator: {
+    alignItems: "center",
+    marginRight: 14,
   },
   locationDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  locationDotInner: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginTop: 6,
-    marginRight: 12,
+    backgroundColor: "#fff",
+  },
+  connectionLine: {
+    width: 2,
+    height: 24,
+    backgroundColor: "#E5E7EB",
+    marginVertical: 4,
+  },
+  connectionLineDark: {
+    backgroundColor: "#374151",
   },
   locationInfo: {
     flex: 1,
+    paddingBottom: 6,
   },
   locationLabel: {
-    fontSize: 12,
-    fontWeight: "500",
-    marginBottom: 2,
-  },
-  locationText: {
+    fontSize: 11,
+    fontWeight: "600",
+    marginBottom: 3,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },  locationText: {
     fontSize: 14,
     fontWeight: "500",
     lineHeight: 20,
   },
-  connectionLine: {
-    width: 2,
-    height: 20,
-    backgroundColor: "#E5E5E7",
-    marginLeft: 3,
-    marginBottom: 12,
-  },
-  cardFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.02)",
-  },
-  footerLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  footerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  footerText: {
-    fontSize: 12,
-    fontWeight: "500",
-    marginLeft: 6,
-  },
+
+  // Empty State
   emptyContainer: {
     flex: 1,
     justifyContent: "center",
@@ -748,15 +990,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 60,
   },
+  emptyIconWrapper: {
+    width: 100,
+    height: 100,
+    borderRadius: 28,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+  },
   emptyTitle: {
     fontSize: 20,
-    fontWeight: "600",
-    marginTop: 16,
+    fontWeight: "700",
+    marginBottom: 8,
     textAlign: "center",
   },
   emptySubtitle: {
-    fontSize: 16,
-    marginTop: 8,
+    fontSize: 15,
     textAlign: "center",
     lineHeight: 22,
   },

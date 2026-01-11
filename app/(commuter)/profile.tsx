@@ -5,6 +5,7 @@ import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import {
@@ -39,14 +40,14 @@ export function ProfileScreen() {
     title: "",
     message: "",
     type: "info" as "info" | "error" | "warning" | "success",
-    onConfirm: () => {},
+    onConfirm: () => { },
     confirmText: "OK",
     showCancel: false,
-    onCancel: () => {},
+    onCancel: () => { },
     cancelText: "Cancel",
   });
 
-  // --- State for all profile fields ---
+  // State for all profile fields
   const [fullName, setFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [contactNumber, setContactNumber] = useState("");
@@ -54,34 +55,30 @@ export function ProfileScreen() {
   const [homeLocation, setHomeLocation] = useState("");
   const [workLocation, setWorkLocation] = useState("");
 
-  // --- State for settings ---
+  // State for settings
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const systemColorScheme = useColorScheme();
 
   const { theme, setTheme } = useAppTheme();
   const darkModeEnabled = theme === "dark";
-
-  // Use darkModeEnabled for theme
+  const isDark = theme === "dark";
 
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
-
   const cardBg = useThemeColor({}, "background");
   const cardText = useThemeColor({}, "text");
   const inputBg = useThemeColor({}, "background");
   const inputText = useThemeColor({}, "text");
-  const sectionBg = useThemeColor({}, "background");
-  const rowBg = useThemeColor({}, "background");
 
   // Custom Alert Function
   const showAlert = (
     title: string,
     message: string,
     type: "info" | "error" | "warning" | "success" = "info",
-    onConfirm: () => void = () => {},
+    onConfirm: () => void = () => { },
     confirmText: string = "OK",
     showCancel: boolean = false,
-    onCancel: () => void = () => {},
+    onCancel: () => void = () => { },
     cancelText: string = "Cancel"
   ) => {
     setAlertConfig({
@@ -101,17 +98,16 @@ export function ProfileScreen() {
     setShowCustomAlert(false);
   };
 
-  // Helper functions for alert styling
-  const getAlertColor = (type: string) => {
+  const getAlertColors = (type: string): readonly [string, string] => {
     switch (type) {
       case "error":
-        return "#FF3B30";
+        return ["#EF4444", "#DC2626"];
       case "warning":
-        return "#FF9500";
+        return ["#F59E0B", "#D97706"];
       case "success":
-        return "#34C759";
+        return ["#10B981", "#059669"];
       default:
-        return "#007AFF";
+        return ["#3B82F6", "#2563EB"];
     }
   };
 
@@ -134,7 +130,6 @@ export function ProfileScreen() {
     }
   }, [session]);
 
-  // Animate success message
   useEffect(() => {
     if (showSuccessMessage) {
       Animated.sequence([
@@ -237,14 +232,13 @@ export function ProfileScreen() {
       const { error } = await supabase.from("users").upsert(updates);
       if (error) throw error;
 
-      // Show success message with better UX
       showAlert(
         "Profile Updated Successfully! ✅",
         "Your profile information has been saved successfully. All changes are now active.",
         "success",
         () => {
           setIsEditing(false);
-          getProfile(); // Refresh the profile data
+          getProfile();
         },
         "Great!"
       );
@@ -262,7 +256,6 @@ export function ProfileScreen() {
   }
 
   async function handleAvatarUpload() {
-    // --- 1. Request permission and pick image (no changes here) ---
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       showAlert(
@@ -290,26 +283,21 @@ export function ProfileScreen() {
     const fileName = `${session!.user.id}.${fileExt}`;
     const filePath = fileName;
 
-    // --- 2. Fetch the user's current avatar URL to find the old file path ---
-    // We do this before uploading the new one.
     try {
       const { data: profileData, error: profileError } = await supabase
-        .from("users") // This should be your actual user/profile table name
+        .from("users")
         .select("avatar_url")
         .eq("id", session!.user.id)
         .single();
 
       if (profileError) {
-        // It's okay if the user doesn't have a profile yet, but we should log other errors.
         console.log(
           "Could not fetch user profile, maybe it's their first time:",
           profileError.message
         );
       }
 
-      // --- 3. If a previous avatar exists, delete it from storage ---
       if (profileData?.avatar_url) {
-        // Extract the file path from the full URL
         const oldFilePath = profileData.avatar_url
           .split("/")
           .pop()
@@ -321,7 +309,6 @@ export function ProfileScreen() {
             .remove([oldFilePath]);
 
           if (removeError) {
-            // Log the error but don't block the upload of the new avatar
             console.warn("Could not remove old avatar:", removeError.message);
           }
         }
@@ -333,7 +320,6 @@ export function ProfileScreen() {
       );
     }
 
-    // --- 4. Upload the new avatar ---
     const formData = new FormData();
     formData.append("file", {
       uri: image.uri,
@@ -344,7 +330,7 @@ export function ProfileScreen() {
     const { error: uploadError } = await supabase.storage
       .from("avatars")
       .upload(filePath, formData, {
-        upsert: true, // Upsert is true to overwrite if a file with the same name exists
+        upsert: true,
       });
 
     if (uploadError) {
@@ -357,7 +343,6 @@ export function ProfileScreen() {
       return;
     }
 
-    // --- 5. Get the new public URL and update the user's profile table ---
     const { data: urlData } = supabase.storage
       .from("avatars")
       .getPublicUrl(filePath);
@@ -365,8 +350,8 @@ export function ProfileScreen() {
     const newAvatarUrl = urlData.publicUrl;
 
     const { error: updateError } = await supabase
-      .from("users") // This should be your actual user/profile table name
-      .update({ avatar_url: newAvatarUrl }) // Store the clean URL in the database
+      .from("users")
+      .update({ avatar_url: newAvatarUrl })
       .eq("id", session!.user.id);
 
     if (updateError) {
@@ -379,8 +364,6 @@ export function ProfileScreen() {
       return;
     }
 
-    // --- 6. Update the local state to reflect the new avatar ---
-    // **FIX:** Add a timestamp to the URL to bust the cache and force a re-render.
     const cacheBustedUrl = `${newAvatarUrl}?t=${new Date().getTime()}`;
     setAvatarUrl(cacheBustedUrl);
     setAvatarLoading(false);
@@ -404,7 +387,7 @@ export function ProfileScreen() {
       signOut,
       "Sign Out",
       true,
-      () => {},
+      () => { },
       "Cancel"
     );
   }
@@ -416,30 +399,41 @@ export function ProfileScreen() {
     placeholder: string,
     icon: string,
     errorKey: string,
+    gradientColors: readonly [string, string],
     keyboardType: "default" | "phone-pad" | "numeric" = "default"
   ) => (
     <View style={styles.inputContainer}>
-      <Text style={[styles.inputLabel, { color: textColor }]}>{label}</Text>
+      <View style={styles.inputLabelRow}>
+        <LinearGradient colors={gradientColors} style={styles.inputIconGradient}>
+          <Ionicons name={icon as any} size={14} color="#fff" />
+        </LinearGradient>
+        <Text style={[styles.inputLabel, { color: textColor }]}>{label}</Text>
+      </View>
       <View
         style={[
           styles.inputRow,
-          { backgroundColor: rowBg },
+          isDark && styles.inputRowDark,
           errors[errorKey] && styles.inputError,
         ]}
       >
-        <Ionicons name={icon as any} size={20} color="#007AFF" />
         <TextInput
-          style={[styles.input, { backgroundColor: inputBg, color: inputText }]}
+          style={[styles.input, { color: inputText }]}
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder}
           editable={isEditing}
           keyboardType={keyboardType}
-          placeholderTextColor="#8e8e93"
+          placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
         />
+        {isEditing && value.length > 0 && (
+          <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+        )}
       </View>
       {errors[errorKey] && (
-        <Text style={styles.errorText}>{errors[errorKey]}</Text>
+        <View style={styles.errorRow}>
+          <Ionicons name="alert-circle" size={14} color="#EF4444" />
+          <Text style={styles.errorText}>{errors[errorKey]}</Text>
+        </View>
       )}
     </View>
   );
@@ -450,27 +444,50 @@ export function ProfileScreen() {
       edges={["top", "left", "right"]}
     >
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
+      {/* Premium Gradient Header */}
+      <LinearGradient
+        colors={isDark
+          ? ["#1a365d", "#2563eb", "#3b82f6"]
+          : ["#0052d4", "#4364f7", "#6fb1fc"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        {/* Decorative elements */}
+        <View style={styles.headerDecorativeCircle1} />
+        <View style={styles.headerDecorativeCircle2} />
 
-      {/* Header */}
-      <View style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerIconContainer}>
-            {refreshing ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Ionicons name="person-circle" size={28} color="#007AFF" />
-            )}
+            <LinearGradient
+              colors={["#ffffff", "#f0f9ff"]}
+              style={styles.headerIconGradient}
+            >
+              {refreshing ? (
+                <ActivityIndicator size="small" color="#3B82F6" />
+              ) : (
+                <Ionicons name="person" size={24} color="#3B82F6" />
+              )}
+            </LinearGradient>
           </View>
           <View style={styles.headerTextContainer}>
-            <Text style={styles.headerTitle}>Commuter Profile</Text>
+            <Text style={styles.headerTitle}>My Profile</Text>
             <Text style={styles.headerSubtitle}>
               {refreshing
                 ? "Refreshing..."
-                : "Manage your account & preferences"}
+                : "Manage your account"}
             </Text>
           </View>
+          {!isEditing && (
+            <TouchableOpacity
+              style={styles.headerEditButton}
+              onPress={() => setIsEditing(true)}
+            >
+              <Ionicons name="create-outline" size={20} color="#fff" />
+            </TouchableOpacity>
+          )}
         </View>
-      </View>
+      </LinearGradient>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -479,38 +496,53 @@ export function ProfileScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={["#007AFF"]}
-            tintColor="#007AFF"
-            title="Pull to refresh profile"
-            titleColor="#8e8e93"
-            progressBackgroundColor="#ffffff"
+            colors={["#3B82F6"]}
+            tintColor="#3B82F6"
+            progressBackgroundColor={isDark ? "#1F2937" : "#ffffff"}
           />
         }
       >
         {/* Profile Header Card */}
-        <View style={[styles.profileCard, { backgroundColor: cardBg }]}>
+        <View style={[styles.profileCard, isDark && styles.profileCardDark]}>
+          <LinearGradient
+            colors={isDark
+              ? ["rgba(59, 130, 246, 0.1)", "rgba(37, 99, 235, 0.05)"]
+              : ["rgba(59, 130, 246, 0.08)", "rgba(37, 99, 235, 0.02)"]}
+            style={StyleSheet.absoluteFill}
+          />
+
           <TouchableOpacity
             onPress={isEditing ? handleAvatarUpload : undefined}
             disabled={loading || avatarLoading}
             style={styles.avatarContainer}
           >
-            <Image
-              source={
-                avatarUrl
-                  ? { uri: avatarUrl }
-                  : require("@/assets/images/default-avatar.png")
-              }
-              style={styles.avatar}
-            />
+            <LinearGradient
+              colors={["#3B82F6", "#2563EB"]}
+              style={styles.avatarBorder}
+            >
+              <View style={styles.avatarInner}>
+                <Image
+                  source={
+                    avatarUrl
+                      ? { uri: avatarUrl }
+                      : require("@/assets/images/default-avatar.png")
+                  }
+                  style={styles.avatar}
+                />
+              </View>
+            </LinearGradient>
             {(loading || avatarLoading) && (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator color="#fff" size="small" />
               </View>
             )}
             {isEditing && !avatarLoading && (
-              <View style={styles.editIcon}>
+              <LinearGradient
+                colors={["#3B82F6", "#2563EB"]}
+                style={styles.editIcon}
+              >
                 <Ionicons name="camera" size={16} color="#fff" />
-              </View>
+              </LinearGradient>
             )}
           </TouchableOpacity>
 
@@ -522,64 +554,72 @@ export function ProfileScreen() {
                 onChangeText={setFullName}
                 placeholder="Full Name"
                 autoCapitalize="words"
-                placeholderTextColor="#8e8e93"
+                placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
               />
             ) : (
               <Text style={[styles.fullName, { color: cardText }]}>
                 {fullName || session?.user?.email?.split("@")[0] || "Commuter"}
               </Text>
             )}
-            <Text style={[styles.email, { color: cardText }]}>
+            <Text style={[styles.email, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
               {session?.user?.email}
             </Text>
-            <View style={styles.statusBadge}>
+            <LinearGradient
+              colors={["#10B981", "#059669"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.statusBadge}
+            >
               <View style={styles.statusDot} />
               <Text style={styles.statusText}>Active Commuter</Text>
-            </View>
+            </LinearGradient>
           </View>
-
-          {!isEditing && (
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() => setIsEditing(true)}
-            >
-              <Ionicons name="create-outline" size={18} color="#007AFF" />
-              <Text style={styles.editButtonText}>
-                {fullName ? "Edit Profile" : "Create Profile"}
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
 
         {/* Personal Information */}
-        <View style={[styles.section, { backgroundColor: sectionBg }]}>
+        <View style={[styles.section, isDark && styles.sectionDark]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="person" size={24} color="#007AFF" />
-            <Text style={[styles.sectionTitle, { color: textColor }]}>
-              Personal Information
-            </Text>
+            <LinearGradient
+              colors={["#3B82F6", "#2563EB"]}
+              style={styles.sectionIconGradient}
+            >
+              <Ionicons name="person" size={18} color="#fff" />
+            </LinearGradient>
+            <View>
+              <Text style={[styles.sectionTitle, { color: textColor }]}>
+                Personal Information
+              </Text>
+              <Text style={[styles.sectionSubtitle, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                Your contact details
+              </Text>
+            </View>
           </View>
 
           {!fullName && !isEditing && (
-            <View style={styles.emptyStateCard}>
-              <Ionicons name="person-add" size={32} color="#8e8e93" />
-              <Text style={[styles.emptyStateTitle, { color: textColor }]}>
-                No Profile Found
-              </Text>
-              <Text
-                style={[styles.emptyStateDescription, { color: textColor }]}
+            <View style={[styles.emptyStateCard, isDark && styles.emptyStateCardDark]}>
+              <LinearGradient
+                colors={["rgba(59, 130, 246, 0.1)", "rgba(37, 99, 235, 0.05)"]}
+                style={styles.emptyStateIcon}
               >
-                Create your commuter profile to get started
+                <Ionicons name="person-add" size={24} color={isDark ? "#60A5FA" : "#3B82F6"} />
+              </LinearGradient>
+              <Text style={[styles.emptyStateTitle, { color: textColor }]}>
+                Complete Your Profile
+              </Text>
+              <Text style={[styles.emptyStateDescription, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                Add your information to get started
               </Text>
             </View>
           )}
+
           {renderInputField(
             "Full Name",
             fullName,
             setFullName,
             "Enter your full name",
             "person-outline",
-            "fullName"
+            "fullName",
+            ["#3B82F6", "#2563EB"]
           )}
 
           {renderInputField(
@@ -589,6 +629,7 @@ export function ProfileScreen() {
             "Enter your phone number",
             "call-outline",
             "contactNumber",
+            ["#10B981", "#059669"],
             "phone-pad"
           )}
 
@@ -597,19 +638,30 @@ export function ProfileScreen() {
             emergencyContact,
             setEmergencyContact,
             "Emergency contact number",
-            "call-outline",
+            "alert-circle-outline",
             "emergencyContact",
+            ["#EF4444", "#DC2626"],
             "phone-pad"
           )}
         </View>
 
         {/* Saved Locations */}
-        <View style={[styles.section, { backgroundColor: sectionBg }]}>
+        <View style={[styles.section, isDark && styles.sectionDark]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="location" size={24} color="#007AFF" />
-            <Text style={[styles.sectionTitle, { color: textColor }]}>
-              Saved Locations
-            </Text>
+            <LinearGradient
+              colors={["#F59E0B", "#D97706"]}
+              style={styles.sectionIconGradient}
+            >
+              <Ionicons name="location" size={18} color="#fff" />
+            </LinearGradient>
+            <View>
+              <Text style={[styles.sectionTitle, { color: textColor }]}>
+                Saved Locations
+              </Text>
+              <Text style={[styles.sectionSubtitle, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                Quick access addresses
+              </Text>
+            </View>
           </View>
 
           {renderInputField(
@@ -618,7 +670,8 @@ export function ProfileScreen() {
             setHomeLocation,
             "Enter your home address",
             "home-outline",
-            "homeLocation"
+            "homeLocation",
+            ["#8B5CF6", "#7C3AED"]
           )}
 
           {renderInputField(
@@ -627,54 +680,75 @@ export function ProfileScreen() {
             setWorkLocation,
             "Enter your work address",
             "briefcase-outline",
-            "workLocation"
+            "workLocation",
+            ["#06B6D4", "#0891B2"]
           )}
         </View>
 
         {/* Settings */}
-        <View style={[styles.section, { backgroundColor: sectionBg }]}>
+        <View style={[styles.section, isDark && styles.sectionDark]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="settings" size={24} color="#007AFF" />
-            <Text style={[styles.sectionTitle, { color: textColor }]}>
-              Commuter Settings
-            </Text>
+            <LinearGradient
+              colors={["#6366F1", "#4F46E5"]}
+              style={styles.sectionIconGradient}
+            >
+              <Ionicons name="settings" size={18} color="#fff" />
+            </LinearGradient>
+            <View>
+              <Text style={[styles.sectionTitle, { color: textColor }]}>
+                Preferences
+              </Text>
+              <Text style={[styles.sectionSubtitle, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                App settings
+              </Text>
+            </View>
           </View>
 
-          <View style={[styles.settingRow, { backgroundColor: rowBg }]}>
+          <View style={[styles.settingRow, isDark && styles.settingRowDark]}>
             <View style={styles.settingLeft}>
-              <Ionicons name="notifications" size={20} color="#007AFF" />
+              <LinearGradient
+                colors={["#F59E0B", "#D97706"]}
+                style={styles.settingIconGradient}
+              >
+                <Ionicons name="notifications" size={16} color="#fff" />
+              </LinearGradient>
               <View style={styles.settingTextContainer}>
                 <Text style={[styles.settingLabel, { color: textColor }]}>
                   Push Notifications
                 </Text>
-                <Text style={[styles.settingDescription, { color: textColor }]}>
-                  Get notified about trip updates
+                <Text style={[styles.settingDescription, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                  Get trip updates & alerts
                 </Text>
               </View>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#81b0ff" }}
-              thumbColor={notificationsEnabled ? "#007AFF" : "#f4f3f4"}
+              trackColor={{ false: isDark ? "#374151" : "#D1D5DB", true: "#86EFAC" }}
+              thumbColor={notificationsEnabled ? "#10B981" : isDark ? "#6B7280" : "#f4f3f4"}
               onValueChange={() => setNotificationsEnabled((prev) => !prev)}
               value={notificationsEnabled}
             />
           </View>
 
-          <View style={[styles.settingRow, { backgroundColor: rowBg }]}>
+          <View style={[styles.settingRow, isDark && styles.settingRowDark]}>
             <View style={styles.settingLeft}>
-              <Ionicons name="moon" size={20} color="#007AFF" />
+              <LinearGradient
+                colors={["#6366F1", "#4F46E5"]}
+                style={styles.settingIconGradient}
+              >
+                <Ionicons name="moon" size={16} color="#fff" />
+              </LinearGradient>
               <View style={styles.settingTextContainer}>
                 <Text style={[styles.settingLabel, { color: textColor }]}>
                   Dark Mode
                 </Text>
-                <Text style={[styles.settingDescription, { color: textColor }]}>
+                <Text style={[styles.settingDescription, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
                   Switch to dark theme
                 </Text>
               </View>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#81b0ff" }}
-              thumbColor={darkModeEnabled ? "#007AFF" : "#f4f3f4"}
+              trackColor={{ false: isDark ? "#374151" : "#D1D5DB", true: "#C4B5FD" }}
+              thumbColor={darkModeEnabled ? "#8B5CF6" : isDark ? "#6B7280" : "#f4f3f4"}
               onValueChange={() =>
                 setTheme(theme === "dark" ? "light" : "dark")
               }
@@ -687,46 +761,58 @@ export function ProfileScreen() {
         {!isEditing && (
           <View style={styles.signOutContainer}>
             <TouchableOpacity
-              style={styles.signOutButton}
+              style={[styles.signOutButton, isDark && styles.signOutButtonDark]}
               onPress={handleSignOut}
+              activeOpacity={0.7}
             >
-              <Ionicons name="log-out-outline" size={20} color="#FF3B30" />
+              <LinearGradient
+                colors={["rgba(239, 68, 68, 0.1)", "rgba(220, 38, 38, 0.05)"]}
+                style={StyleSheet.absoluteFill}
+              />
+              <Ionicons name="log-out-outline" size={20} color="#EF4444" />
               <Text style={styles.signOutText}>Sign Out</Text>
             </TouchableOpacity>
           </View>
         )}
+        {/* Action Buttons */}
+        {isEditing && (
+          <View style={[styles.actionButtons, isDark && styles.actionButtonsDark]}>
+            <TouchableOpacity
+              style={[styles.cancelButton, isDark && styles.cancelButtonDark]}
+              onPress={() => {
+                setIsEditing(false);
+                getProfile();
+                setErrors({});
+              }}
+              disabled={loading}
+            >
+              <Text style={[styles.cancelButtonText, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.saveButtonWrapper}
+              onPress={updateProfile}
+              disabled={loading}
+              activeOpacity={0.8}
+            >
+              <LinearGradient
+                colors={["#3B82F6", "#2563EB"]}
+                style={styles.saveButton}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark" size={18} color="#fff" />
+                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                  </>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
-
-      {/* Action Buttons */}
-      {isEditing && (
-        <View style={[styles.actionButtons, { backgroundColor: cardBg }]}>
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={() => {
-              setIsEditing(false);
-              getProfile();
-              setErrors({});
-            }}
-            disabled={loading}
-          >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.saveButton}
-            onPress={updateProfile}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="checkmark" size={16} color="#fff" />
-                <Text style={styles.saveButtonText}>Save Changes</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
 
       {/* Custom Alert Modal */}
       <Modal
@@ -736,54 +822,58 @@ export function ProfileScreen() {
         onRequestClose={hideAlert}
       >
         <View style={styles.alertOverlay}>
-          <View style={styles.alertContainer}>
+          <View style={[styles.alertContainer, isDark && styles.alertContainerDark]}>
             <View style={styles.alertHeader}>
-              <View
-                style={[
-                  styles.alertIconContainer,
-                  { backgroundColor: getAlertColor(alertConfig.type) },
-                ]}
+              <LinearGradient
+                colors={getAlertColors(alertConfig.type)}
+                style={styles.alertIconContainer}
               >
                 <Ionicons
-                  name={getAlertIcon(alertConfig.type)}
+                  name={getAlertIcon(alertConfig.type) as any}
                   size={24}
                   color="#fff"
                 />
-              </View>
-              <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+              </LinearGradient>
+              <Text style={[styles.alertTitle, { color: isDark ? "#F9FAFB" : "#1a1a1a" }]}>
+                {alertConfig.title}
+              </Text>
             </View>
 
-            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+            <Text style={[styles.alertMessage, { color: isDark ? "#9CA3AF" : "#666" }]}>
+              {alertConfig.message}
+            </Text>
 
             <View style={styles.alertButtons}>
               {alertConfig.showCancel && (
                 <TouchableOpacity
-                  style={[styles.alertButton, styles.alertCancelButton]}
+                  style={[styles.alertButton, styles.alertCancelButton, isDark && styles.alertCancelButtonDark]}
                   onPress={() => {
                     alertConfig.onCancel();
                     hideAlert();
                   }}
                 >
-                  <Text style={styles.alertCancelButtonText}>
+                  <Text style={[styles.alertCancelButtonText, { color: isDark ? "#9CA3AF" : "#666" }]}>
                     {alertConfig.cancelText}
                   </Text>
                 </TouchableOpacity>
               )}
 
               <TouchableOpacity
-                style={[
-                  styles.alertButton,
-                  styles.alertConfirmButton,
-                  { backgroundColor: getAlertColor(alertConfig.type) },
-                ]}
+                style={styles.alertConfirmButtonWrapper}
                 onPress={() => {
                   alertConfig.onConfirm();
                   hideAlert();
                 }}
+                activeOpacity={0.8}
               >
-                <Text style={styles.alertConfirmButtonText}>
-                  {alertConfig.confirmText}
-                </Text>
+                <LinearGradient
+                  colors={getAlertColors(alertConfig.type)}
+                  style={styles.alertConfirmButton}
+                >
+                  <Text style={styles.alertConfirmButtonText}>
+                    {alertConfig.confirmText}
+                  </Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
@@ -796,73 +886,125 @@ export function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
   },
+
+  // Premium Header Styles
   header: {
-    backgroundColor: "#007AFF",
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingVertical: 20,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    position: "relative",
+    overflow: "hidden",
+  },
+  headerDecorativeCircle1: {
+    position: "absolute",
+    top: -30,
+    right: -30,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecorativeCircle2: {
+    position: "absolute",
+    top: 50,
+    right: 60,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
   },
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
   },
   headerIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgb(255, 255, 255)",
+    marginRight: 14,
+  },
+  headerIconGradient: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
   },
   headerTextContainer: {
     flex: 1,
   },
   headerTitle: {
     fontSize: 24,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#fff",
+    letterSpacing: -0.5,
   },
   headerSubtitle: {
     fontSize: 14,
     color: "rgba(255, 255, 255, 0.8)",
-    marginTop: 2,
+    marginTop: 3,
+    fontWeight: "500",
   },
+  headerEditButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
   scrollContent: {
-    paddingBottom: 100,
+    paddingBottom: 120,
   },
+
+  // Profile Card
   profileCard: {
     margin: 20,
     padding: 24,
-    borderRadius: 16,
+    borderRadius: 24,
+    backgroundColor: "#fff",
     shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
     alignItems: "center",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.04)",
+  },
+  profileCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "rgba(59, 130, 246, 0.15)",
   },
   avatarContainer: {
     position: "relative",
-    marginBottom: 16,
+    marginBottom: 18,
+  },
+  avatarBorder: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    padding: 4,
+  },
+  avatarInner: {
+    flex: 1,
+    borderRadius: 51,
+    overflow: "hidden",
+    backgroundColor: "#fff",
   },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 3,
-    borderColor: "#007AFF",
+    width: "100%",
+    height: "100%",
   },
   loadingOverlay: {
     position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    top: 4,
+    left: 4,
+    right: 4,
+    bottom: 4,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
-    borderRadius: 50,
+    borderRadius: 51,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -870,164 +1012,202 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 0,
     right: 0,
-    backgroundColor: "#007AFF",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: "#fff",
   },
   profileInfo: {
     alignItems: "center",
-    marginBottom: 20,
   },
   fullName: {
     fontSize: 24,
-    fontWeight: "700",
-    color: "#333",
-    marginBottom: 4,
+    fontWeight: "800",
+    marginBottom: 6,
+    letterSpacing: -0.5,
   },
   nameInput: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#333",
-    borderBottomWidth: 1,
-    borderColor: "#007AFF",
+    borderBottomWidth: 2,
+    borderColor: "#3B82F6",
     textAlign: "center",
     paddingVertical: 8,
     minWidth: 200,
+    marginBottom: 6,
   },
   email: {
-    fontSize: 16,
-    color: "#8e8e93",
-    marginBottom: 12,
+    fontSize: 15,
+    marginBottom: 16,
+    fontWeight: "500",
   },
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E8F5E8",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
+    gap: 6,
   },
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#4CAF50",
-    marginRight: 6,
+    backgroundColor: "#fff",
   },
   statusText: {
     fontSize: 12,
-    fontWeight: "600",
-    color: "#4CAF50",
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.3,
   },
-  editButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F0F8FF",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#007AFF",
-  },
-  editButtonText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#007AFF",
-    marginLeft: 6,
-  },
+
+  // Section Styles
   section: {
     marginHorizontal: 20,
-    marginBottom: 20,
+    marginBottom: 16,
     padding: 20,
-    borderRadius: 16,
+    borderRadius: 20,
+    backgroundColor: "#fff",
     shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 3 },
     elevation: 3,
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.04)",
+  },
+  sectionDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "rgba(255, 255, 255, 0.08)",
   },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 20,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#333",
-    marginLeft: 12,
-    flex: 1,
+  sectionIconGradient: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
   },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    fontWeight: "400",
+    marginTop: 2,
+  },
+
+  // Input Styles
   inputContainer: {
     marginBottom: 16,
+  },
+  inputLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+    gap: 10,
+  },
+  inputIconGradient: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#333",
-    marginBottom: 8,
   },
   inputRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 12,
+    backgroundColor: "#F9FAFB",
+    borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: "#E5E5E7",
+    borderWidth: 1.5,
+    borderColor: "#E5E7EB",
+  },
+  inputRowDark: {
+    backgroundColor: "#111827",
+    borderColor: "#374151",
   },
   input: {
     flex: 1,
-    fontSize: 16,
-    color: "#333",
-    paddingVertical: 12,
-    marginLeft: 12,
+    fontSize: 15,
+    paddingVertical: 14,
+    fontWeight: "500",
   },
   inputError: {
-    borderColor: "#FF3B30",
-    borderWidth: 1,
+    borderColor: "#EF4444",
+    borderWidth: 1.5,
+  },
+  errorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    gap: 6,
   },
   errorText: {
     fontSize: 12,
-    color: "#FF3B30",
-    marginTop: 4,
-    marginLeft: 4,
+    color: "#EF4444",
+    fontWeight: "500",
   },
+
+  // Settings Styles
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#fff",
+    backgroundColor: "#F9FAFB",
     padding: 16,
-    borderRadius: 12,
-    marginBottom: 8,
+    borderRadius: 14,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: "#E5E5E7",
+    borderColor: "#E5E7EB",
+  },
+  settingRowDark: {
+    backgroundColor: "#111827",
+    borderColor: "#374151",
   },
   settingLeft: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
   },
+  settingIconGradient: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   settingTextContainer: {
-    marginLeft: 12,
+    marginLeft: 14,
     flex: 1,
   },
   settingLabel: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
-    color: "#333",
     marginBottom: 2,
   },
   settingDescription: {
     fontSize: 12,
-    color: "#8e8e93",
+    fontWeight: "400",
   },
+
+  // Sign Out
   signOutContainer: {
     marginHorizontal: 20,
     marginBottom: 20,
@@ -1038,98 +1218,120 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#fff",
     paddingVertical: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#FF3B30",
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: "#FECACA",
+    overflow: "hidden",
+    gap: 8,
+  },
+  signOutButtonDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "rgba(239, 68, 68, 0.3)",
   },
   signOutText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#FF3B30",
-    marginLeft: 8,
+    color: "#EF4444",
   },
+
+  // Action Buttons
   actionButtons: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
     flexDirection: "row",
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E5E7",
-    backgroundColor: "#fff",
+    marginBottom: 40,
+    gap: 12,
+  },
+  actionButtonsDark: {
+    backgroundColor: "#1F2937",
+    borderTopColor: "#374151",
   },
   cancelButton: {
     flex: 1,
-    backgroundColor: "#F2F2F7",
+    backgroundColor: "#F3F4F6",
     paddingVertical: 16,
-    borderRadius: 12,
-    marginRight: 8,
+    borderRadius: 14,
     alignItems: "center",
+  },
+  cancelButtonDark: {
+    backgroundColor: "#374151",
   },
   cancelButtonText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#8e8e93",
+  },
+  saveButtonWrapper: {
+    flex: 1,
+    borderRadius: 14,
+    overflow: "hidden",
   },
   saveButton: {
-    flex: 1,
-    backgroundColor: "#007AFF",
     paddingVertical: 16,
-    borderRadius: 12,
-    marginLeft: 8,
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
+    gap: 8,
   },
   saveButtonText: {
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#fff",
-    marginLeft: 6,
   },
+
+  // Empty State
   emptyStateCard: {
-    backgroundColor: "#F8F9FA",
-    borderRadius: 12,
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
     padding: 24,
     alignItems: "center",
     marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "#E5E5E7",
+    borderWidth: 1.5,
+    borderColor: "#E5E7EB",
     borderStyle: "dashed",
+  },
+  emptyStateCardDark: {
+    backgroundColor: "#111827",
+    borderColor: "#374151",
+  },
+  emptyStateIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
   },
   emptyStateTitle: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginTop: 12,
+    fontWeight: "700",
     marginBottom: 4,
   },
   emptyStateDescription: {
     fontSize: 14,
-    color: "#8e8e93",
     textAlign: "center",
   },
-  // Custom Alert Styles
+
+  // Alert Modal
   alertOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 20,
   },
   alertContainer: {
     backgroundColor: "#fff",
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 24,
     width: "100%",
     maxWidth: 400,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  alertContainerDark: {
+    backgroundColor: "#1F2937",
   },
   alertHeader: {
     flexDirection: "row",
@@ -1139,7 +1341,7 @@ const styles = StyleSheet.create({
   alertIconContainer: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 16,
@@ -1147,12 +1349,10 @@ const styles = StyleSheet.create({
   alertTitle: {
     fontSize: 20,
     fontWeight: "700",
-    color: "#1a1a1a",
     flex: 1,
   },
   alertMessage: {
-    fontSize: 16,
-    color: "#666",
+    fontSize: 15,
     lineHeight: 22,
     marginBottom: 24,
   },
@@ -1164,31 +1364,36 @@ const styles = StyleSheet.create({
   alertButton: {
     paddingVertical: 12,
     paddingHorizontal: 24,
-    borderRadius: 12,
+    borderRadius: 14,
     minWidth: 80,
     alignItems: "center",
   },
   alertCancelButton: {
-    backgroundColor: "#f2f2f7",
+    backgroundColor: "#F3F4F6",
     borderWidth: 1,
-    borderColor: "#e5e5e7",
+    borderColor: "#E5E7EB",
+  },
+  alertCancelButtonDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
   },
   alertCancelButtonText: {
-    color: "#666",
     fontSize: 16,
     fontWeight: "600",
   },
+  alertConfirmButtonWrapper: {
+    borderRadius: 14,
+    overflow: "hidden",
+  },
   alertConfirmButton: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: "center",
   },
   alertConfirmButtonText: {
     color: "#fff",
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "700",
   },
 });
 

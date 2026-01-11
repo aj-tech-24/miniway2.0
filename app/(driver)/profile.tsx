@@ -5,6 +5,7 @@ import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import {
@@ -59,10 +60,10 @@ export function ProfileScreen() {
     title: "",
     message: "",
     type: "info" as "info" | "error" | "warning" | "success",
-    onConfirm: () => {},
+    onConfirm: () => { },
     confirmText: "OK",
     showCancel: false,
-    onCancel: () => {},
+    onCancel: () => { },
     cancelText: "Cancel",
   });
 
@@ -83,10 +84,10 @@ export function ProfileScreen() {
     title: string,
     message: string,
     type: "info" | "error" | "warning" | "success" = "info",
-    onConfirm: () => void = () => {},
+    onConfirm: () => void = () => { },
     confirmText: string = "OK",
     showCancel: boolean = false,
-    onCancel: () => void = () => {},
+    onCancel: () => void = () => { },
     cancelText: string = "Cancel"
   ) => {
     setAlertConfig({
@@ -511,7 +512,7 @@ export function ProfileScreen() {
       signOut,
       "Sign Out",
       true,
-      () => {},
+      () => { },
       "Cancel"
     );
   }
@@ -556,16 +557,23 @@ export function ProfileScreen() {
       style={[styles.container, { backgroundColor }]}
       edges={["top", "left", "right"]}
     >
-      <StatusBar style={theme === "dark" ? "light" : "dark"} />
+      <StatusBar style="light" />
 
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Premium Header */}
+      <LinearGradient
+        colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        <View style={styles.headerDecoCircle1} />
+        <View style={styles.headerDecoCircle2} />
         <View style={styles.headerContent}>
           <View style={styles.headerIconContainer}>
             {refreshing ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Ionicons name="person-circle" size={28} color="#007AFF" />
+              <Ionicons name="person" size={24} color="#fff" />
             )}
           </View>
           <View style={styles.headerTextContainer}>
@@ -575,7 +583,7 @@ export function ProfileScreen() {
             </Text>
           </View>
         </View>
-      </View>
+      </LinearGradient>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -584,8 +592,8 @@ export function ProfileScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={["#007AFF"]}
-            tintColor="#007AFF"
+            colors={["#0891B2"]}
+            tintColor="#0891B2"
             title="Pull to refresh profile"
             titleColor="#8e8e93"
             progressBackgroundColor="#ffffff"
@@ -648,7 +656,7 @@ export function ProfileScreen() {
               style={styles.editButton}
               onPress={() => setIsEditing(true)}
             >
-              <Ionicons name="create-outline" size={18} color="#007AFF" />
+              <Ionicons name="create-outline" size={18} color="#0891B2" />
               <Text style={styles.editButtonText}>
                 {fullName ? "Edit Profile" : "Create Profile"}
               </Text>
@@ -659,7 +667,7 @@ export function ProfileScreen() {
         {/* Personal Information */}
         <View style={[styles.section, { backgroundColor: sectionBg }]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="person" size={24} color="#007AFF" />
+            <Ionicons name="person" size={24} color="#0891B2" />
             <Text style={[styles.sectionTitle, { color: textColor }]}>
               Personal Information
             </Text>
@@ -721,7 +729,7 @@ export function ProfileScreen() {
         {/* License Information */}
         <View style={[styles.section, { backgroundColor: sectionBg }]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="card" size={24} color="#007AFF" />
+            <Ionicons name="card" size={24} color="#0891B2" />
             <Text style={[styles.sectionTitle, { color: textColor }]}>
               License Information
             </Text>
@@ -749,7 +757,7 @@ export function ProfileScreen() {
         {/* Vehicle Information */}
         <View style={[styles.section, { backgroundColor: sectionBg }]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="car" size={24} color="#007AFF" />
+            <Ionicons name="car" size={24} color="#0891B2" />
             <Text style={[styles.sectionTitle, { color: textColor }]}>
               Assigned Vehicle
             </Text>
@@ -829,8 +837,8 @@ export function ProfileScreen() {
                   {isVehicleRequestMode
                     ? "Cancel Request"
                     : vehiclePlate === "Not assigned"
-                    ? "Request Vehicle"
-                    : "Request Change"}
+                      ? "Request Vehicle"
+                      : "Request Change"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -903,7 +911,7 @@ export function ProfileScreen() {
         {/* Settings */}
         <View style={[styles.section, { backgroundColor: sectionBg }]}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="settings" size={24} color="#007AFF" />
+            <Ionicons name="settings" size={24} color="#0891B2" />
             <Text style={[styles.sectionTitle, { color: textColor }]}>
               Driver Settings
             </Text>
@@ -911,7 +919,7 @@ export function ProfileScreen() {
 
           <View style={[styles.settingRow, { backgroundColor: rowBg }]}>
             <View style={styles.settingLeft}>
-              <Ionicons name="notifications" size={20} color="#007AFF" />
+              <Ionicons name="notifications" size={20} color="#0891B2" />
               <View style={styles.settingTextContainer}>
                 <Text style={[styles.settingLabel, { color: textColor }]}>
                   Push Notifications
@@ -922,8 +930,8 @@ export function ProfileScreen() {
               </View>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#81b0ff" }}
-              thumbColor={notificationsEnabled ? "#007AFF" : "#f4f3f4"}
+              trackColor={{ false: "#CBD5E1", true: "#A5F3FC" }}
+              thumbColor={notificationsEnabled ? "#0891B2" : "#f4f3f4"}
               onValueChange={() => setNotificationsEnabled((prev) => !prev)}
               value={notificationsEnabled}
             />
@@ -931,7 +939,7 @@ export function ProfileScreen() {
 
           <View style={[styles.settingRow, { backgroundColor: rowBg }]}>
             <View style={styles.settingLeft}>
-              <Ionicons name="play-circle" size={20} color="#007AFF" />
+              <Ionicons name="play-circle" size={20} color="#0891B2" />
               <View style={styles.settingTextContainer}>
                 <Text style={[styles.settingLabel, { color: textColor }]}>
                   Auto Start Trips
@@ -942,8 +950,8 @@ export function ProfileScreen() {
               </View>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#81b0ff" }}
-              thumbColor={autoStartTrips ? "#007AFF" : "#f4f3f4"}
+              trackColor={{ false: "#CBD5E1", true: "#A5F3FC" }}
+              thumbColor={autoStartTrips ? "#0891B2" : "#f4f3f4"}
               onValueChange={() => setAutoStartTrips((prev) => !prev)}
               value={autoStartTrips}
             />
@@ -951,7 +959,7 @@ export function ProfileScreen() {
 
           <View style={[styles.settingRow, { backgroundColor: rowBg }]}>
             <View style={styles.settingLeft}>
-              <Ionicons name="location" size={20} color="#007AFF" />
+              <Ionicons name="location" size={20} color="#0891B2" />
               <View style={styles.settingTextContainer}>
                 <Text style={[styles.settingLabel, { color: textColor }]}>
                   Location Sharing
@@ -962,8 +970,8 @@ export function ProfileScreen() {
               </View>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#81b0ff" }}
-              thumbColor={locationSharing ? "#007AFF" : "#f4f3f4"}
+              trackColor={{ false: "#CBD5E1", true: "#A5F3FC" }}
+              thumbColor={locationSharing ? "#0891B2" : "#f4f3f4"}
               onValueChange={() => setLocationSharing((prev) => !prev)}
               value={locationSharing}
             />
@@ -971,7 +979,7 @@ export function ProfileScreen() {
 
           <View style={[styles.settingRow, { backgroundColor: rowBg }]}>
             <View style={styles.settingLeft}>
-              <Ionicons name="moon" size={20} color="#007AFF" />
+              <Ionicons name="moon" size={20} color="#0891B2" />
               <View style={styles.settingTextContainer}>
                 <Text style={[styles.settingLabel, { color: textColor }]}>
                   Dark Mode
@@ -982,8 +990,8 @@ export function ProfileScreen() {
               </View>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#81b0ff" }}
-              thumbColor={darkModeEnabled ? "#007AFF" : "#f4f3f4"}
+              trackColor={{ false: "#CBD5E1", true: "#A5F3FC" }}
+              thumbColor={darkModeEnabled ? "#0891B2" : "#f4f3f4"}
               onValueChange={() =>
                 setTheme(theme === "dark" ? "light" : "dark")
               }
@@ -1104,53 +1112,78 @@ export function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
+    backgroundColor: "#F8FAFC",
   },
+  // Premium Header Styles
   header: {
-    backgroundColor: "#007AFF",
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingVertical: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: "hidden",
+    position: "relative",
+  },
+  headerDecoCircle1: {
+    position: "absolute",
+    top: -40,
+    right: -40,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecoCircle2: {
+    position: "absolute",
+    bottom: -20,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
   },
   headerContent: {
     flexDirection: "row",
     alignItems: "center",
   },
   headerIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
     backgroundColor: "rgba(255, 255, 255, 0.2)",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
+    marginRight: 14,
   },
   headerTextContainer: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 22,
+    fontWeight: "800",
     color: "#fff",
+    letterSpacing: -0.3,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: "rgba(255, 255, 255, 0.8)",
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.85)",
     marginTop: 2,
   },
   scrollContent: {
-    paddingBottom: 100,
+    paddingBottom: 120,
   },
+  // Premium Profile Card
   profileCard: {
     margin: 20,
     padding: 24,
-    borderRadius: 16,
-    shadowColor: "#000",
+    borderRadius: 20,
+    shadowColor: "#0891B2",
     shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 16,
+    elevation: 6,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   avatarContainer: {
     position: "relative",
@@ -1160,8 +1193,8 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    borderWidth: 3,
-    borderColor: "#007AFF",
+    borderWidth: 4,
+    borderColor: "#0891B2",
   },
   loadingOverlay: {
     position: "absolute",
@@ -1178,13 +1211,13 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 0,
     right: 0,
-    backgroundColor: "#007AFF",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    backgroundColor: "#0891B2",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: "#fff",
   },
   profileInfo: {
@@ -1194,69 +1227,79 @@ const styles = StyleSheet.create({
   fullName: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#333",
+    color: "#1E293B",
     marginBottom: 4,
   },
   nameInput: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#333",
-    borderBottomWidth: 1,
-    borderColor: "#007AFF",
+    color: "#1E293B",
+    borderBottomWidth: 2,
+    borderColor: "#0891B2",
     textAlign: "center",
     paddingVertical: 8,
     minWidth: 200,
   },
   email: {
-    fontSize: 16,
-    color: "#8e8e93",
+    fontSize: 15,
+    color: "#64748B",
     marginBottom: 12,
   },
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E8F5E8",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
   },
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#4CAF50",
-    marginRight: 6,
+    backgroundColor: "#10B981",
+    marginRight: 8,
   },
   statusText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "600",
-    color: "#4CAF50",
+    color: "#059669",
   },
   editButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F0F8FF",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
+    backgroundColor: "#ECFEFF",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: "#007AFF",
+    borderColor: "#0891B2",
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
   },
   editButtonText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#007AFF",
-    marginLeft: 6,
+    color: "#0891B2",
+    marginLeft: 8,
   },
   section: {
     marginHorizontal: 20,
     marginBottom: 20,
     padding: 20,
-    borderRadius: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
+    borderRadius: 20,
+    shadowColor: "#0891B2",
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   sectionHeader: {
     flexDirection: "row",
@@ -1265,61 +1308,65 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "700",
-    color: "#333",
+    color: "#1E293B",
     marginLeft: 12,
     flex: 1,
   },
   adminBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E8F5E8",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
   },
   adminBadgeText: {
     fontSize: 10,
     fontWeight: "600",
-    color: "#4CAF50",
+    color: "#059669",
     marginLeft: 4,
   },
   inputContainer: {
-    marginBottom: 16,
+    marginBottom: 18,
   },
   inputLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
-    color: "#333",
+    color: "#64748B",
     marginBottom: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   inputRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 12,
+    backgroundColor: "#F8FAFC",
     paddingHorizontal: 16,
-    paddingVertical: 4,
+    paddingVertical: 14,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#E5E5E7",
+    borderColor: "#E2E8F0",
   },
   input: {
     flex: 1,
-    fontSize: 16,
-    color: "#333",
-    paddingVertical: 12,
     marginLeft: 12,
+    fontSize: 15,
+    fontWeight: "500",
   },
   inputError: {
-    borderColor: "#FF3B30",
-    borderWidth: 1,
+    borderColor: "#EF4444",
+    borderWidth: 2,
   },
   errorText: {
+    color: "#EF4444",
     fontSize: 12,
-    color: "#FF3B30",
-    marginTop: 4,
+    marginTop: 6,
     marginLeft: 4,
+    fontWeight: "500",
   },
   settingRow: {
     flexDirection: "row",

@@ -100,11 +100,9 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
   },
   modalContainer: {
     backgroundColor: "#fff",

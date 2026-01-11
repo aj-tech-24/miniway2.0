@@ -5,6 +5,8 @@ import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { FontAwesome, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { router, useLocalSearchParams } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -60,7 +62,11 @@ interface BusData {
 
 interface TripData {
   id: string;
-  current_location: string | { latitude: number; longitude: number } | { type: string; coordinates: number[] } | null;
+  current_location:
+  | string
+  | { latitude: number; longitude: number }
+  | { type: string; coordinates: number[] }
+  | null;
   bus_id: string;
   status: string;
   buses: BusData | BusData[];
@@ -70,7 +76,10 @@ interface BusWithLocation {
   id: string;
   plateNumber: string;
   route_id: string;
-  currentLocation: string | { latitude: number; longitude: number } | { type: string; coordinates: number[] };
+  currentLocation:
+  | string
+  | { latitude: number; longitude: number }
+  | { type: string; coordinates: number[] };
 }
 
 // Type for trips_with_geojson view
@@ -100,6 +109,7 @@ export function CommuterHomeScreen() {
   const { theme } = useAppTheme();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
@@ -135,14 +145,24 @@ export function CommuterHomeScreen() {
     null
   );
   const [showSearchBar, setShowSearchBar] = useState(false);
-  const [isMapExpanded, setIsMapExpanded] = useState(false);
-  const [isCheckingExistingTrip, setIsCheckingExistingTrip] = useState(true);
-
+  const [isMapExpanded, setIsMapExpanded] = useState(false);  const [isCheckingExistingTrip, setIsCheckingExistingTrip] = useState(true);
+  const [showPendingRequestModal, setShowPendingRequestModal] = useState(false);
+  const [pendingRequestData, setPendingRequestData] = useState<any>(null);
+  const [showContinueTripModal, setShowContinueTripModal] = useState(false);
+  const [existingTripData, setExistingTripData] = useState<any>(null);
   // Animation values
   const headerOpacity = useRef(new Animated.Value(1)).current;
   const cardsOpacity = useRef(new Animated.Value(1)).current;
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const cardsTranslateY = useRef(new Animated.Value(0)).current;
+
+  // Beating circle animation values for user location marker
+  const beatingScale1 = useRef(new Animated.Value(0)).current;
+  const beatingScale2 = useRef(new Animated.Value(0)).current;
+  const beatingScale3 = useRef(new Animated.Value(0)).current;
+  const beatingOpacity1 = useRef(new Animated.Value(1)).current;
+  const beatingOpacity2 = useRef(new Animated.Value(1)).current;
+  const beatingOpacity3 = useRef(new Animated.Value(1)).current;
 
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
@@ -222,90 +242,108 @@ export function CommuterHomeScreen() {
       const a =
         Math.sin(dLat / 2) * Math.sin(dLat / 2) +
         Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       const distance = R * c; // Distance in kilometers
       return distance;
     },
     []
-  );  // Helper function to parse location data in various formats
-  const parseLocation = useCallback((location: any): { latitude: number; longitude: number } | null => {
-    if (!location) return null;
+  ); // Helper function to parse location data in various formats
+  const parseLocation = useCallback(
+    (location: any): { latitude: number; longitude: number } | null => {
+      if (!location) return null;
 
-    try {
-      // Handle string format (POINT or GeoJSON string or binary)
-      if (typeof location === 'string') {
-        // Check for binary format (starts with hex like 0101000020E6100000...)
-        if (location.startsWith('01') && location.length > 20) {
-          console.log(`⚠️ Binary PostGIS format detected: ${location.substring(0, 30)}... - Using trips_with_geojson view should prevent this`);
+      try {
+        // Handle string format (POINT or GeoJSON string or binary)
+        if (typeof location === "string") {
+          // Check for binary format (starts with hex like 0101000020E6100000...)
+          if (location.startsWith("01") && location.length > 20) {
+            console.log(
+              `⚠️ Binary PostGIS format detected: ${location.substring(
+                0,
+                30
+              )}... - Using trips_with_geojson view should prevent this`
+            );
+            return null;
+          }
+
+          // Handle PostGIS POINT format: POINT(lng lat)
+          if (location.startsWith("POINT(")) {
+            const coordString = location.replace("POINT(", "").replace(")", "");
+            const coords = coordString.split(" ");
+            if (coords.length >= 2) {
+              const [lng, lat] = coords.map(Number);
+              if (!isNaN(lat) && !isNaN(lng)) {
+                console.log(`✅ Parsed POINT format: ${lat}, ${lng}`);
+                return { latitude: lat, longitude: lng };
+              }
+            }
+            console.log(`⚠️ Invalid POINT format: ${location}`);
+            return null;
+          }
+
+          // Try to parse as GeoJSON string
+          try {
+            const geoJson = JSON.parse(location);
+            if (
+              geoJson.type === "Point" &&
+              Array.isArray(geoJson.coordinates)
+            ) {
+              const [lng, lat] = geoJson.coordinates;
+              if (!isNaN(lat) && !isNaN(lng)) {
+                console.log(`✅ Parsed GeoJSON string: ${lat}, ${lng}`);
+                return { latitude: lat, longitude: lng };
+              }
+            }
+          } catch (parseError) {
+            // Not a JSON string, that's okay
+          }
+
+          // If we get here, it's an unrecognized string format
+          console.log(
+            `⚠️ Unrecognized location format: ${location.substring(0, 50)}`
+          );
           return null;
         }
 
-        // Handle PostGIS POINT format: POINT(lng lat)
-        if (location.startsWith('POINT(')) {
-          const coordString = location.replace("POINT(", "").replace(")", "");
-          const coords = coordString.split(" ");
-          if (coords.length >= 2) {
-            const [lng, lat] = coords.map(Number);
+        // Handle object format (most common with trips_with_geojson view)
+        if (typeof location === "object") {
+          // GeoJSON Point format: { type: "Point", coordinates: [lng, lat] }
+          if (
+            location.type === "Point" &&
+            Array.isArray(location.coordinates)
+          ) {
+            const [lng, lat] = location.coordinates;
             if (!isNaN(lat) && !isNaN(lng)) {
-              console.log(`✅ Parsed POINT format: ${lat}, ${lng}`);
+              console.log(`✅ Parsed GeoJSON object: ${lat}, ${lng}`);
               return { latitude: lat, longitude: lng };
             }
           }
-          console.log(`⚠️ Invalid POINT format: ${location}`);
-          return null;
-        }
 
-        // Try to parse as GeoJSON string
-        try {
-          const geoJson = JSON.parse(location);
-          if (geoJson.type === 'Point' && Array.isArray(geoJson.coordinates)) {
-            const [lng, lat] = geoJson.coordinates;
-            if (!isNaN(lat) && !isNaN(lng)) {
-              console.log(`✅ Parsed GeoJSON string: ${lat}, ${lng}`);
-              return { latitude: lat, longitude: lng };
+          // Direct lat/lng object format
+          if (location.latitude && location.longitude) {
+            const { latitude, longitude } = location;
+            if (!isNaN(latitude) && !isNaN(longitude)) {
+              console.log(
+                `✅ Parsed lat/lng object: ${latitude}, ${longitude}`
+              );
+              return { latitude, longitude };
             }
           }
-        } catch (parseError) {
-          // Not a JSON string, that's okay
+
+          console.log(`⚠️ Unrecognized object format:`, location);
         }
 
-        // If we get here, it's an unrecognized string format
-        console.log(`⚠️ Unrecognized location format: ${location.substring(0, 50)}`);
+        return null;
+      } catch (error) {
+        console.error("Error parsing location:", error);
         return null;
       }
-
-      // Handle object format (most common with trips_with_geojson view)
-      if (typeof location === 'object') {
-        // GeoJSON Point format: { type: "Point", coordinates: [lng, lat] }
-        if (location.type === 'Point' && Array.isArray(location.coordinates)) {
-          const [lng, lat] = location.coordinates;
-          if (!isNaN(lat) && !isNaN(lng)) {
-            console.log(`✅ Parsed GeoJSON object: ${lat}, ${lng}`);
-            return { latitude: lat, longitude: lng };
-          }
-        }
-
-        // Direct lat/lng object format
-        if (location.latitude && location.longitude) {
-          const { latitude, longitude } = location;
-          if (!isNaN(latitude) && !isNaN(longitude)) {
-            console.log(`✅ Parsed lat/lng object: ${latitude}, ${longitude}`);
-            return { latitude, longitude };
-          }
-        }
-
-        console.log(`⚠️ Unrecognized object format:`, location);
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Error parsing location:', error);
-      return null;
-    }
-  }, []);
+    },
+    []
+  );
   // Function to check for existing waiting trips (for app crash recovery)
   // PRIORITY FUNCTION: This must be called first to handle trip recovery
   const checkForExistingTrip = useCallback(async () => {
@@ -315,9 +353,64 @@ export function CommuterHomeScreen() {
     }
 
     try {
-      console.log("🚨 PRIORITY: Checking for existing waiting trips for user ID:", session.user.id);
+      console.log(
+        "🚨 PRIORITY: Checking for existing trips and requests for user ID:",
+        session.user.id
+      );
 
-      // Check for trip_passengers records with waiting status
+      // 1. Check for ANY PENDING pickup request first
+      // This is the most important state for the commuter
+      const { data: pendingRequests, error: pendingError } = await supabase
+        .from("pickup_requests")
+        .select(`
+          id,
+          trip_id,
+          bus_id,
+          status,
+          pickup_lat,
+          pickup_lng,
+          dest_lat,
+          dest_lng,
+          created_at,
+          buses!inner(plate_number, route_id)
+        `)
+        .eq("commuter_id", session.user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (pendingRequests && pendingRequests.length > 0) {
+        const pendingRequest = pendingRequests[0];
+        console.log("ℹ️ Found pending pickup request:", pendingRequest);
+
+        let plateNumber = "Unknown";
+        let routeId = null;
+        if (pendingRequest.buses) {
+          const busData = Array.isArray(pendingRequest.buses) ? pendingRequest.buses[0] : pendingRequest.buses;
+          plateNumber = busData?.plate_number || "Unknown";
+          routeId = busData?.route_id;
+        }
+
+        // Fetch the corresponding trip_passengers record ID for cancellation
+        const { data: tpRecord } = await supabase
+          .from("trip_passengers")
+          .select("id")
+          .eq("trip_id", pendingRequest.trip_id)
+          .eq("passenger_id", session.user.id)
+          .maybeSingle();
+
+        setPendingRequestData({
+          request: pendingRequest,
+          plateNumber,
+          routeId,
+          tpRecordId: tpRecord?.id
+        });
+        setShowPendingRequestModal(true);
+        setIsCheckingExistingTrip(false);
+        return;
+      }
+
+      // 2. If no pending request, check for ongoing trips (boarded or waiting to board)
       const { data: existingTrips, error } = await supabase
         .from("trip_passengers")
         .select(
@@ -332,7 +425,7 @@ export function CommuterHomeScreen() {
             dest_lng,
             passenger_count,
             created_at,
-            buses!inner(plate_number),
+            buses!inner(plate_number, route_id),
             trips!inner(status)
           `
         )
@@ -346,42 +439,21 @@ export function CommuterHomeScreen() {
         setIsCheckingExistingTrip(false);
         return;
       }      if (existingTrips && existingTrips.length > 0) {
-        const existingTrip = existingTrips[0];        console.log("✅ Found existing waiting trip:", existingTrip);
-        console.log("🔍 Existing trip buses data:", existingTrip.buses);
+        const existingTrip = existingTrips[0];
+        console.log("✅ Found ongoing trip:", existingTrip);
 
-        // Extract plate number - handle both array and object formats
         let plateNumber = "Unknown";
         if (existingTrip.buses) {
-          if (Array.isArray(existingTrip.buses) && existingTrip.buses.length > 0) {
-            plateNumber = existingTrip.buses[0]?.plate_number || "Unknown";
-          } else if (typeof existingTrip.buses === 'object' && (existingTrip.buses as any).plate_number) {
-            plateNumber = (existingTrip.buses as any).plate_number;
-          }
+          const busData = Array.isArray(existingTrip.buses) ? existingTrip.buses[0] : existingTrip.buses;
+          plateNumber = busData?.plate_number || "Unknown";
         }
-        console.log("🚌 Extracted plate number:", plateNumber);
 
-        // Show alert to continue trip
-        Alert.alert(
-          "Continue Your Trip? 🚌",
-          `You have an ongoing trip on Bus ${plateNumber}. Would you like to continue where you left off?`,
-          [
-            {
-              text: "Start New Trip",
-              style: "cancel",
-              onPress: () => {
-                // Cancel the existing trip
-                cancelExistingTrip(existingTrip.id);
-              },
-            },
-            {
-              text: "Continue Trip",
-              onPress: () => {
-                // Navigate to trip screen with existing trip data
-                continueExistingTrip(existingTrip);
-              },
-            },
-          ]
-        );
+        // Show custom modal instead of native Alert
+        setExistingTripData({
+          trip: existingTrip,
+          plateNumber: plateNumber,
+        });
+        setShowContinueTripModal(true);
       } else {
         console.log("ℹ️ No existing waiting trips found");
       }
@@ -400,6 +472,15 @@ export function CommuterHomeScreen() {
         .update({ status: "cancelled" })
         .eq("id", tripPassengerId);
 
+      // Also cancel any pending pickup requests for this user to be safe
+      if (session?.user?.id) {
+        await supabase
+          .from("pickup_requests")
+          .update({ status: "cancelled" })
+          .eq("commuter_id", session.user.id)
+          .eq("status", "pending");
+      }
+
       if (error) {
         console.error("Error cancelling existing trip:", error);
         Alert.alert(
@@ -407,7 +488,7 @@ export function CommuterHomeScreen() {
           "Could not cancel the existing trip. Please try again."
         );
       } else {
-        console.log("✅ Existing trip cancelled successfully");
+        console.log("✅ Existing trip and pending requests cancelled successfully");
       }
     } catch (error) {
       console.error("Error cancelling trip:", error);
@@ -416,12 +497,18 @@ export function CommuterHomeScreen() {
   // Function to continue existing trip
   const continueExistingTrip = (existingTrip: any) => {
     try {
-      console.log("🚀 Continuing existing trip:", existingTrip);      // Extract plate number - handle both array and object formats
+      console.log("🚀 Continuing existing trip:", existingTrip); // Extract plate number - handle both array and object formats
       let plateNumber = "Unknown";
       if (existingTrip.buses) {
-        if (Array.isArray(existingTrip.buses) && existingTrip.buses.length > 0) {
+        if (
+          Array.isArray(existingTrip.buses) &&
+          existingTrip.buses.length > 0
+        ) {
           plateNumber = existingTrip.buses[0]?.plate_number || "Unknown";
-        } else if (typeof existingTrip.buses === 'object' && (existingTrip.buses as any).plate_number) {
+        } else if (
+          typeof existingTrip.buses === "object" &&
+          (existingTrip.buses as any).plate_number
+        ) {
           plateNumber = (existingTrip.buses as any).plate_number;
         }
       }
@@ -449,16 +536,18 @@ export function CommuterHomeScreen() {
       console.error("Error continuing trip:", error);
       Alert.alert("Error", "Could not continue the trip. Please try again.");
     }
-  };  // Fetch nearby buses on routes
+  }; // Fetch nearby buses on routes
   const fetchActiveMinibuses = useCallback(async () => {
-    try {      console.log("🚌 Fetching active buses from trips...");
-      
+    try {
+      console.log("🚌 Fetching active buses from trips...");
+
       // Get active trips with bus information and current location
       // Include both 'waiting' and 'ongoing' trips to show all available buses
       // Use trips_with_geojson view which converts location to GeoJSON format
       const { data: activeTripsData, error: tripsError } = await supabase
         .from("trips_with_geojson")
-        .select(`
+        .select(
+          `
           status,
           current_location,
           bus_id,
@@ -466,47 +555,63 @@ export function CommuterHomeScreen() {
           route_id,
           driver_id,
           driver_name
-        `)
+        `
+        )
         .in("status", ["waiting", "ongoing"]);
-      
+
       if (tripsError) {
         console.error("Error fetching trips:", tripsError);
         throw tripsError;
-      }      console.log("📍 Found active trips:", activeTripsData?.length || 0);
-        // Transform the data to match expected format
+      }
+      console.log("📍 Found active trips:", activeTripsData?.length || 0);
+      // Transform the data to match expected format
       // Filter out trips with invalid/binary location data
-      const busesData = activeTripsData?.filter((trip: TripWithGeoJSON) => {
-        // Check if location is valid
-        if (!trip.current_location) {
-          console.log(`⚠️ Trip with bus ${trip.plate_number} has no location data`);
-          return false;
-        }
-        
-        // Log the location format for debugging
-        console.log(`📍 Bus ${trip.plate_number} - Location type: ${typeof trip.current_location}`, 
-          typeof trip.current_location === 'string' 
-            ? trip.current_location.substring(0, 50) 
-            : JSON.stringify(trip.current_location).substring(0, 50));
-        
-        // GeoJSON view should return objects, but handle strings just in case
-        if (typeof trip.current_location === 'string') {
-          // Check for binary format
-          const isBinaryFormat = trip.current_location.startsWith('01');
-          if (isBinaryFormat) {
-            console.log(`⚠️ Skipping bus ${trip.plate_number} - location in binary format`);
-            return false;
-          }
-        }
-        
-        return true;}).map((trip: TripWithGeoJSON): BusWithLocation => {
-        console.log(`🚌 Bus ${trip.plate_number} - Status: ${trip.status} - Location:`, trip.current_location);
-        return {
-          id: trip.bus_id, // Use bus_id as the identifier
-          plateNumber: trip.plate_number,
-          route_id: trip.route_id,
-          currentLocation: trip.current_location, // GeoJSON or text location from view
-        };
-      }) || [];
+      const busesData =
+        activeTripsData
+          ?.filter((trip: TripWithGeoJSON) => {
+            // Check if location is valid
+            if (!trip.current_location) {
+              console.log(
+                `⚠️ Trip with bus ${trip.plate_number} has no location data`
+              );
+              return false;
+            }
+
+            // Log the location format for debugging
+            console.log(
+              `📍 Bus ${trip.plate_number
+              } - Location type: ${typeof trip.current_location}`,
+              typeof trip.current_location === "string"
+                ? trip.current_location.substring(0, 50)
+                : JSON.stringify(trip.current_location).substring(0, 50)
+            );
+
+            // GeoJSON view should return objects, but handle strings just in case
+            if (typeof trip.current_location === "string") {
+              // Check for binary format
+              const isBinaryFormat = trip.current_location.startsWith("01");
+              if (isBinaryFormat) {
+                console.log(
+                  `⚠️ Skipping bus ${trip.plate_number} - location in binary format`
+                );
+                return false;
+              }
+            }
+
+            return true;
+          })
+          .map((trip: TripWithGeoJSON): BusWithLocation => {
+            console.log(
+              `🚌 Bus ${trip.plate_number} - Status: ${trip.status} - Location:`,
+              trip.current_location
+            );
+            return {
+              id: trip.bus_id, // Use bus_id as the identifier
+              plateNumber: trip.plate_number,
+              route_id: trip.route_id,
+              currentLocation: trip.current_location, // GeoJSON or text location from view
+            };
+          }) || [];
 
       // Get all routes with geojson data to check proximity
       const { data: routesData, error: routesError } = await supabase
@@ -518,32 +623,38 @@ export function CommuterHomeScreen() {
         throw routesError;
       }
 
-      console.log("🗺️ Found routes:", routesData?.length || 0);      console.log("🗺️ Found routes:", routesData?.length || 0);
+      console.log("🗺️ Found routes:", routesData?.length || 0);
+      console.log("🗺️ Found routes:", routesData?.length || 0);
 
       if (!busesData || busesData.length === 0) {
         console.log("⚠️ No buses found");
         setBuses([]);
         return;
-      }      if (!userLocation) {
+      }
+      if (!userLocation) {
         console.log("⚠️ No user location available");
         // Fallback to showing all buses if no user location
         const formattedData = busesData.map((bus: BusWithLocation) => {
           const parsedLocation = parseLocation(bus.currentLocation);
           const latitude = parsedLocation?.latitude || 6.7536; // Default Davao coordinates
           const longitude = parsedLocation?.longitude || 125.356;
-          
-          return { 
+
+          return {
             id: bus.id,
             plateNumber: bus.plateNumber,
-            currentLocation: { latitude, longitude } 
+            currentLocation: { latitude, longitude },
           };
         });
-          console.log("✅ Setting buses from trips (no location filter):", formattedData.length);
+        console.log(
+          "✅ Setting buses from trips (no location filter):",
+          formattedData.length
+        );
         setBuses(formattedData);
-        return;      }      // Filter buses that are on routes near the user
+        return;
+      } // Filter buses that are on routes near the user
       const nearbyBuses = busesData.filter((bus: BusWithLocation) => {
         const parsedLocation = parseLocation(bus.currentLocation);
-        
+
         if (!parsedLocation) {
           console.log(`⚠️ Could not parse location for bus ${bus.plateNumber}`);
           return false;
@@ -559,11 +670,16 @@ export function CommuterHomeScreen() {
           longitude
         );
 
-        console.log(`🚌 Bus ${bus.plateNumber}: ${distanceToBus.toFixed(2)}km away`);
+        console.log(
+          `🚌 Bus ${bus.plateNumber}: ${distanceToBus.toFixed(2)}km away`
+        );
 
         // Only include buses within 5km of user
         if (distanceToBus > 5) return false;
 
+        return true;
+
+        /* Temporarily simplified to show all buses within 5km regardless of route path proximity
         // If bus has a route_id, check if the route is near the user
         if (bus.route_id && routesData) {
           const route = routesData.find((r) => r.id === bus.route_id);
@@ -571,15 +687,15 @@ export function CommuterHomeScreen() {
             try {
               // Parse the PostGIS geography data from the path field
               let routePoints: number[][] = [];
-              
-              if (typeof route.path === 'string') {
+
+              if (typeof route.path === "string") {
                 // Handle PostGIS LineString format: LINESTRING(lng lat, lng lat, ...)
-                if (route.path.startsWith('LINESTRING(')) {
+                if (route.path.startsWith("LINESTRING(")) {
                   const coordinateString = route.path
-                    .replace('LINESTRING(', '')
-                    .replace(')', '');
-                  routePoints = coordinateString.split(',').map(coord => {
-                    const [lng, lat] = coord.trim().split(' ').map(Number);
+                    .replace("LINESTRING(", "")
+                    .replace(")", "");
+                  routePoints = coordinateString.split(",").map((coord) => {
+                    const [lng, lat] = coord.trim().split(" ").map(Number);
                     return [lng, lat];
                   });
                 }
@@ -587,7 +703,7 @@ export function CommuterHomeScreen() {
                 // Handle GeoJSON format
                 routePoints = route.path.coordinates;
               }
-              
+
               if (routePoints.length > 0) {
                 // Check if any point on the route is within 2km of user
                 const isRouteNearUser = routePoints.some((point: number[]) => {
@@ -610,33 +726,46 @@ export function CommuterHomeScreen() {
 
         // If no route_id or route data, include bus if it's close enough
         return distanceToBus <= 3; // 3km radius for buses without route data
-      });      console.log(`📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`);      console.log(`📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`);
+        */
+      });
+      console.log(
+        `📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`
+      );
+      console.log(
+        `📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`
+      );
 
       // Format the data
       const formattedData = nearbyBuses.map((bus: BusWithLocation) => {
         const parsedLocation = parseLocation(bus.currentLocation);
         const latitude = parsedLocation?.latitude || 6.7536;
         const longitude = parsedLocation?.longitude || 125.356;
-        
-        return { 
+
+        return {
           id: bus.id,
           plateNumber: bus.plateNumber,
-          currentLocation: { latitude, longitude } 
+          currentLocation: { latitude, longitude },
         };
-      });console.log("✅ Setting buses from active trips:", formattedData.length);
+      });
+      console.log("✅ Setting buses from active trips:", formattedData.length);
       setBuses(formattedData);
-      
+
       // Log final bus data for debugging
       formattedData.forEach((bus: Minibus, index: number) => {
-        console.log(`🚌 Bus ${index + 1}: ${bus.plateNumber} at (${bus.currentLocation.latitude.toFixed(4)}, ${bus.currentLocation.longitude.toFixed(4)})`);
+        console.log(
+          `🚌 Bus ${index + 1}: ${bus.plateNumber
+          } at (${bus.currentLocation.latitude.toFixed(
+            4
+          )}, ${bus.currentLocation.longitude.toFixed(4)})`
+        );
       });
-      
     } catch (error) {
       console.error("❌ Error in fetchActiveMinibuses:", error);
       setBuses([]); // Set empty array on error
-      
+
       // Don't show alert for database errors as they're usually temporary
-      if (error instanceof Error && !error.message.includes("column")) {        Alert.alert("Error", "Could not fetch bus locations: " + error.message);
+      if (error instanceof Error && !error.message.includes("column")) {
+        Alert.alert("Error", "Could not fetch bus locations: " + error.message);
       }
     }
   }, [userLocation, calculateDistance, parseLocation]);
@@ -664,13 +793,54 @@ export function CommuterHomeScreen() {
           setSelectedRouteMessage(null);
         }, 8000);
       }
+    }  }, [params.selectedRouteId, params.selectedRouteName, params.message]);
+
+  // Handle destination name from history screen navigation
+  useEffect(() => {
+    if (params.destinationName) {
+      const destinationName = params.destinationName as string;
+      console.log("📍 Received destination from history:", destinationName);
+      
+      // Set the search query with the destination name
+      setSearchQuery(destinationName);
+      setDropoffLocation(destinationName);
+      
+      // Show the search bar and trigger search
+      setShowSearchBar(true);
+      
+      // Fetch place predictions for the destination
+      const fetchPredictions = async () => {
+        if (!GOOGLE_MAPS_API_KEY) return;
+        
+        try {
+          setIsSearching(true);
+          const response = await fetch(
+            `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(
+              destinationName
+            )}&key=${GOOGLE_MAPS_API_KEY}&components=country:ph`
+          );
+          const data = await response.json();
+          if (data.predictions && data.predictions.length > 0) {
+            setPredictions(data.predictions);
+          }
+        } catch (error) {
+          console.error("Error fetching predictions:", error);
+        } finally {
+          setIsSearching(false);
+        }
+      };
+      
+      fetchPredictions();
     }
-  }, [params.selectedRouteId, params.selectedRouteName, params.message]);
+  }, [params.destinationName]);
+
   // PRIORITY EFFECT: Check for existing trips immediately when session is available
   // This runs BEFORE any other initialization to ensure trip recovery happens first
   useEffect(() => {
     if (session?.user?.id) {
-      console.log("🚨 PRIORITY: Session detected - immediately checking for existing trips");
+      console.log(
+        "🚨 PRIORITY: Session detected - immediately checking for existing trips"
+      );
       console.log("🚨 PRIORITY: User ID:", session.user.id);
       checkForExistingTrip();
     }
@@ -702,7 +872,8 @@ export function CommuterHomeScreen() {
       await fetchActiveMinibuses();
 
       setInitialLoading(false);
-    };initialize();
+    };
+    initialize();
     const subscription = supabase
       .channel("public:trips")
       .on(
@@ -715,13 +886,72 @@ export function CommuterHomeScreen() {
       supabase.removeChannel(subscription);
     };
   }, [fetchActiveMinibuses, checkForExistingTrip]);
-
   // Refetch buses when user location changes
   useEffect(() => {
     if (userLocation) {
       fetchActiveMinibuses();
     }
   }, [userLocation, fetchActiveMinibuses]);
+
+  // Beating circle animation for user location marker
+  useEffect(() => {
+    const startBeatingAnimation = () => {
+      const createBeatingSequence = (
+        scaleValue: Animated.Value,
+        opacityValue: Animated.Value,
+        delay: number
+      ) => {
+        return Animated.loop(
+          Animated.sequence([
+            Animated.delay(delay),
+            Animated.parallel([
+              Animated.timing(scaleValue, {
+                toValue: 3,
+                duration: 2000,
+                useNativeDriver: true,
+              }),
+              Animated.timing(opacityValue, {
+                toValue: 0,
+                duration: 2000,
+                useNativeDriver: true,
+              }),
+            ]),
+            Animated.parallel([
+              Animated.timing(scaleValue, {
+                toValue: 0,
+                duration: 0,
+                useNativeDriver: true,
+              }),
+              Animated.timing(opacityValue, {
+                toValue: 1,
+                duration: 0,
+                useNativeDriver: true,
+              }),
+            ]),
+          ])
+        );
+      };
+
+      // Start three beating circles with different delays
+      Animated.parallel([
+        createBeatingSequence(beatingScale1, beatingOpacity1, 0),
+        createBeatingSequence(beatingScale2, beatingOpacity2, 600),
+        createBeatingSequence(beatingScale3, beatingOpacity3, 1200),
+      ]).start();
+    };
+
+    if (userLocation) {
+      startBeatingAnimation();
+    }
+  }, [
+    userLocation,
+    beatingScale1,
+    beatingScale2,
+    beatingScale3,
+    beatingOpacity1,
+    beatingOpacity2,
+    beatingOpacity3,
+  ]);
 
   useEffect(() => {
     if (timeoutRef.current) {
@@ -973,11 +1203,11 @@ export function CommuterHomeScreen() {
       if (timeSinceLastUpdate > 2000 || !userLocation) {
         const distance = userLocation
           ? calculateDistance(
-              userLocation.coords.latitude,
-              userLocation.coords.longitude,
-              location.coords.latitude,
-              location.coords.longitude
-            ) * 1000 // Convert to meters
+            userLocation.coords.latitude,
+            userLocation.coords.longitude,
+            location.coords.latitude,
+            location.coords.longitude
+          ) * 1000 // Convert to meters
           : 1000; // If no previous location, always update
 
         if (distance > 10) {
@@ -1013,7 +1243,7 @@ export function CommuterHomeScreen() {
         try {
           // @ts-ignore - only available on Android
           await Location.enableNetworkProviderAsync?.();
-        } catch (_) {}
+        } catch (_) { }
 
         setLocationError(true);
         Alert.alert(
@@ -1122,35 +1352,69 @@ export function CommuterHomeScreen() {
           style={[styles.safeArea, { backgroundColor }]}
           edges={["top", "left", "right"]}
         >
-          {/* Enhanced Header Section */}
+          {/* Enhanced Header Section with Premium Gradient */}
           <Animated.View
             style={[
-              styles.header,
+              styles.headerWrapper,
               {
                 opacity: headerOpacity,
                 transform: [{ translateY: headerTranslateY }],
               },
             ]}
           >
-            <View style={styles.headerContent}>
-              <View style={styles.headerIconContainer}>
-                <Ionicons name="bus" size={28} color="#007AFF" />
+            <LinearGradient
+              colors={theme === "dark"
+                ? ["#1a365d", "#2563eb", "#3b82f6"]
+                : ["#0052d4", "#4364f7", "#6fb1fc"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.headerGradient}
+            >
+              {/* Decorative circles for premium look */}
+              <View style={styles.headerDecorativeCircle1} />
+              <View style={styles.headerDecorativeCircle2} />
+
+              <View style={styles.headerContent}>
+                <View style={styles.headerIconContainer}>
+                  <LinearGradient
+                    colors={["#ffffff", "#f0f9ff"]}
+                    style={styles.headerIconGradient}
+                  >
+                    <Ionicons name="bus" size={28} color="#0066FF" />
+                  </LinearGradient>
+                </View>
+                <View style={styles.headerTextContainer}>
+                  <Text style={styles.title}>Commuter Dashboard</Text>
+                  <Text style={styles.subtitle}>Find your perfect ride</Text>
+                </View>
+                <View style={styles.headerBadge}>
+                  <View style={styles.headerBadgeDot} />
+                  <Text style={styles.headerBadgeText}>LIVE</Text>
+                </View>
               </View>
-              <View style={styles.headerTextContainer}>
-                <Text style={styles.title}>Commuter Dashboard</Text>
-                <Text style={styles.subtitle}>Find your perfect ride</Text>
-              </View>
-            </View>
+            </LinearGradient>
           </Animated.View>
         </SafeAreaView>
       )}
 
       {/* Full Screen Header for pin dropping mode */}
       {isPinDroppingMode && (
-        <View style={styles.fullScreenHeader}>
+        <LinearGradient
+          colors={theme === "dark"
+            ? ["#1a365d", "#2563eb", "#3b82f6"]
+            : ["#0052d4", "#4364f7", "#6fb1fc"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.fullScreenHeader}
+        >
           <View style={styles.headerContent}>
             <View style={styles.headerIconContainer}>
-              <Ionicons name="bus" size={28} color="#fff" />
+              <LinearGradient
+                colors={["#ffffff", "#f0f9ff"]}
+                style={styles.headerIconGradient}
+              >
+                <Ionicons name="location" size={28} color="#0066FF" />
+              </LinearGradient>
             </View>
             <View style={styles.headerTextContainer}>
               <Text style={styles.title}>
@@ -1167,12 +1431,13 @@ export function CommuterHomeScreen() {
               <Ionicons name="close" size={24} color="#fff" />
             </TouchableOpacity>
           </View>
-        </View>
+        </LinearGradient>
       )}
 
       <View style={[styles.contentContainer, { backgroundColor }]}>
         <TouchableWithoutFeedback onPress={() => Keyboard.dismiss()}>
           <ScrollView
+            ref={scrollViewRef}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
             bounces={true}
@@ -1182,7 +1447,7 @@ export function CommuterHomeScreen() {
             removeClippedSubviews={false}
             style={[styles.scrollView, { backgroundColor }]}
           >
-            {/* Enhanced Status Cards */}
+            {/* Premium Status Cards with Glassmorphism */}
             <Animated.View
               style={[
                 styles.statusCardsContainer,
@@ -1193,50 +1458,66 @@ export function CommuterHomeScreen() {
               ]}
             >
               {/* Location Status Card */}
-              <View style={[styles.statusCard, { backgroundColor }]}>
+              <View style={[styles.statusCard, theme === "dark" && styles.statusCardDark]}>
+                <LinearGradient
+                  colors={theme === "dark"
+                    ? ["rgba(59, 130, 246, 0.1)", "rgba(37, 99, 235, 0.05)"]
+                    : ["rgba(59, 130, 246, 0.08)", "rgba(37, 99, 235, 0.02)"]}
+                  style={styles.statusCardGradient}
+                />
                 <View style={styles.statusCardHeader}>
-                  <Ionicons name="location" size={24} color="#007AFF" />
+                  <View style={styles.statusIconWrapper}>
+                    <LinearGradient
+                      colors={locationError ? ["#FF6B6B", "#EE5A5A"] : ["#3B82F6", "#2563EB"]}
+                      style={styles.statusIconGradient}
+                    >
+                      <Ionicons name="navigate" size={18} color="#fff" />
+                    </LinearGradient>
+                  </View>
                   <Text style={[styles.statusCardTitle, { color: textColor }]}>
-                    Location Status
+                    GPS Status
                   </Text>
                 </View>
                 <View style={styles.statusCardContent}>
                   <View style={styles.gpsStatusContainer}>
-                    <View
-                      style={[
-                        styles.gpsIndicator,
-                        locationError && styles.gpsErrorIndicator,
-                        locationLoading && styles.gpsLoadingIndicator,
-                      ]}
+                    <LinearGradient
+                      colors={
+                        locationLoading
+                          ? ["#F59E0B", "#D97706"]
+                          : locationError
+                            ? ["#EF4444", "#DC2626"]
+                            : ["#10B981", "#059669"]
+                      }
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.gpsIndicator}
                     >
                       {locationLoading ? (
                         <ActivityIndicator size="small" color="#ffffff" />
                       ) : (
-                        <View
-                          style={[
-                            styles.gpsDot,
-                            locationError && styles.gpsErrorDot,
-                          ]}
-                        />
+                        <View style={styles.gpsDot} />
                       )}
                       <Text style={styles.gpsText}>
                         {locationLoading
-                          ? "Getting Location..."
+                          ? "Locating..."
                           : locationError
-                          ? "GPS Error"
-                          : "GPS Connected"}
+                            ? "GPS Error"
+                            : "Connected"}
                       </Text>
-                    </View>
+                    </LinearGradient>
                   </View>
                   {userLocation && (
                     <View style={styles.locationDetailsContainer}>
-                      <Text style={styles.coordinatesText}>
-                        {userLocation.coords.latitude.toFixed(4)},{" "}
-                        {userLocation.coords.longitude.toFixed(4)}
-                      </Text>
+                      <View style={styles.coordinatesRow}>
+                        <Ionicons name="location-outline" size={12} color={theme === "dark" ? "#60A5FA" : "#3B82F6"} />
+                        <Text style={[styles.coordinatesText, { color: theme === "dark" ? "#60A5FA" : "#3B82F6" }]}>
+                          {userLocation.coords.latitude.toFixed(4)},{" "}
+                          {userLocation.coords.longitude.toFixed(4)}
+                        </Text>
+                      </View>
                       {locationAccuracy && (
                         <Text style={styles.accuracyText}>
-                          Accuracy: {Math.round(locationAccuracy)}m
+                          ±{Math.round(locationAccuracy)}m accuracy
                         </Text>
                       )}
                     </View>
@@ -1245,43 +1526,51 @@ export function CommuterHomeScreen() {
               </View>
 
               {/* Bus Status Card */}
-              <View style={[styles.statusCard, { backgroundColor }]}>
+              <View style={[styles.statusCard, theme === "dark" && styles.statusCardDark]}>
+                <LinearGradient
+                  colors={theme === "dark"
+                    ? ["rgba(16, 185, 129, 0.1)", "rgba(5, 150, 105, 0.05)"]
+                    : ["rgba(16, 185, 129, 0.08)", "rgba(5, 150, 105, 0.02)"]}
+                  style={styles.statusCardGradient}
+                />
                 <View style={styles.statusCardHeader}>
-                  <Ionicons name="bus-outline" size={24} color="#007AFF" />
+                  <View style={styles.statusIconWrapper}>
+                    <LinearGradient
+                      colors={buses.length > 0 ? ["#10B981", "#059669"] : ["#6B7280", "#4B5563"]}
+                      style={styles.statusIconGradient}
+                    >
+                      <Ionicons name="bus" size={18} color="#fff" />
+                    </LinearGradient>
+                  </View>
                   <Text style={[styles.statusCardTitle, { color: textColor }]}>
-                    Nearby Buses
+                    Nearby
                   </Text>
                 </View>
                 <View style={styles.statusCardContent}>
-                  <View style={styles.statusItem}>
-                    <Ionicons
-                      name="bus"
-                      size={20}
-                      color={buses.length > 0 ? "#34C759" : "#8e8e93"}
-                    />
-                    <Text
-                      style={[
-                        styles.statusItemText,
-                        buses.length > 0 && styles.statusItemTextActive,
-                      ]}
-                    >
-                      {buses.length} bus{buses.length !== 1 ? "es" : ""} on
-                      nearby routes
+                  <View style={styles.busCountContainer}>
+                    <Text style={[styles.busCountNumber, { color: buses.length > 0 ? "#10B981" : textColor }]}>
+                      {buses.length}
+                    </Text>
+                    <Text style={[styles.busCountLabel, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                      {buses.length === 1 ? "Bus" : "Buses"}
                     </Text>
                   </View>
+                  <View style={styles.statusDivider} />
                   <View style={styles.statusItem}>
                     <Ionicons
-                      name="location-outline"
-                      size={20}
-                      color="#8e8e93"
+                      name="radio-outline"
+                      size={14}
+                      color={buses.length > 0 ? "#10B981" : "#9CA3AF"}
                     />
-                    <Text style={styles.statusItemText}>Within 5km radius</Text>
+                    <Text style={[styles.statusItemText, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                      5km radius
+                    </Text>
                   </View>
                   {buses.length > 0 && (
                     <View style={styles.statusItem}>
-                      <Ionicons name="time-outline" size={20} color="#FF9500" />
-                      <Text style={styles.statusItemText}>
-                        Real-time tracking active
+                      <View style={styles.pulsingDot} />
+                      <Text style={[styles.statusItemText, { color: "#10B981" }]}>
+                        Live tracking
                       </Text>
                     </View>
                   )}
@@ -1289,39 +1578,62 @@ export function CommuterHomeScreen() {
               </View>
             </Animated.View>
 
-            {/* Enhanced Map Card - Only show in normal mode */}
+            {/* Premium Map Card with Gradient Header */}
             {!isPinDroppingMode && (
-              <View style={[styles.mapCard, { backgroundColor }]}>
-                <View style={styles.mapHeader}>
+              <View style={[styles.mapCard, theme === "dark" && styles.mapCardDark]}>
+                <LinearGradient
+                  colors={theme === "dark"
+                    ? ["#1F2937", "#111827"]
+                    : ["#F8FAFC", "#F1F5F9"]}
+                  style={styles.mapHeader}
+                >
                   <View style={styles.mapHeaderLeft}>
-                    <Ionicons name="map" size={20} color="#007AFF" />
-                    <Text style={[styles.mapTitle, { color: textColor }]}>
-                      Current Location
-                    </Text>
+                    <View style={styles.mapIconWrapper}>
+                      <LinearGradient
+                        colors={["#3B82F6", "#2563EB"]}
+                        style={styles.mapIconGradient}
+                      >
+                        <Ionicons name="map" size={16} color="#fff" />
+                      </LinearGradient>
+                    </View>
+                    <View>
+                      <Text style={[styles.mapTitle, { color: textColor }]}>
+                        Live Map
+                      </Text>
+                      <Text style={[styles.mapSubtitle, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                        Your current area
+                      </Text>
+                    </View>
                   </View>
                   <View style={styles.mapHeaderRight}>
                     <TouchableOpacity
                       style={[
                         styles.mapActionButton,
                         locationLoading && styles.mapActionButtonDisabled,
-                        { backgroundColor: buttonColor },
                       ]}
                       onPress={trackUserLocation}
                       disabled={locationLoading}
+                      activeOpacity={0.7}
                     >
-                      <Ionicons
-                        name="refresh"
-                        size={16}
-                        color={locationLoading ? "#8e8e93" : buttonTextColor}
-                      />
+                      <LinearGradient
+                        colors={locationLoading
+                          ? ["#9CA3AF", "#6B7280"]
+                          : ["#3B82F6", "#2563EB"]}
+                        style={styles.mapActionGradient}
+                      >
+                        <Ionicons
+                          name="locate"
+                          size={16}
+                          color="#fff"
+                        />
+                      </LinearGradient>
                     </TouchableOpacity>
                   </View>
-                </View>
-
+                </LinearGradient>
                 <MapView
                   ref={mapRef}
                   style={styles.map}
-                  provider="google"
+                  googleRenderer="LEGACY"
                   customMapStyle={theme === "dark" ? [...mapDarkStyle] : []}
                   initialRegion={{
                     latitude: 6.7536,
@@ -1342,10 +1654,40 @@ export function CommuterHomeScreen() {
                       title="Your Location"
                       anchor={{ x: 0.5, y: 0.5 }}
                     >
-                      <View style={styles.userMarkerContainer}>
+                      <View style={[styles.userMarkerContainer, { display: "flex" }]}>
+                        {/* Beating Circle Animation */}
+                        <Animated.View
+                          style={[
+                            styles.userLocationBeatingCircle,
+                            {
+                              transform: [{ scale: beatingScale1 }],
+                              opacity: beatingOpacity1,
+                            },
+                          ]}
+                        />
+                        <Animated.View
+                          style={[
+                            styles.userLocationBeatingCircle,
+                            {
+                              transform: [{ scale: beatingScale2 }],
+                              opacity: beatingOpacity2,
+                            },
+                          ]}
+                        />
+                        <Animated.View
+                          style={[
+                            styles.userLocationBeatingCircle,
+                            {
+                              transform: [{ scale: beatingScale3 }],
+                              opacity: beatingOpacity3,
+                            },
+                          ]}
+                        />
+
+                        {/* User Pin Image */}
                         <Image
                           source={require("../../assets/images/user-pin.png")}
-                          style={styles.userMarkerIcon}
+                          style={[styles.userMarkerIcon, { display: "flex" }]}
                           resizeMode="contain"
                         />
                       </View>
@@ -1429,45 +1771,68 @@ export function CommuterHomeScreen() {
               </View>
             )}
 
-            {/* Route Selection Card */}
+            {/* Premium Route Selection Card */}
             <Animated.View
               style={[
                 styles.routeCard,
+                theme === "dark" && styles.routeCardDark,
                 {
                   opacity: cardsOpacity,
                   transform: [{ translateY: cardsTranslateY }],
                 },
-                { backgroundColor },
               ]}
             >
-              <View style={[styles.routeHeader, { backgroundColor }]}>
+              {/* Gradient Header */}
+              <LinearGradient
+                colors={theme === "dark"
+                  ? ["#1F2937", "#111827"]
+                  : ["#F8FAFC", "#F1F5F9"]}
+                style={styles.routeHeader}
+              >
                 <View style={styles.routeHeaderLeft}>
-                  <Ionicons name="map" size={24} color="#007AFF" />
-                  <Text style={[styles.routeTitle, { color: textColor }]}>
-                    Plan Your Journey
-                  </Text>
+                  <View style={styles.routeIconWrapper}>
+                    <LinearGradient
+                      colors={["#8B5CF6", "#7C3AED"]}
+                      style={styles.routeIconGradient}
+                    >
+                      <Ionicons name="compass" size={18} color="#fff" />
+                    </LinearGradient>
+                  </View>
+                  <View>
+                    <Text style={[styles.routeTitle, { color: textColor }]}>
+                      Plan Your Journey
+                    </Text>
+                    <Text style={[styles.routeSubtitle, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                      Set your destination below
+                    </Text>
+                  </View>
                 </View>
                 {selectedRouteId && (
-                  <View style={styles.routeStatusBadge}>
+                  <LinearGradient
+                    colors={["#10B981", "#059669"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.routeStatusBadge}
+                  >
                     <Ionicons
                       name="checkmark-circle"
-                      size={16}
-                      color="#4CAF50"
+                      size={14}
+                      color="#fff"
                     />
-                    <Text style={styles.routeStatusText}>Route Selected</Text>
-                  </View>
+                    <Text style={styles.routeStatusText}>Ready</Text>
+                  </LinearGradient>
                 )}
-              </View>
+              </LinearGradient>
 
               {/* Route Selection Message */}
               {selectedRouteMessage && (
-                <View
-                  style={[
-                    styles.routeMessageContainer,
-                    { backgroundColor: primaryColor },
-                  ]}
+                <LinearGradient
+                  colors={["#3B82F6", "#2563EB"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.routeMessageContainer}
                 >
-                  <Ionicons name="bus" size={20} color="#fff" />
+                  <Ionicons name="information-circle" size={20} color="#fff" />
                   <Text style={styles.routeMessageText}>
                     {selectedRouteMessage}
                   </Text>
@@ -1475,121 +1840,133 @@ export function CommuterHomeScreen() {
                     onPress={() => setSelectedRouteMessage(null)}
                     style={styles.closeMessageButton}
                   >
-                    <Ionicons name="close" size={16} color="#fff" />
+                    <Ionicons name="close-circle" size={20} color="rgba(255,255,255,0.8)" />
                   </TouchableOpacity>
-                </View>
+                </LinearGradient>
               )}
 
               {/* Destination Selection */}
               <View style={styles.destinationSection}>
                 <View style={styles.sectionHeader}>
-                  <Text style={[styles.sectionLabel, { color: textColor }]}>
-                    Destination
-                  </Text>
+                  <View style={styles.sectionLabelRow}>
+                    <Ionicons
+                      name="flag"
+                      size={16}
+                      color={dropoffLocation ? "#10B981" : (theme === "dark" ? "#9CA3AF" : "#6B7280")}
+                    />
+                    <Text style={[styles.sectionLabel, { color: textColor }]}>
+                      Destination
+                    </Text>
+                  </View>
                   {dropoffLocation && (
-                    <View style={styles.destinationStatusBadge}>
+                    <LinearGradient
+                      colors={["#10B981", "#059669"]}
+                      style={styles.destinationStatusBadge}
+                    >
                       <Ionicons
-                        name="checkmark-circle"
-                        size={14}
-                        color="#4CAF50"
+                        name="checkmark"
+                        size={12}
+                        color="#fff"
                       />
                       <Text style={styles.destinationStatusText}>Set</Text>
-                    </View>
+                    </LinearGradient>
                   )}
                 </View>
                 <TouchableOpacity
                   style={[
                     styles.destinationContainer,
-                    {
-                      backgroundColor,
-                      borderColor: dropoffLocation
-                        ? "#4CAF50"
-                        : "rgba(0, 0, 0, 0.1)",
-                      borderWidth: dropoffLocation ? 2 : 1.5,
-                    },
+                    theme === "dark" && styles.destinationContainerDark,
+                    dropoffLocation && styles.destinationContainerActive,
                   ]}
                   onPress={handleSetDestinationOnMap}
+                  activeOpacity={0.7}
                 >
-                  <Ionicons
-                    name="flag"
-                    size={20}
-                    color={dropoffLocation ? "#4CAF50" : "#007AFF"}
-                  />
+                  <View style={styles.destinationIconWrapper}>
+                    <LinearGradient
+                      colors={dropoffLocation ? ["#10B981", "#059669"] : ["#6B7280", "#4B5563"]}
+                      style={styles.destinationIconGradient}
+                    >
+                      <Ionicons
+                        name="location"
+                        size={18}
+                        color="#fff"
+                      />
+                    </LinearGradient>
+                  </View>
                   <View style={styles.destinationTextContainer}>
                     <Text
                       style={[
                         styles.destinationText,
-                        { color: dropoffLocation ? textColor : "#8E8E93" },
+                        { color: dropoffLocation ? textColor : (theme === "dark" ? "#9CA3AF" : "#6B7280") },
                       ]}
+                      numberOfLines={2}
                     >
-                      {dropoffLocation || "Tap to set destination on map"}
+                      {dropoffLocation || "Tap to set your destination"}
                     </Text>
                     {dropoffLocation ? (
-                      <Text
-                        style={[
-                          styles.destinationSubtext,
-                          { color: "#4CAF50" },
-                        ]}
-                      >
-                        ✓ Destination confirmed
-                      </Text>
+                      <View style={styles.destinationConfirmedRow}>
+                        <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                        <Text style={styles.destinationSubtextConfirmed}>
+                          Destination confirmed
+                        </Text>
+                      </View>
                     ) : (
-                      <Text
-                        style={[
-                          styles.destinationSubtext,
-                          { color: "#8E8E93" },
-                        ]}
-                      >
-                        Tap to select on map
+                      <Text style={[styles.destinationSubtext, { color: theme === "dark" ? "#6B7280" : "#9CA3AF" }]}>
+                        Select on interactive map
                       </Text>
                     )}
                   </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={16}
-                    color={dropoffLocation ? "#4CAF50" : "#8E8E93"}
-                  />
+                  <View style={styles.destinationArrow}>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={20}
+                      color={dropoffLocation ? "#10B981" : (theme === "dark" ? "#6B7280" : "#9CA3AF")}
+                    />
+                  </View>
                 </TouchableOpacity>
               </View>
 
-              {/* Find Ride Button */}
+              {/* Premium Find Ride Button */}
               <TouchableOpacity
-                style={[
-                  styles.findRideButton,
-                  {
-                    backgroundColor:
-                      userLocation && (confirmedDestination || selectedRouteId)
-                        ? "#007AFF"
-                        : "#8E8E93",
-                    opacity:
-                      userLocation && (confirmedDestination || selectedRouteId)
-                        ? 1
-                        : 0.6,
-                  },
-                ]}
+                style={styles.findRideButtonWrapper}
                 onPress={handleFindRide}
                 disabled={
                   !userLocation || (!confirmedDestination && !selectedRouteId)
                 }
+                activeOpacity={0.8}
               >
-                <Ionicons
-                  name={selectedRouteId ? "bus" : "search"}
-                  size={20}
-                  color="#fff"
-                />
-                <Text style={styles.findRideButtonText}>
-                  {!userLocation
-                    ? "Getting your location..."
-                    : selectedRouteId
-                    ? "Continue to Bus Selection"
-                    : !confirmedDestination
-                    ? "Set destination first"
-                    : "Find Best Route"}
-                </Text>
+                <LinearGradient
+                  colors={
+                    userLocation && (confirmedDestination || selectedRouteId)
+                      ? ["#3B82F6", "#2563EB", "#1D4ED8"]
+                      : ["#9CA3AF", "#6B7280"]
+                  }
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.findRideButton}
+                >
+                  <View style={styles.findRideIconWrapper}>
+                    <Ionicons
+                      name={selectedRouteId ? "bus" : "search"}
+                      size={22}
+                      color="#fff"
+                    />
+                  </View>
+                  <Text style={styles.findRideButtonText}>
+                    {!userLocation
+                      ? "Getting your location..."
+                      : selectedRouteId
+                        ? "Continue to Bus Selection"
+                        : !confirmedDestination
+                          ? "Set destination first"
+                          : "Find Best Route"}
+                  </Text>
+                  <Ionicons name="arrow-forward" size={20} color="rgba(255,255,255,0.8)" />
+                </LinearGradient>
               </TouchableOpacity>
             </Animated.View>
 
-            {/* Nearby Buses Section */}
+            {/* Premium Nearby Buses Section */}
             <Animated.View
               style={[
                 styles.nearbySection,
@@ -1600,88 +1977,136 @@ export function CommuterHomeScreen() {
               ]}
             >
               <View style={styles.nearbyHeader}>
-                <Ionicons
-                  name="bus-outline"
-                  size={20}
-                  color={buses.length > 0 ? "#007AFF" : "#8E8E93"}
-                />
+                <View style={styles.nearbyIconWrapper}>
+                  <LinearGradient
+                    colors={buses.length > 0 ? ["#F59E0B", "#D97706"] : ["#6B7280", "#4B5563"]}
+                    style={styles.nearbyIconGradient}
+                  >
+                    <Ionicons name="bus" size={18} color="#fff" />
+                  </LinearGradient>
+                </View>
                 <View style={styles.nearbyTextContainer}>
                   <Text style={[styles.nearbyTitle, { color: textColor }]}>
-                    Buses on Nearby Routes
+                    Nearby Mini Buses
                   </Text>
-                  <Text style={[styles.nearbySubtitle, { color: textColor }]}>
+                  <Text style={[styles.nearbySubtitle, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
                     {buses.length > 0
-                      ? `${buses.length} bus${
-                          buses.length !== 1 ? "es" : ""
-                        } within 5km on accessible routes`
-                      : "No buses found within 5km radius"}
+                      ? `${buses.length} mini bus${buses.length !== 1 ? "es" : ""} within 5km`
+                      : "No mini buses found nearby"}
                   </Text>
                 </View>
                 {buses.length > 0 && (
-                  <View style={styles.liveIndicator}>
-                    <View style={styles.liveDot} />
+                  <LinearGradient
+                    colors={["#EF4444", "#DC2626"]}
+                    style={styles.liveIndicator}
+                  >
+                    <View style={styles.liveDotAnimated} />
                     <Text style={styles.liveText}>LIVE</Text>
-                  </View>
+                  </LinearGradient>
                 )}
               </View>
 
               {buses.length > 0 ? (
                 <View style={styles.busesList}>
-                  {buses.slice(0, 3).map((bus) => {
+                  {buses.map((bus, index) => {
                     const distance = userLocation
                       ? calculateDistance(
-                          userLocation.coords.latitude,
-                          userLocation.coords.longitude,
-                          bus.currentLocation.latitude,
-                          bus.currentLocation.longitude
-                        )
+                        userLocation.coords.latitude,
+                        userLocation.coords.longitude,
+                        bus.currentLocation.latitude,
+                        bus.currentLocation.longitude
+                      )
                       : 0;
 
                     return (
                       <View
                         key={bus.id}
-                        style={[styles.busItem, { backgroundColor }]}
+                        style={[
+                          styles.busItemCard,
+                          theme === "dark" && styles.busItemCardDark
+                        ]}
                       >
-                        <Ionicons name="bus" size={16} color="#007AFF" />
-                        <View style={styles.busInfo}>
-                          <Text style={[styles.busPlate, { color: textColor }]}>
-                            {bus.plateNumber}
-                          </Text>
-                          <Text
-                            style={[styles.busStatus, { color: textColor }]}
+                        <View style={styles.busItemContent}>
+                          {/* Left Icon Section with Gradient */}
+                          <View style={styles.busIconContainer}>
+                            <LinearGradient
+                              colors={["#3B82F6", "#2563EB"]}
+                              style={styles.busIconGradient}
+                            >
+                              <Ionicons name="bus" size={22} color="#fff" />
+                            </LinearGradient>
+                          </View>
+
+                          {/* Middle Info Section */}
+                          <View style={styles.busInfo}>
+                            <Text style={[styles.busPlate, { color: textColor }]}>
+                              {bus.plateNumber}
+                            </Text>
+                            <View style={styles.busMetaContainer}>
+                              <LinearGradient
+                                colors={["rgba(59, 130, 246, 0.15)", "rgba(37, 99, 235, 0.1)"]}
+                                style={styles.distanceBadge}
+                              >
+                                <Ionicons name="navigate" size={12} color="#3B82F6" />
+                                <Text style={styles.distanceText}>
+                                  {distance > 0 ? `${distance.toFixed(1)} km` : "Nearby"}
+                                </Text>
+                              </LinearGradient>
+                              <View style={styles.statusBadge}>
+                                <View style={styles.activeStatusDot} />
+                                <Text style={[styles.busStatusText, { color: "#10B981" }]}>
+                                  Active
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+
+                          {/* Right Action Section - Premium Track Button */}
+                          <TouchableOpacity
+                            style={styles.trackButtonWrapper}
+                            onPress={() => {
+                              // Scroll to top to show the map
+                              scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+                              // Animate map to the bus location
+                              setTimeout(() => {
+                                mapRef.current?.animateToRegion({
+                                  latitude: bus.currentLocation.latitude,
+                                  longitude: bus.currentLocation.longitude,
+                                  latitudeDelta: 0.005,
+                                  longitudeDelta: 0.005,
+                                }, 1000);
+                              }, 300);
+                            }}
+                            activeOpacity={0.7}
                           >
-                            {distance > 0
-                              ? `${distance.toFixed(1)}km away`
-                              : "Active"}{" "}
-                            • On nearby route
-                          </Text>
-                        </View>
-                        <View style={styles.busStatusIndicator}>
-                          <View style={styles.statusDot} />
+                            <LinearGradient
+                              colors={["#3B82F6", "#2563EB"]}
+                              start={{ x: 0, y: 0 }}
+                              end={{ x: 1, y: 0 }}
+                              style={styles.trackButton}
+                            >
+                              <Text style={styles.trackButtonText}>Track</Text>
+                              <Ionicons name="locate" size={14} color="#fff" />
+                            </LinearGradient>
+                          </TouchableOpacity>
                         </View>
                       </View>
                     );
                   })}
-                  {buses.length > 3 && (
-                    <View
-                      style={[styles.moreBusesContainer, { backgroundColor }]}
-                    >
-                      <Text
-                        style={[styles.moreBusesText, { color: textColor }]}
-                      >
-                        +{buses.length - 3} more buses available
-                      </Text>
-                    </View>
-                  )}
                 </View>
               ) : (
-                <View style={[styles.noBusesContainer, { backgroundColor }]}>
-                  <Ionicons name="bus-outline" size={40} color="#8E8E93" />
+                <View style={[styles.noBusesContainer, theme === "dark" && styles.noBusesContainerDark]}>
+                  <LinearGradient
+                    colors={["rgba(107, 114, 128, 0.1)", "rgba(75, 85, 99, 0.05)"]}
+                    style={styles.noBusesIconWrapper}
+                  >
+                    <Ionicons name="bus-outline" size={36} color={theme === "dark" ? "#6B7280" : "#9CA3AF"} />
+                  </LinearGradient>
                   <Text style={[styles.noBusesText, { color: textColor }]}>
-                    No buses on nearby routes
+                    No minibuses nearby
                   </Text>
-                  <Text style={[styles.noBusesSubtext, { color: "#8E8E93" }]}>
-                    No active buses within 5km on accessible routes
+                  <Text style={[styles.noBusesSubtext, { color: theme === "dark" ? "#6B7280" : "#9CA3AF" }]}>
+                    Check back soon for available buses
                   </Text>
                 </View>
               )}
@@ -1722,6 +2147,36 @@ export function CommuterHomeScreen() {
                   anchor={{ x: 0.5, y: 0.5 }}
                 >
                   <View style={styles.userMarkerContainer}>
+                    {/* Beating Circle Animation */}
+                    <Animated.View
+                      style={[
+                        styles.userLocationBeatingCircle,
+                        {
+                          transform: [{ scale: beatingScale1 }],
+                          opacity: beatingOpacity1,
+                        },
+                      ]}
+                    />
+                    <Animated.View
+                      style={[
+                        styles.userLocationBeatingCircle,
+                        {
+                          transform: [{ scale: beatingScale2 }],
+                          opacity: beatingOpacity2,
+                        },
+                      ]}
+                    />
+                    <Animated.View
+                      style={[
+                        styles.userLocationBeatingCircle,
+                        {
+                          transform: [{ scale: beatingScale3 }],
+                          opacity: beatingOpacity3,
+                        },
+                      ]}
+                    />
+
+                    {/* User Pin Image */}
                     <Image
                       source={require("../../assets/images/user-pin.png")}
                       style={styles.userMarkerIcon}
@@ -1755,8 +2210,16 @@ export function CommuterHomeScreen() {
                   onDragEnd={(e) =>
                     setDroppedPinLocation(e.nativeEvent.coordinate)
                   }
-                  pinColor="tomato"
-                />
+                  anchor={{ x: 0.5, y: 1 }}
+                >
+                  <View style={styles.destinationMarkerContainer}>
+                    <Image
+                      source={require("../../assets/images/destination-flag.png")}
+                      style={[styles.destinationIcon, { display: "flex" }]}
+                      resizeMode="contain"
+                    />
+                  </View>
+                </Marker>
               )}
             </MapView>
           </View>
@@ -1925,56 +2388,312 @@ export function CommuterHomeScreen() {
         </Modal>
       )}
 
-      {/* Welcome Modal */}
+      {/* Pending Request Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showPendingRequestModal}
+        onRequestClose={() => setShowPendingRequestModal(false)}
+      >
+        <BlurView intensity={theme === 'dark' ? 80 : 40} style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === "dark" && styles.modalContentDark, { paddingBottom: 30 }]}>
+            <View style={{ alignItems: 'center', marginBottom: 20 }}>
+              <LinearGradient
+                colors={["#F59E0B", "#D97706"]}
+                style={styles.pendingIconContainer}
+              >
+                <Ionicons name="time" size={32} color="#fff" />
+              </LinearGradient>
+              <Text style={[styles.modalTitle, { color: textColor, marginTop: 15 }]}>
+                Request Pending
+              </Text>
+            </View>
+
+            <Text style={[styles.modalText, { textAlign: 'center', marginBottom: 30, lineHeight: 22, color: theme === 'dark' ? '#D1D5DB' : '#4B5563' }]}>
+              Your pickup request for <Text style={{ fontWeight: 'bold', color: primaryColor }}>Bus {pendingRequestData?.plateNumber}</Text> is still waiting for approval from the driver.
+              {"\n\n"}
+              Please wait a moment while the driver reviews your request.
+            </Text>
+
+            <View style={styles.modalButtonGroup}>
+              <TouchableOpacity
+                style={styles.modalButtonSecondary}
+                onPress={async () => {
+                  try {
+                    // Cancel the pickup request first
+                    if (pendingRequestData?.request?.id) {
+                      const { error: requestError } = await supabase
+                        .from("pickup_requests")
+                        .update({ status: "cancelled" })
+                        .eq("id", pendingRequestData.request.id);
+
+                      if (requestError) {
+                        console.error("Error cancelling pickup request:", requestError);
+                      } else {
+                        console.log("✅ Pickup request cancelled successfully");
+                      }
+                    }
+
+                    // Also cancel any trip_passengers record if it exists
+                    if (pendingRequestData?.tpRecordId) {
+                      const { error: tpError } = await supabase
+                        .from("trip_passengers")
+                        .update({ status: "cancelled" })
+                        .eq("id", pendingRequestData.tpRecordId);
+
+                      if (tpError) {
+                        console.error("Error cancelling trip passenger:", tpError);
+                      } else {
+                        console.log("✅ Trip passenger record cancelled successfully");
+                      }
+                    }
+
+                    setShowPendingRequestModal(false);
+                    setPendingRequestData(null);
+                  } catch (error) {
+                    console.error("Error during cancellation:", error);
+                    Alert.alert("Error", "Could not cancel the request. Please try again.");
+                  }
+                }}
+              >
+                <Text style={styles.modalButtonSecondaryText}>Cancel Request</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalButtonPrimary}
+                onPress={() => {
+                  setShowPendingRequestModal(false);
+                  router.push({
+                    pathname: "/route-details",
+                    params: {
+                      restorePickupRequestId: pendingRequestData.request.id,
+                      originLat: pendingRequestData.request.pickup_lat.toString(),
+                      originLng: pendingRequestData.request.pickup_lng.toString(),
+                      destLat: pendingRequestData.request.dest_lat.toString(),
+                      destLng: pendingRequestData.request.dest_lng.toString(),
+                      routeId: pendingRequestData.routeId
+                    }
+                  });
+                }}
+              >
+                <LinearGradient
+                  colors={["#3B82F6", "#2563EB"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.modalButtonGradient}
+                >
+                  <Text style={styles.modalButtonPrimaryText}>Go to Waiting Screen</Text>
+                  <Ionicons name="chevron-forward" size={18} color="#fff" />
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </BlurView>
+      </Modal>
+
+      {/* Continue Trip Modal - Premium UI */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showContinueTripModal}
+        onRequestClose={() => setShowContinueTripModal(false)}
+      >
+        <BlurView intensity={theme === 'dark' ? 80 : 50} style={styles.modalOverlay}>
+          <View style={[styles.continueTripModalContent, theme === "dark" && styles.modalContentDark]}>
+            {/* Decorative Background Elements */}
+            <View style={styles.continueTripDecoCircle1} />
+            <View style={styles.continueTripDecoCircle2} />
+            
+            {/* Icon Container with Animation-style Background */}
+            <View style={styles.continueTripIconWrapper}>
+              <LinearGradient
+                colors={["#3B82F6", "#2563EB", "#1D4ED8"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.continueTripIconContainer}
+              >
+                <Ionicons name="bus" size={36} color="#fff" />
+              </LinearGradient>
+              {/* Pulse rings */}
+              <View style={styles.continueTripPulseRing1} />
+              <View style={styles.continueTripPulseRing2} />
+            </View>
+
+            {/* Title */}
+            <Text style={[styles.continueTripTitle, { color: textColor }]}>
+              Continue Your Trip?
+            </Text>
+
+            {/* Trip Info Card */}
+            <View style={[styles.continueTripInfoCard, theme === "dark" && { backgroundColor: 'rgba(59, 130, 246, 0.1)', borderColor: 'rgba(59, 130, 246, 0.2)' }]}>
+              <View style={styles.continueTripInfoRow}>
+                <View style={styles.continueTripInfoIcon}>
+                  <Ionicons name="bus-outline" size={18} color="#3B82F6" />
+                </View>
+                <View style={styles.continueTripInfoTextContainer}>
+                  <Text style={[styles.continueTripInfoLabel, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                    Bus Number
+                  </Text>
+                  <Text style={[styles.continueTripInfoValue, { color: textColor }]}>
+                    {existingTripData?.plateNumber || "Unknown"}
+                  </Text>
+                </View>
+              </View>
+              
+              <View style={styles.continueTripInfoDivider} />
+              
+              <View style={styles.continueTripInfoRow}>
+                <View style={[styles.continueTripInfoIcon, { backgroundColor: theme === "dark" ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5' }]}>
+                  <Ionicons name="navigate-outline" size={18} color="#10B981" />
+                </View>
+                <View style={styles.continueTripInfoTextContainer}>
+                  <Text style={[styles.continueTripInfoLabel, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                    Status
+                  </Text>
+                  <View style={styles.continueTripStatusBadge}>
+                    <View style={styles.continueTripStatusDot} />
+                    <Text style={styles.continueTripStatusText}>In Progress</Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* Description */}
+            <Text style={[styles.continueTripDescription, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+              You have an ongoing trip. Would you like to continue where you left off or start a new journey?
+            </Text>
+
+            {/* Action Buttons */}
+            <View style={styles.continueTripButtonGroup}>
+              {/* Secondary Button - Start New */}
+              <TouchableOpacity
+                style={[styles.continueTripButtonSecondary, theme === "dark" && { backgroundColor: 'rgba(239, 68, 68, 0.1)', borderColor: 'rgba(239, 68, 68, 0.3)' }]}
+                onPress={() => {
+                  setShowContinueTripModal(false);
+                  if (existingTripData?.trip?.id) {
+                    cancelExistingTrip(existingTripData.trip.id);
+                  }
+                  setExistingTripData(null);
+                }}
+              >
+                <Ionicons name="close-circle-outline" size={20} color="#EF4444" />
+                <Text style={styles.continueTripButtonSecondaryText}>Start New</Text>
+              </TouchableOpacity>
+
+              {/* Primary Button - Continue */}
+              <TouchableOpacity
+                style={styles.continueTripButtonPrimary}
+                onPress={() => {
+                  setShowContinueTripModal(false);
+                  if (existingTripData?.trip) {
+                    continueExistingTrip(existingTripData.trip);
+                  }
+                  setExistingTripData(null);
+                }}
+              >
+                <LinearGradient
+                  colors={["#3B82F6", "#2563EB"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.continueTripButtonGradient}
+                >
+                  <Text style={styles.continueTripButtonPrimaryText}>Continue Trip</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#fff" />
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </BlurView>
+      </Modal>
+
+      {/* Premium Welcome Modal */}
       <Modal
         animationType="fade"
         transparent={true}
         visible={showWelcomeModal}
         onRequestClose={handleModalDismiss}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor }]}>
-            <View style={styles.modalIconContainer}>
-              <Ionicons name="bus" size={60} color="#007AFF" />
-            </View>
+        <BlurView intensity={50} style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === "dark" && styles.modalContentDark]}>
+            {/* Premium Gradient Icon */}
+            <LinearGradient
+              colors={["#3B82F6", "#2563EB", "#1D4ED8"]}
+              style={styles.modalIconContainer}
+            >
+              <Ionicons name="bus" size={48} color="#fff" />
+            </LinearGradient>
+
             <Text style={[styles.modalTitle, { color: textColor }]}>
-              Welcome to Miniway! 🚌
+              Welcome to Miniway!
             </Text>
-            <Text style={[styles.modalText, { color: placeholderTextColor }]}>
-              Ready to find your ride? Track minibuses in real-time and travel
-              smarter with our intelligent route planning.
+            <Text style={[styles.modalTagline, { color: theme === "dark" ? "#60A5FA" : "#3B82F6" }]}>
+              Your smart transit companion
             </Text>
+            <Text style={[styles.modalText, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+              Track minibuses in real-time and travel smarter with intelligent route planning.
+            </Text>
+
             <View style={styles.modalFeatures}>
               <View style={styles.modalFeature}>
-                <Ionicons name="location" size={20} color="#34C759" />
-                <Text style={[styles.modalFeatureText, { color: textColor }]}>
-                  Real-time bus tracking
-                </Text>
+                <LinearGradient colors={["#10B981", "#059669"]} style={styles.featureIconGradient}>
+                  <Ionicons name="location" size={18} color="#fff" />
+                </LinearGradient>
+                <View style={styles.featureTextContainer}>
+                  <Text style={[styles.modalFeatureTitle, { color: textColor }]}>
+                    Real-time Tracking
+                  </Text>
+                  <Text style={[styles.modalFeatureSubtext, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                    See buses move live on map
+                  </Text>
+                </View>
               </View>
               <View style={styles.modalFeature}>
-                <Ionicons name="map" size={20} color="#007AFF" />
-                <Text style={[styles.modalFeatureText, { color: textColor }]}>
-                  Smart route planning
-                </Text>
+                <LinearGradient colors={["#8B5CF6", "#7C3AED"]} style={styles.featureIconGradient}>
+                  <Ionicons name="compass" size={18} color="#fff" />
+                </LinearGradient>
+                <View style={styles.featureTextContainer}>
+                  <Text style={[styles.modalFeatureTitle, { color: textColor }]}>
+                    Smart Planning
+                  </Text>
+                  <Text style={[styles.modalFeatureSubtext, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                    Intelligent route suggestions
+                  </Text>
+                </View>
               </View>
               <View style={styles.modalFeature}>
-                <Ionicons name="time" size={20} color="#FF9500" />
-                <Text style={[styles.modalFeatureText, { color: textColor }]}>
-                  Live arrival times
-                </Text>
+                <LinearGradient colors={["#F59E0B", "#D97706"]} style={styles.featureIconGradient}>
+                  <Ionicons name="time" size={18} color="#fff" />
+                </LinearGradient>
+                <View style={styles.featureTextContainer}>
+                  <Text style={[styles.modalFeatureTitle, { color: textColor }]}>
+                    Live ETAs
+                  </Text>
+                  <Text style={[styles.modalFeatureSubtext, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                    Accurate arrival times
+                  </Text>
+                </View>
               </View>
             </View>
+
             <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor }]}
+              style={styles.modalButtonWrapper}
               onPress={handleModalDismiss}
+              activeOpacity={0.8}
             >
-              <Ionicons name="arrow-forward" size={20} color="#fff" />
-              <Text style={[styles.modalButtonText, { color: textColor }]}>
-                Let's Get Started!
-              </Text>
+              <LinearGradient
+                colors={["#3B82F6", "#2563EB", "#1D4ED8"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.modalButton}
+              >
+                <Text style={styles.modalButtonText}>
+                  Get Started
+                </Text>
+                <Ionicons name="arrow-forward" size={20} color="#fff" />
+              </LinearGradient>
             </TouchableOpacity>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Pin Dropping UI */}
@@ -1990,8 +2709,8 @@ export function CommuterHomeScreen() {
               {droppedPinLocation
                 ? "📍 Drag the pin to adjust location"
                 : selectedRouteId
-                ? "📍 Tap on the map to set your destination for this route"
-                : "📍 Tap on the map to drop a pin"}
+                  ? "📍 Tap on the map to set your destination for this route"
+                  : "📍 Tap on the map to drop a pin"}
             </Text>
           </View>
           <View style={styles.pinActionContainer}>
@@ -2332,46 +3051,49 @@ const styles = StyleSheet.create({
   // Enhanced Route Card Styles
   routeCard: {
     backgroundColor: "#ffffff",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 30,
+    borderRadius: 20,
+    marginBottom: 24,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-    overflow: "visible",
-    position: "relative",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 6,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.04)",
   },
   routeHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
   },
   routeHeaderLeft: {
     flexDirection: "row",
     alignItems: "center",
+    flex: 1,
   },
   routeTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#007AFF",
-    marginLeft: 8,
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: -0.3,
   },
   routeStatusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E8F5E8",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+    gap: 4,
   },
   routeStatusText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#4CAF50",
-    marginLeft: 4,
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.3,
   },
 
   // Search Modal Styles
@@ -2497,7 +3219,8 @@ const styles = StyleSheet.create({
 
   // Destination Section Styles
   destinationSection: {
-    marginBottom: 20,
+    paddingHorizontal: 18,
+    paddingBottom: 18,
   },
   sectionHeader: {
     flexDirection: "row",
@@ -2506,100 +3229,107 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   sectionLabel: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: "600",
     letterSpacing: -0.2,
   },
   destinationStatusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E8F5E8",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+    gap: 4,
   },
   destinationStatusText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#4CAF50",
-    marginLeft: 4,
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.3,
   },
   destinationContainer: {
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     borderWidth: 1.5,
+    borderColor: "rgba(0, 0, 0, 0.08)",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
   },
   destinationTextContainer: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 0,
   },
   destinationText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
-    marginBottom: 3,
-    lineHeight: 22,
+    marginBottom: 4,
+    lineHeight: 20,
   },
   destinationSubtext: {
     fontSize: 13,
-    fontWeight: "500",
-    opacity: 0.8,
+    fontWeight: "400",
+    marginTop: 2,
   },
 
   // Find Ride Button
   findRideButton: {
-    backgroundColor: "#007AFF",
-    padding: 15,
-    borderRadius: 10,
-    alignItems: "center",
-    marginBottom: 18,
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    marginHorizontal: 18,
+    marginBottom: 12,
+    gap: 4,
   },
   findRideButtonText: {
     color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
-    marginLeft: 8,
+    fontSize: 16,
+    fontWeight: "700",
+    flex: 1,
+    textAlign: "center",
+    letterSpacing: 0.3,
   },
 
   // Nearby Section Styles
   nearbySection: {
-    marginTop: 12,
+    marginTop: 8,
+    paddingBottom: 20,
   },
   nearbyHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 16,
   },
   nearbyTextContainer: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 0,
   },
   nearbyTitle: {
     fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 4,
+    fontWeight: "700",
+    marginBottom: 3,
+    letterSpacing: -0.3,
   },
   nearbySubtitle: {
-    fontSize: 14,
-    fontWeight: "500",
-    opacity: 0.7,
+    fontSize: 13,
+    fontWeight: "400",
   },
   liveIndicator: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FF3B30",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+    gap: 4,
   },
   liveDot: {
     width: 6,
@@ -2625,17 +3355,75 @@ const styles = StyleSheet.create({
     borderBottomColor: "#f0f2f5",
   },
   busInfo: {
-    marginLeft: 12,
+    flex: 1,
+    marginLeft: 0,
   },
   busPlate: {
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "700",
+    letterSpacing: -0.2,
   },
   busStatus: {
     color: "#666",
   },
-  busStatusIndicator: {
-    marginLeft: 8,
+
+  // Enhanced Bus Item Styles
+  busItemCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    marginBottom: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.04)",
+    overflow: "hidden",
+  },
+  busItemContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+  },
+  busIconContainer: {
+    marginRight: 14,
+  },
+  busMetaContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 5,
+    gap: 10,
+  },
+  distanceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    gap: 5,
+  },
+  distanceText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#3B82F6",
+  },
+  busStatusText: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  trackButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    gap: 5,
+  },
+  trackButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#fff",
   },
   statusDot: {
     width: 8,
@@ -2852,16 +3640,37 @@ const styles = StyleSheet.create({
   // Marker Styles
   markerContainer: {
     padding: 8,
-  },
-
-  // User Marker Styles
+  },  // User Marker Styles
   userMarkerContainer: {
     alignItems: "center",
     justifyContent: "center",
   },
   userMarkerIcon: {
-    width: 32,
-    height: 32,
+    width: 44,
+    height: 44,
+    zIndex: 3,
+  },
+
+  // Destination Marker Styles
+  destinationMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  destinationIcon: {
+    width: 48,
+    height: 48,
+    zIndex: 3,
+  },
+
+  // Beating Circle Animation Style
+  userLocationBeatingCircle: {
+    position: "absolute",
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(0, 122, 255, 0.2)",
+    borderWidth: 1,
+    borderColor: "rgba(0, 122, 255, 0.4)",
   },
 
   // Welcome Modal Styles
@@ -2869,69 +3678,606 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.6)",
   },
   modalContent: {
     width: "90%",
     maxWidth: 400,
-    borderRadius: 24,
-    padding: 32,
+    borderRadius: 28,
+    padding: 28,
     alignItems: "center",
+    backgroundColor: "#ffffff",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 16,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    elevation: 20,
+  },
+  modalContentDark: {
+    backgroundColor: "#1F2937",
   },
   modalIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "rgba(0, 122, 255, 0.1)",
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 24,
   },
   modalTitle: {
-    fontSize: 28,
-    fontWeight: "700",
+    fontSize: 26,
+    fontWeight: "800",
+    marginBottom: 8,
+    textAlign: "center",
+    letterSpacing: -0.5,
+  },
+  modalTagline: {
+    fontSize: 15,
+    fontWeight: "600",
     marginBottom: 16,
     textAlign: "center",
   },
   modalText: {
-    fontSize: 16,
+    fontSize: 15,
     textAlign: "center",
-    marginBottom: 24,
-    lineHeight: 24,
+    marginBottom: 28,
+    lineHeight: 22,
+    paddingHorizontal: 8,
   },
   modalFeatures: {
     width: "100%",
-    marginBottom: 32,
+    marginBottom: 28,
+    gap: 16,
   },
   modalFeature: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
+  },
+  featureIconGradient: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  featureTextContainer: {
+    flex: 1,
+  },
+  modalFeatureTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  modalFeatureSubtext: {
+    fontSize: 13,
+    fontWeight: "400",
   },
   modalFeatureText: {
     fontSize: 15,
     fontWeight: "500",
     marginLeft: 12,
   },
+  modalButtonWrapper: {
+    width: "100%",
+  },
   modalButton: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 16,
     paddingVertical: 16,
-    paddingHorizontal: 32,
-    minWidth: 200,
+    paddingHorizontal: 28,
     justifyContent: "center",
+    gap: 10,
   },
   modalButtonText: {
     color: "#fff",
+    fontWeight: "700",
+    fontSize: 17,
+    letterSpacing: 0.3,
+  },
+
+  // Premium Header Styles
+  headerWrapper: {
+    overflow: "hidden",
+  },
+  headerGradient: {
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    position: "relative",
+    overflow: "hidden",
+  },
+  headerDecorativeCircle1: {
+    position: "absolute",
+    top: -30,
+    right: -30,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  headerDecorativeCircle2: {
+    position: "absolute",
+    top: 40,
+    right: 50,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+  },
+  headerIconGradient: {
+    width: 50,
+    height: 50,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    gap: 5,
+  },
+  headerBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#10B981",
+  },
+  headerBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.5,
+  },
+
+  // Premium Status Card Styles
+  statusCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "#374151",
+  },
+  statusCardGradient: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 16,
+  },
+  statusIconWrapper: {
+    marginRight: 10,
+  },
+  statusIconGradient: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  coordinatesRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  busCountContainer: {
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  busCountNumber: {
+    fontSize: 28,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  busCountLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  statusDivider: {
+    height: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.05)",
+    marginVertical: 8,
+  },
+  pulsingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#10B981",
+    marginRight: 6,
+  },
+
+  // Premium Map Card Styles
+  mapCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "#374151",
+  },
+  mapIconWrapper: {
+    marginRight: 12,
+  },
+  mapIconGradient: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  mapSubtitle: {
+    fontSize: 12,
+    fontWeight: "400",
+    marginTop: 2,
+  },
+  mapActionGradient: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // Premium Route Card Styles
+  routeCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "#374151",
+  },
+  routeIconWrapper: {
+    marginRight: 12,
+  },
+  routeIconGradient: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  routeSubtitle: {
+    fontSize: 13,
+    fontWeight: "400",
+    marginTop: 2,
+  },
+  sectionLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  destinationContainerDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "#374151",
+  },
+  destinationContainerActive: {
+    borderColor: "#10B981",
+    borderWidth: 2,
+  },
+  destinationIconWrapper: {
+    marginRight: 14,
+  },
+  destinationIconGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  destinationConfirmedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 4,
+  },
+  destinationSubtextConfirmed: {
+    fontSize: 13,
     fontWeight: "600",
-    fontSize: 16,
+    color: "#10B981",
+  },
+  destinationArrow: {
     marginLeft: 8,
+  },
+  findRideButtonWrapper: {
+    width: "100%",
+  },
+  findRideIconWrapper: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+
+  // Premium Nearby Section Styles
+  nearbyIconWrapper: {
+    marginRight: 14,
+  },
+  nearbyIconGradient: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  liveDotAnimated: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#fff",
+    marginRight: 5,
+  },
+  busItemCardDark: {
+    backgroundColor: "#1F2937",
+    borderColor: "#374151",
+  },
+  busIconGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  activeStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#10B981",
+    marginRight: 5,
+  },
+  trackButtonWrapper: {
+    overflow: "hidden",
+    borderRadius: 20,
+  },
+  noBusesContainerDark: {
+    backgroundColor: "rgba(31, 41, 55, 0.5)",
+    borderColor: "#374151",
+  },
+  noBusesIconWrapper: {
+    width: 72,
+    height: 72,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  pendingIconContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#F59E0B",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  modalButtonGroup: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  modalButtonPrimary: {
+    flex: 1.2,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  modalButtonSecondary: {
+    flex: 0.8,
+    borderRadius: 14,
+    backgroundColor: "rgba(156, 163, 175, 0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+  modalButtonGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    gap: 8,
+  },  modalButtonPrimaryText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 12,
+  },
+  modalButtonSecondaryText: {
+    color: "#9CA3AF",
+    fontWeight: "600",
+    fontSize: 12,
+  },
+
+  // Continue Trip Modal Styles
+  continueTripModalContent: {
+    width: "90%",
+    maxWidth: 380,
+    borderRadius: 28,
+    padding: 28,
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    shadowColor: "#3B82F6",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.2,
+    shadowRadius: 32,
+    elevation: 24,
+    overflow: "hidden",
+    position: "relative",
+  },
+  continueTripDecoCircle1: {
+    position: "absolute",
+    top: -60,
+    right: -60,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(59, 130, 246, 0.08)",
+  },
+  continueTripDecoCircle2: {
+    position: "absolute",
+    bottom: -40,
+    left: -40,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(59, 130, 246, 0.05)",
+  },
+  continueTripIconWrapper: {
+    position: "relative",
+    marginBottom: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  continueTripIconContainer: {
+    width: 72,
+    height: 72,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#3B82F6",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 10,
+    zIndex: 2,
+  },
+  continueTripPulseRing1: {
+    position: "absolute",
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    borderWidth: 2,
+    borderColor: "rgba(59, 130, 246, 0.2)",
+    zIndex: 1,
+  },
+  continueTripPulseRing2: {
+    position: "absolute",
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    borderWidth: 1,
+    borderColor: "rgba(59, 130, 246, 0.1)",
+    zIndex: 0,
+  },
+  continueTripTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    marginBottom: 20,
+    textAlign: "center",
+    letterSpacing: -0.5,
+  },
+  continueTripInfoCard: {
+    width: "100%",
+    backgroundColor: "#F0F9FF",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#BAE6FD",
+  },
+  continueTripInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  continueTripInfoIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#DBEAFE",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  continueTripInfoTextContainer: {
+    flex: 1,
+  },
+  continueTripInfoLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    marginBottom: 2,
+  },
+  continueTripInfoValue: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  continueTripInfoDivider: {
+    height: 1,
+    backgroundColor: "rgba(59, 130, 246, 0.15)",
+    marginVertical: 12,
+  },
+  continueTripStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    alignSelf: "flex-start",
+  },
+  continueTripStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#10B981",
+    marginRight: 6,
+  },
+  continueTripStatusText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#059669",
+  },
+  continueTripDescription: {
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 21,
+    marginBottom: 24,
+    paddingHorizontal: 8,
+  },
+  continueTripButtonGroup: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  continueTripButtonSecondary: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    borderRadius: 14,
+    paddingVertical: 14,
+  },
+  continueTripButtonSecondaryText: {
+    color: "#EF4444",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  continueTripButtonPrimary: {
+    flex: 1.3,
+    borderRadius: 14,
+    overflow: "hidden",
+    shadowColor: "#3B82F6",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  continueTripButtonGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    gap: 8,
+  },
+  continueTripButtonPrimaryText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
   },
 });
 
