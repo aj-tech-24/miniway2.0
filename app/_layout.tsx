@@ -1,5 +1,6 @@
 import NoInternetScreen from "@/components/NoInternetScreen";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { RouteProvider } from "@/contexts/RouteContext";
 import { ThemeProvider, useAppTheme } from "@/contexts/ThemeContext";
 import {
   DarkTheme,
@@ -19,6 +20,7 @@ import registerNNPushToken from "native-notify";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Platform,
   StyleSheet,
   Text,
@@ -78,13 +80,33 @@ const PremiumLightTheme = {
 
 function RootLayoutNav() {
   const { theme } = useAppTheme();
-  const { session, isLoading, role } = useAuth();
+  const { session, isLoading, role, sessionKicked, clearSessionKicked } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const netInfo = useNetInfo();
 
   registerNNPushToken(32035, "C3YxvEGRY2D8OydDIV4Wvf");
+
+  // Handle session kicked alert
+  useEffect(() => {
+    if (sessionKicked) {
+      Alert.alert(
+        "Session Expired",
+        "You have been logged out because your account was accessed from another device. Only one active session is allowed per account.",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              clearSessionKicked();
+              router.replace("/login");
+            },
+          },
+        ],
+        { cancelable: false }
+      );
+    }
+  }, [sessionKicked]);
 
   useEffect(() => {
     const loadFonts = async () => {
@@ -231,9 +253,11 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <ThemeProvider>
-          <RootLayoutNav />
-        </ThemeProvider>
+        <RouteProvider>
+          <ThemeProvider>
+            <RootLayoutNav />
+          </ThemeProvider>
+        </RouteProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

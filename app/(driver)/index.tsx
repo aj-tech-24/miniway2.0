@@ -3,6 +3,7 @@ import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Audio } from "expo-av";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
@@ -27,6 +28,23 @@ import {
 } from "react-native";
 import MapView from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+// Tap sound effect helper
+const playTapSound = async () => {
+  try {
+    const { sound } = await Audio.Sound.createAsync(
+      require("@/assets/sounds/success.mp3"),
+      { shouldPlay: true, volume: .3 }
+    );
+    sound.setOnPlaybackStatusUpdate(async (status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        await sound.unloadAsync();
+      }
+    });
+  } catch (error) {
+    // Silently fail if sound can't play
+  }
+};
 
 // Route type definition
 type Route = {
@@ -336,6 +354,7 @@ const DriverScreen = () => {
               busLocation: JSON.stringify(currentTripLocation),
               tripId: activeTrip.id,
               busId: busData.id,
+              routeId: busData.route_id || selectedRoute?.id,
             },
           });
         }
@@ -715,6 +734,7 @@ const DriverScreen = () => {
           busLocation: JSON.stringify(currentTripLocation),
           tripId: tripId,
           busId: busId,
+          routeId: selectedRoute.id, // Explicitly pass routeId for broadcasting context setup
         },
       });
     };
@@ -995,7 +1015,9 @@ const DriverScreen = () => {
                       styles.mapActionButton,
                       locationLoading && styles.mapActionButtonDisabled,
                     ]}
-                    onPress={refreshLocation}
+                    onPress={() => {
+                      refreshLocation();
+                    }}
                     disabled={locationLoading}
                   >
                     <Ionicons
@@ -1025,17 +1047,17 @@ const DriverScreen = () => {
               {/* Enhanced Map Controls */}
               <View style={styles.mapControls}>
                 <View style={styles.zoomControls}>
-                  <TouchableOpacity style={styles.zoomButton} onPress={zoomIn}>
+                  <TouchableOpacity style={styles.zoomButton} onPress={() => { zoomIn(); }}>
                     <Ionicons name="add" size={16} color="#007AFF" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.zoomButton} onPress={zoomOut}>
+                  <TouchableOpacity style={styles.zoomButton} onPress={() => { zoomOut(); }}>
                     <Ionicons name="remove" size={16} color="#007AFF" />
                   </TouchableOpacity>
                 </View>
                 {/* Center Button */}
                 <TouchableOpacity
                   style={styles.mapControlButton}
-                  onPress={centerMapOnUser}
+                  onPress={() => { centerMapOnUser(); }}
                 >
                   <Ionicons name="locate" size={18} color="#007AFF" />
                 </TouchableOpacity>
@@ -1077,6 +1099,7 @@ const DriverScreen = () => {
                       selectedRoute && styles.dropdownFieldSelected,
                     ]}
                     onPress={(e) => {
+                      playTapSound();
                       e.stopPropagation();
                       setShowDropdown(!showDropdown);
                     }}
@@ -1178,7 +1201,7 @@ const DriverScreen = () => {
         {/* Premium Start Trip Button */}
         <View style={styles.fixedStartButtonContainer}>
           <TouchableOpacity
-            onPress={handleStartTrip}
+            onPress={() => { playTapSound(); handleStartTrip(); }}
             disabled={!selectedRoute || loading}
             activeOpacity={0.9}
             style={styles.startButtonWrapper}
@@ -1289,7 +1312,7 @@ const DriverScreen = () => {
         <TouchableOpacity
           style={styles.dropdownBackdrop}
           activeOpacity={1}
-          onPress={() => setShowDropdown(false)}
+          onPress={() => { setShowDropdown(false); }}
         >
           <View style={styles.dropdownModalContainer}>
             {/* Modal Header */}
@@ -1306,7 +1329,7 @@ const DriverScreen = () => {
                 <Text style={styles.dropdownModalTitle}>Select Route</Text>
               </View>
               <TouchableOpacity
-                onPress={() => setShowDropdown(false)}
+                onPress={() => { setShowDropdown(false); }}
                 style={styles.dropdownModalClose}
               >
                 <Ionicons name="close" size={20} color="rgba(255,255,255,0.9)" />
@@ -1325,7 +1348,7 @@ const DriverScreen = () => {
                 autoFocus
               />
               {searchTerm.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchTerm("")}>
+                <TouchableOpacity onPress={() => { playTapSound(); setSearchTerm(""); }}>
                   <Ionicons name="close-circle" size={18} color="#94A3B8" />
                 </TouchableOpacity>
               )}
@@ -1358,6 +1381,7 @@ const DriverScreen = () => {
                       index === filteredRoutes.length - 1 && { borderBottomWidth: 0 },
                     ]}
                     onPress={(e) => {
+                      playTapSound();
                       e.stopPropagation();
                       handleRouteSelect(route);
                       setSearchTerm("");

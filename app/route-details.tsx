@@ -1,25 +1,40 @@
 import SafeText from "@/components/SafeText";
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBusesOnRoute, useCurrentRoute, useRoute } from "@/contexts/RouteContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
-import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  InteractionManager,
+  LayoutAnimation,
   Modal,
+  Platform,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  UIManager,
+  View
 } from "react-native";
 import MapView, { Camera, LatLng, Marker, Polyline } from "react-native-maps";
+import Svg, { Path, Polygon } from "react-native-svg";
+
+// --- Constants for Short Distance Testing ---
+// NOTE: Keep these conservative to avoid excessive re-renders/animations on Android.
+const LOCATION_UPDATE_INTERVAL = 750; // ms
+const CAMERA_ANIMATION_DURATION = 500; // ms
+const MARKER_ANIMATION_DURATION = 700; // ms
+const DISTANCE_THRESHOLD = 5; // meters
 
 // --- Helper Functions ---
 const decodePolyline = (encoded: string) => {
@@ -67,7 +82,7 @@ type Bus = {
   id: string;
   plate_number: string;
   route_id: string;
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "waiting";
   location: LatLng | null;
   driver: Driver | null;
   capacity?: number | null;
@@ -179,6 +194,40 @@ export default function RouteDetailsScreen() {
 
   const textColor = useThemeColor({}, "text");
 
+  const {
+    setCurrentRoute: setContextRoute,
+    subscribeToBus,
+    unsubscribeFromBus,
+    unsubscribeFromAllBusesExcept,
+    unsubscribeFromRoute,
+  } = useRoute();
+  const { buses: contextBuses } = useBusesOnRoute();
+  const { routeId: contextRouteId } = useCurrentRoute();
+
+  // When route changes, we should be in "static" mode until user selects a bus.
+  const [isLiveTrackingSelectedBus, setIsLiveTrackingSelectedBus] = useState(false);
+
+  // Only keep route active for discovery/initial load. Once a bus is selected, stop route-wide realtime.
+  useEffect(() => {
+    if (isLiveTrackingSelectedBus) {
+      // Stop receiving updates for all buses via route-level channels.
+      unsubscribeFromRoute();
+    }
+  }, [isLiveTrackingSelectedBus, unsubscribeFromRoute]);
+
+  // Subscribe to route broadcasts ASAP using the routeId param.
+  // This ensures we start receiving `driver_location` broadcasts immediately,
+  // even before the route/buses DB fetch finishes.
+  const routeIdParam = params.routeId as string;
+  useEffect(() => {
+    if (routeIdParam && routeIdParam !== contextRouteId) {
+      setContextRoute(routeIdParam);
+    }
+    // No cleanup: keep route active while navigating within the commuter stack.
+  }, [routeIdParam, setContextRoute, contextRouteId]);
+
+
+
   // Enhanced UX states
   const [isSubmittingPickup, setIsSubmittingPickup] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -188,10 +237,70 @@ export default function RouteDetailsScreen() {
   const [showWaitingModal, setShowWaitingModal] = useState(false);
   const [waitingPickupRequest, setWaitingPickupRequest] = useState<any>(null);
   const [passengerCount, setPassengerCount] = useState(1);
+  const [showInstructions, setShowInstructions] = useState(true);
+  const [showBusList, setShowBusList] = useState(true);
+  const [showDropoffInstructions, setShowDropoffInstructions] = useState(true);
+  const [showPickupForm, setShowPickupForm] = useState(true);
+
+  // Animated bus positions for smooth marker transitions
+  const [animatedBusPositions, setAnimatedBusPositions] = useState<Map<string, LatLng>>(new Map());
+  // References to bus markers for native animation (Android)
+  const busMarkerRefs = useRef<Map<string, any>>(new Map());
+
+  // Compass/Magnetometer state for direction indicator
+  const [compassHeading, setCompassHeading] = useState(0);
+  const [isMagnetometerAvailable, setIsMagnetometerAvailable] = useState(false);
+  const [mapCameraHeading, setMapCameraHeading] = useState(0); // Track map rotation
+
+  // Enable LayoutAnimation for Android
+  useEffect(() => {
+    if (Platform.OS === "android") {
+      if (UIManager.setLayoutAnimationEnabledExperimental) {
+        UIManager.setLayoutAnimationEnabledExperimental(true);
+      }
+    }
+  }, []);
+
+  // Compass heading using expo-location for better accuracy
+  useEffect(() => {
+    let headingSub: Location.LocationSubscription | null = null;
+
+    const subscribe = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setIsMagnetometerAvailable(false);
+          return;
+        }
+
+        // Check if heading is available
+        const available = await Location.hasServicesEnabledAsync();
+        setIsMagnetometerAvailable(available);
+        if (!available) return;
+
+        headingSub = await Location.watchHeadingAsync((h) => {
+          // Use trueHeading if available (more accurate), otherwise use magHeading
+          const bearing = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          setCompassHeading(Math.round(bearing));
+        });
+      } catch (error) {
+        console.error('Error setting up heading watch:', error);
+        setIsMagnetometerAvailable(false);
+      }
+    };
+
+    subscribe();
+    return () => {
+      if (headingSub) {
+        headingSub.remove();
+      }
+    };
+  }, []);
+
 
   const originCoords: LatLng = {
     latitude: parseFloat((params.originLat as string) || "0"),
-    longitude: parseFloat((params.originLng as string) || "0"),
+    longitude: parseFloat((params.destLng as string) || "0"),
   };
   const destCoords: LatLng = {
     latitude: parseFloat((params.destLat as string) || "0"),
@@ -265,6 +374,8 @@ export default function RouteDetailsScreen() {
           } as Route;
           setNearestRoute(fetchedRoute);
 
+          // NOTE: No need to call setContextRoute here; the ASAP effect above already does it.
+
           // Set initial camera based on route path
           if (
             fetchedRoute.path?.coordinates &&
@@ -280,9 +391,10 @@ export default function RouteDetailsScreen() {
               longitude: coords[coords.length - 1][0],
             };
             const heading = calculateBearing(startPoint, endPoint);
+            setMapCameraHeading(heading); // Store map rotation
             setInitialCamera({
               center: startPoint,
-              pitch: 90,
+              pitch: 60,
               heading: heading,
               zoom: 18,
             });
@@ -402,6 +514,8 @@ export default function RouteDetailsScreen() {
           } as Route;
           setNearestRoute(fetchedRoute);
 
+          // NOTE: No need to call setContextRoute here; this flow doesn't have a stable routeId param.
+
           if (
             fetchedRoute.path?.coordinates &&
             fetchedRoute.path.coordinates.length >= 2
@@ -415,10 +529,12 @@ export default function RouteDetailsScreen() {
               latitude: coords[coords.length - 1][1],
               longitude: coords[coords.length - 1][0],
             };
+
+            //Zoom out to show the entire route
             const heading = calculateBearing(startPoint, endPoint);
             setInitialCamera({
               center: startPoint,
-              pitch: 80,
+              pitch: 60,
               heading: heading,
               zoom: 18,
             });
@@ -503,27 +619,50 @@ export default function RouteDetailsScreen() {
     fetchData();
   }, [destCoords.latitude, destCoords.longitude, params.routeId]);
 
-  // Get user location on mount
-  useEffect(() => {
-    const getUserLocation = async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") {
-          console.log("Location permission denied");
-          return;
+  // Real-time user location tracking - Only when screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      let locationSubscription: Location.LocationSubscription | null = null;
+
+      const startLocationUpdates = async () => {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== "granted") {
+            console.log("Location permission denied");
+            return;
+          }
+
+          // Start watching position for real-time updates
+          locationSubscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              timeInterval: LOCATION_UPDATE_INTERVAL,
+              distanceInterval: DISTANCE_THRESHOLD, // Use constant for short distance testing
+            },
+            (location) => {
+              setUserLocation(location);
+
+              // Log location update for debugging
+              console.log("📍 Commuter location updated (focused):", {
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+              });
+            }
+          );
+        } catch (error) {
+          console.error("Error starting location updates:", error);
         }
+      };
 
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        setUserLocation(location);
-      } catch (error) {
-        console.error("Error getting user location:", error);
-      }
-    };
+      startLocationUpdates();
 
-    getUserLocation();
-  }, []);
+      return () => {
+        if (locationSubscription) {
+          locationSubscription.remove();
+        }
+      };
+    }, [])
+  );
 
   // Refresh function
   const onRefresh = async () => {
@@ -638,68 +777,100 @@ export default function RouteDetailsScreen() {
     } finally {
       setRefreshing(false);
     }
-  }; // Real-time updates
+  };
+
+  // Track selected bus updates to animate camera
   useEffect(() => {
-    if (!buses || buses.length === 0) return;
-    const busIds = buses.map((bus) => bus.id);
-    const channel = supabase
-      .channel("realtime-trips")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "trips",
-          filter: `bus_id=in.(${busIds.join(",")})`,
-        },
-        async (payload) => {
-          const updatedTrip = payload.new as any;
-          let driverProfile = null;
-          if (updatedTrip.driver_id) {
-            const { data } = await supabase
-              .from("users")
-              .select("id, fullName")
-              .eq("id", updatedTrip.driver_id)
-              .single();
-            driverProfile = data;
-          }
-          setBuses((prev) =>
-            prev.map((bus) => {
-              if (bus.id === updatedTrip.bus_id) {
-                const newLoc = updatedTrip.current_location?.coordinates
-                  ? {
-                    latitude: updatedTrip.current_location.coordinates[1],
-                    longitude: updatedTrip.current_location.coordinates[0],
-                  }
-                  : null;
-                if (selectedBus?.id === updatedTrip.bus_id && newLoc) {
-                  mapRef.current?.animateCamera(
-                    {
-                      center: newLoc,
-                      zoom: 17,
-                      pitch: 70,
-                      heading: 0,
-                    },
-                    { duration: 1000 }
-                  );
-                }
-                return {
-                  ...bus,
-                  status: updatedTrip.status,
-                  location: newLoc,
-                  driver: driverProfile,
-                };
-              }
-              return bus;
-            })
+    if (selectedBus) {
+      const updatedBus = buses.find((b) => b.id === selectedBus.id);
+      if (updatedBus && updatedBus.location) {
+        // Animate camera to follow bus
+        if (mapRef.current) {
+          mapRef.current.animateCamera(
+            {
+              center: {
+                latitude: updatedBus.location.latitude,
+                longitude: updatedBus.location.longitude,
+              },
+              zoom: 19, // High zoom for short distance visibility
+              pitch: 60,
+              heading: 0,
+            },
+            { duration: CAMERA_ANIMATION_DURATION }
           );
         }
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
+      }
+    }
   }, [buses, selectedBus]);
+
+  // Manage subscription for selected bus
+  useEffect(() => {
+    if (!selectedBus?.id) return;
+
+    console.log("Subscribing to selected bus:", selectedBus.id);
+
+    // Switch into live-follow mode.
+    setIsLiveTrackingSelectedBus(true);
+
+    // Only keep the selected bus live; stop everything else.
+    subscribeToBus(selectedBus.id);
+    unsubscribeFromAllBusesExcept(selectedBus.id);
+    unsubscribeFromRoute();
+
+    return () => {
+      console.log("Unsubscribing from selected bus:", selectedBus.id);
+      unsubscribeFromBus(selectedBus.id);
+    };
+  }, [selectedBus?.id, subscribeToBus, unsubscribeFromBus, unsubscribeFromAllBusesExcept, unsubscribeFromRoute]);
+
+
+
+  // REMOVED: Continuous sync of contextBuses to local buses state.
+  // This was causing buses to continuously update from realtime context,
+  // violating the requirement to keep buses static until user selects one.
+  // The gated effect above (lines 839-852) handles updating ONLY the selected bus.
+
+  // Sync buses from Context to local state for real-time updates of markers
+  useEffect(() => {
+    // NEW UX: before selecting a bus, the screen should stay on the static DB snapshot.
+    // Once a bus is selected, we only live-update that selected bus (others stay frozen in list + map).
+    if (!isLiveTrackingSelectedBus || !selectedBus?.id) return;
+    if (!contextBuses) return;
+
+    const selectedFromContext = contextBuses.find((b) => b.id === selectedBus.id);
+    if (!selectedFromContext) return;
+
+    // Update only the selected bus in-place to prevent list items disappearing/reappearing.
+    setBuses((prev) =>
+      prev
+        .map((bus) => {
+          if (bus.id !== selectedBus.id) return bus;
+          return {
+            ...bus,
+            status: selectedFromContext.status as any,
+            location: selectedFromContext.location ?? bus.location,
+            capacity: selectedFromContext.capacity ?? bus.capacity,
+            passengers: selectedFromContext.passengers ?? bus.passengers,
+            driver: selectedFromContext.driverId
+              ? {
+                id: selectedFromContext.driverId,
+                fullName: selectedFromContext.driverName || bus.driver?.fullName || "Driver",
+              }
+              : bus.driver,
+          };
+        })
+        .sort((a, b) => a.plate_number.localeCompare(b.plate_number))
+    );
+
+    // Keep the marker position map accurate for the selected bus.
+    if (selectedFromContext.location) {
+      setAnimatedBusPositions((prev) => {
+        const next = new Map(prev);
+        next.set(selectedBus.id, selectedFromContext.location!);
+        return next;
+      });
+    }
+  }, [contextBuses, isLiveTrackingSelectedBus, selectedBus?.id]);
 
   // Restore waiting state if requested
   useEffect(() => {
@@ -795,8 +966,8 @@ export default function RouteDetailsScreen() {
                 latitude: bus.location.latitude,
                 longitude: bus.location.longitude,
               },
-              zoom: 17,
-              pitch: 70,
+              zoom: 18,
+              pitch: 60,
               heading: 0,
             },
             { duration: 1000 }
@@ -820,8 +991,8 @@ export default function RouteDetailsScreen() {
                 latitude: fallbackLocation.latitude,
                 longitude: fallbackLocation.longitude,
               },
-              zoom: 17,
-              pitch: 70,
+              zoom: 19,
+              pitch: 60,
               heading: 0,
             },
             { duration: 1000 }
@@ -838,8 +1009,8 @@ export default function RouteDetailsScreen() {
         mapRef.current?.animateCamera(
           {
             center: location,
-            zoom: 17,
-            pitch: 70,
+            zoom: 19,
+            pitch: 60,
             heading: 0,
           },
           { duration: 1000 }
@@ -1143,8 +1314,8 @@ export default function RouteDetailsScreen() {
             });
 
             // Unsubscribe from both channels
-            supabase.removeChannel(pickupChannel);
-            supabase.removeChannel(tripPassengerChannel);
+            safeRemove(pickupChannel);
+            safeRemove(tripPassengerChannel);
           } else if (newStatus === "declined") {
             console.log("Pickup request declined by driver");
 
@@ -1160,8 +1331,8 @@ export default function RouteDetailsScreen() {
                   text: "OK",
                   onPress: () => {
                     // Stay on the route details screen to select another bus
-                    supabase.removeChannel(pickupChannel);
-                    supabase.removeChannel(tripPassengerChannel);
+                    safeRemove(pickupChannel);
+                    safeRemove(tripPassengerChannel);
                   },
                 },
               ]
@@ -1204,8 +1375,8 @@ export default function RouteDetailsScreen() {
             });
 
             // Unsubscribe from both channels
-            supabase.removeChannel(pickupChannel);
-            supabase.removeChannel(tripPassengerChannel);
+            safeRemove(pickupChannel);
+            safeRemove(tripPassengerChannel);
           } else if (newStatus === "cancelled") {
             console.log("Trip cancelled by driver");
             Alert.alert(
@@ -1215,8 +1386,8 @@ export default function RouteDetailsScreen() {
                 {
                   text: "OK",
                   onPress: () => {
-                    supabase.removeChannel(pickupChannel);
-                    supabase.removeChannel(tripPassengerChannel);
+                    safeRemove(pickupChannel);
+                    safeRemove(tripPassengerChannel);
                   },
                 },
               ]
@@ -1293,8 +1464,8 @@ export default function RouteDetailsScreen() {
             });
 
             // Unsubscribe from both channels
-            supabase.removeChannel(pickupChannel);
-            supabase.removeChannel(tripPassengerChannel);
+            safeRemove(pickupChannel);
+            safeRemove(tripPassengerChannel);
           } else if (requestData.status === "declined") {
             console.log("Pickup request declined via polling");
             clearInterval(pollInterval);
@@ -1311,8 +1482,8 @@ export default function RouteDetailsScreen() {
                   text: "OK",
                   onPress: () => {
                     // Stay on the route details screen to select another bus
-                    supabase.removeChannel(pickupChannel);
-                    supabase.removeChannel(tripPassengerChannel);
+                    safeRemove(pickupChannel);
+                    safeRemove(tripPassengerChannel);
                   },
                 },
               ]
@@ -1324,12 +1495,22 @@ export default function RouteDetailsScreen() {
       }
     }, 3000); // Poll every 3 seconds
 
-    // Clean up polling interval when channels are unsubscribed
-    const originalRemoveChannel = supabase.removeChannel;
-    supabase.removeChannel = (channel) => {
-      clearInterval(pollInterval);
-      return originalRemoveChannel.call(supabase, channel);
+    // IMPORTANT:
+    // Do NOT override/monkey-patch `supabase.removeChannel`.
+    // That global override can unintentionally affect RouteContext and other screens.
+    // Instead, ensure we clear polling when we explicitly remove our channels.
+    const stopPolling = () => clearInterval(pollInterval);
+
+    const safeRemove = (channel: any) => {
+      try {
+        supabase.removeChannel(channel);
+      } finally {
+        stopPolling();
+      }
     };
+
+    // Replace direct removals below with safeRemove
+    // ...existing code...
   };
 
   // --- Loading and Error States ---
@@ -1395,6 +1576,7 @@ export default function RouteDetailsScreen() {
 
   return (
     <View style={styles.container}>
+
       <MapView
         ref={mapRef}
         googleRenderer="LEGACY"
@@ -1459,7 +1641,8 @@ export default function RouteDetailsScreen() {
           >
             <View style={styles.routeMarkerContainer}>
               <Image
-                source={require("../assets/images/end-route.png")}
+                source={require("../assets/images/end-route.png")
+                }
                 style={styles.routeMarkerIcon}
                 resizeMode="contain"
               />
@@ -1508,7 +1691,40 @@ export default function RouteDetailsScreen() {
             title="Your Location"
             anchor={{ x: 0.5, y: 0.5 }}
           >
-            <View style={styles.userMarkerContainer}>
+            <View style={styles.userMarkerWithCompass}>
+              {/* Compass Cone Direction Indicator */}
+              {isMagnetometerAvailable && (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.compassConeContainer,
+                    { transform: [{ rotate: `${(compassHeading - mapCameraHeading + 360) % 360}deg` }] },
+                  ]}
+                >
+                  <Svg width={70} height={70} viewBox="0 0 120 120">
+                    <Path
+                      d="M60,60 L60,8 A52,52 0 0,1 95,25 Z"
+                      fill="rgba(59, 130, 246, 0.25)"
+                    />
+                    <Path
+                      d="M60,60 L95,25 A52,52 0 0,1 100,40 Z"
+                      fill="rgba(59, 130, 246, 0.25)"
+                    />
+                    <Path
+                      d="M60,60 L25,25 A52,52 0 0,1 60,8 Z"
+                      fill="rgba(59, 130, 246, 0.25)"
+                    />
+                    <Path
+                      d="M60,60 L20,40 A52,52 0 0,1 25,25 Z"
+                      fill="rgba(59, 130, 246, 0.25)"
+                    />
+                    <Polygon
+                      points="60,10 55,30 60,25 65,30"
+                      fill="rgba(59, 130, 246, 0.6)"
+                    />
+                  </Svg>
+                </View>
+              )}
               <Image
                 source={require("../assets/images/user-pin.png")}
                 style={styles.userMarkerIcon}
@@ -1525,7 +1741,11 @@ export default function RouteDetailsScreen() {
           const fallbackLocation = startCoord
             ? { latitude: startCoord[1], longitude: startCoord[0] }
             : null;
-          const markerCoordinate = bus.location || fallbackLocation;
+
+          // Use animated position if available, otherwise fall back to bus location or fallback
+          const animatedPos = animatedBusPositions.get(bus.id);
+          const markerCoordinate = animatedPos || bus.location || fallbackLocation;
+
           const availableSeats =
             typeof bus.capacity === "number" &&
               typeof bus.passengers === "number"
@@ -1537,14 +1757,22 @@ export default function RouteDetailsScreen() {
           return (
             <Marker
               key={bus.id}
+              ref={(ref) => {
+                if (ref) {
+                  busMarkerRefs.current.set(bus.id, ref);
+                } else {
+                  busMarkerRefs.current.delete(bus.id);
+                }
+              }}
               coordinate={markerCoordinate}
-              title={`Bus ${bus.plate_number}`}
-              description={
-                bus.location
-                  ? `${availableSeats} seats available • Tap to select`
-                  : "No live location"
-              }
-              onPress={() => handleBusSelect(bus)}
+              tracksViewChanges={false}
+              onPress={() => {
+                // Use InteractionManager to defer state update safely on Android
+                InteractionManager.runAfterInteractions(() => {
+                  setModalBus(bus);
+                  setShowBusModal(true);
+                });
+              }}
             >
               <View style={styles.busMarkerContainer}>
                 <Image
@@ -1552,47 +1780,192 @@ export default function RouteDetailsScreen() {
                   style={styles.busMarkerIcon}
                   resizeMode="contain"
                 />
-                <View
-                  style={[
-                    styles.busMarkerPointer,
-                    { borderTopColor: isActive ? "#28a745" : "#dc3545" },
-                  ]}
-                />
               </View>
             </Marker>
           );
         })}
       </MapView>
 
-      {/* Enhanced Header with Route Info */}
-      <View style={styles.headerContainer}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-          activeOpacity={0.7}
+      {/* Enhanced Header with Route Info and Instructions */}
+      <SafeAreaView style={styles.enhancedHeaderContainer}>
+        <LinearGradient
+          colors={theme === "dark"
+            ? ["#1a365d", "#2563eb", "#3b82f6"]
+            : ["#0052d4", "#4364f7", "#6fb1fc"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.enhancedHeaderGradient}
         >
-          <Ionicons name="arrow-back" size={24} color="#007AFF" />
-        </TouchableOpacity>
-        <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle}>Route Details</Text>
-          <Text style={styles.headerSubtitle}>
-            {nearestRoute?.name || "Loading..."}
-          </Text>
-        </View>
-        <TouchableOpacity
-          onPress={onRefresh}
-          style={[styles.refreshButton, refreshing && styles.refreshingButton]}
-          disabled={refreshing}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name="refresh"
-            size={20}
-            color={refreshing ? "#6c757d" : "#007AFF"}
-            style={refreshing ? { transform: [{ rotate: "180deg" }] } : {}}
-          />
-        </TouchableOpacity>
-      </View>
+          {/* Decorative elements */}
+          <View style={styles.headerDecorCircle1} />
+          <View style={styles.headerDecorCircle2} />
+
+          {/* Main Header Row */}
+          <View style={styles.enhancedHeaderRow}>
+            <TouchableOpacity
+              onPress={() => router.back()}
+              style={styles.enhancedBackButton}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="arrow-back" size={24} color="#fff" />
+            </TouchableOpacity>
+            <View style={styles.enhancedHeaderInfo}>
+              <Text style={styles.enhancedHeaderTitle}>
+                {showPickupSelection ? "Set Pickup Location" : "Select a Bus"}
+              </Text>
+              <Text style={styles.enhancedHeaderSubtitle}>
+                {nearestRoute?.name || "Loading..."}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={onRefresh}
+              style={[styles.enhancedRefreshButton, refreshing && styles.refreshingButton]}
+              disabled={refreshing}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="refresh"
+                size={20}
+                color="#fff"
+                style={refreshing ? { transform: [{ rotate: "180deg" }] } : {}}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Collapsible Instructions Section */}
+          {!showPickupSelection && (
+            <>
+              <TouchableOpacity
+                style={styles.instructionsHeader}
+                onPress={() => {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setShowInstructions(!showInstructions);
+                }}
+                activeOpacity={0.8}
+              >
+                <View style={styles.instructionsHeaderLeft}>
+                  <Ionicons name="help-circle" size={18} color="#fff" />
+                  <Text style={styles.instructionsHeaderText}>
+                    How to book a ride
+                  </Text>
+                </View>
+                <View style={styles.instructionsToggle}>
+                  <Ionicons
+                    name={showInstructions ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color="#fff"
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {showInstructions && (
+                <View style={styles.instructionsContainer}>
+                  {/* Step 1 */}
+                  <View style={styles.instructionStep}>
+                    <View style={styles.instructionStepNumber}>
+                      <Text style={styles.instructionStepNumberText}>1</Text>
+                    </View>
+                    <Text style={styles.instructionStepText}>
+                      View the available buses on the map below.
+                    </Text>
+                  </View>
+
+                  {/* Step 2 */}
+                  <View style={styles.instructionStep}>
+                    <View style={styles.instructionStepNumber}>
+                      <Text style={styles.instructionStepNumberText}>2</Text>
+                    </View>
+                    <Text style={styles.instructionStepText}>
+                      Tap a bus card to view details (seats, driver).
+                    </Text>
+                  </View>
+
+                  {/* Step 3 */}
+                  <View style={styles.instructionStep}>
+                    <View style={styles.instructionStepNumber}>
+                      <Text style={styles.instructionStepNumberText}>3</Text>
+                    </View>
+                    <Text style={styles.instructionStepText}>
+                      Tap "Select This Bus" to proceed.
+                    </Text>
+                  </View>
+
+                  {/* Step 4 */}
+                  <View style={styles.instructionStep}>
+                    <View style={styles.instructionStepNumber}>
+                      <Text style={styles.instructionStepNumberText}>4</Text>
+                    </View>
+                    <Text style={styles.instructionStepText}>
+                      Set your pickup location on the route.
+                    </Text>
+                  </View>
+
+                  {/* Tip */}
+                  <View style={styles.instructionTipBanner}>
+                    <View style={styles.instructionTipIcon}>
+                      <Ionicons name="bulb" size={16} color="#F59E0B" />
+                    </View>
+                    <Text style={styles.instructionTipText}>
+                      <Text style={styles.instructionStepBold}>Tip:</Text> Choose a bus with available seats that is closest to your location.
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </>
+          )}
+
+          {/* Drop-off Instructions when in pickup selection mode */}
+          {/* Drop-off Instructions when in pickup selection mode */}
+          {showPickupSelection && (
+            <View>
+              <TouchableOpacity
+                onPress={() => {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setShowDropoffInstructions(!showDropoffInstructions);
+                }}
+                style={styles.instructionsHeader}
+              >
+                <View style={styles.instructionsHeaderLeft}>
+                  <Ionicons name="information-circle" size={20} color="#fff" />
+                  <SafeText style={styles.instructionsHeaderText}>
+                    Drop-off Instructions
+                  </SafeText>
+                </View>
+                <View style={styles.instructionsToggle}>
+                  <Ionicons
+                    name={showDropoffInstructions ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color="#fff"
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {showDropoffInstructions && (
+                <View style={styles.dropoffInstructionsContainer}>
+                  <View style={styles.instructionStep}>
+                    <View style={[styles.instructionStepNumber, { backgroundColor: "rgba(16, 185, 129, 0.3)" }]}>
+                      <Ionicons name="location" size={14} color="#fff" />
+                    </View>
+                    <Text style={styles.instructionStepText}>
+                      Tap on the map or use your current location to set where you want to be dropped off.
+                    </Text>
+                  </View>
+                  <View style={styles.instructionTipBanner}>
+                    <View style={styles.instructionTipIcon}>
+                      <Ionicons name="warning" size={16} color="#F59E0B" />
+                    </View>
+                    <Text style={styles.instructionTipText}>
+                      Only select locations on <Text style={styles.instructionStepBold}>highways or national roads</Text> where the bus can safely stop.
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+        </LinearGradient>
+      </SafeAreaView>
+
+
 
       {/* Error Banner */}
       {error && (
@@ -1605,254 +1978,309 @@ export default function RouteDetailsScreen() {
         </View>
       )}
 
-      {/* Enhanced Bottom Panel */}
-      <View style={styles.bottomPanel}>
+      {/* Enhanced Bottom Panel with Gradient */}
+      <LinearGradient
+        colors={theme === 'dark' ? ['#1e293b', '#0f172a'] : ['#ffffff', '#f1f5f9']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={styles.bottomPanel}
+      >
         {showPickupSelection ? (
           <View>
-            <SafeText style={styles.panelTitle}>
-              Set Your Pickup Location
-            </SafeText>
-            <SafeText style={styles.panelSubtitle}>
-              Selected Bus: {selectedBus?.plate_number || "Unknown"}
-            </SafeText>
-            <SafeText style={styles.panelInstruction}>
-              Tap on the map or use your current location.
-            </SafeText>
-
-            {pickupLocation && (
-              <>
-                <View style={styles.pickupLocationInfo}>
-                  <Ionicons name="location" size={16} color="#007AFF" />
-                  <Text style={styles.pickupLocationText}>
-                    Pickup location selected
-                  </Text>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                setShowPickupForm(!showPickupForm);
+              }}
+              style={styles.pickupHeaderContainer}
+            >
+              <View style={styles.pickupIconCircle}>
+                <Ionicons name="location" size={24} color="#007AFF" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <SafeText style={styles.pickupTitle}>Set Pickup Location</SafeText>
+                <View style={styles.pickupSubtitleRow}>
+                  <Ionicons name="bus" size={12} color="#6B7280" />
+                  <SafeText style={styles.pickupSubtitle}>
+                    Bus: <Text style={{ fontWeight: '600', color: '#111827' }}>{selectedBus?.plate_number || "Unknown"}</Text>
+                  </SafeText>
                 </View>
+              </View>
+              <Ionicons
+                name={showPickupForm ? "chevron-up" : "chevron-down"}
+                size={22}
+                color="#9CA3AF"
+              />
+            </TouchableOpacity>
 
-                <View style={styles.passengerCountContainer}>
-                  <Text style={styles.passengerCountLabel}>
-                    Number of Passengers:
-                  </Text>
-                  <View style={styles.passengerCountControls}>
-                    <TouchableOpacity
-                      style={[
-                        styles.passengerCountButton,
-                        passengerCount <= 1 ? styles.disabledButton : undefined,
-                      ]}
-                      onPress={() =>
-                        setPassengerCount((prev) => Math.max(1, prev - 1))
-                      }
-                      disabled={passengerCount <= 1}
-                    >
-                      <Ionicons name="remove" size={20} color="#fff" />
-                    </TouchableOpacity>
-                    <Text style={styles.passengerCountText}>
-                      {passengerCount}
+            {showPickupForm && (
+              <>
+                {!pickupLocation ? (
+                  <View style={styles.pickupInstructionBanner}>
+                    <Ionicons name="navigate-circle-outline" size={22} color="#007AFF" />
+                    <Text style={styles.pickupInstructionText}>
+                      Tap anywhere on the <Text style={{ fontWeight: '700' }}>blue route line</Text> or use your current location.
                     </Text>
-                    <TouchableOpacity
-                      style={[
-                        styles.passengerCountButton,
-                        selectedBus &&
-                          typeof selectedBus.capacity === "number" &&
-                          passengerCount >=
-                          selectedBus.capacity - (selectedBus.passengers || 0)
-                          ? styles.disabledButton
-                          : undefined,
-                      ]}
-                      onPress={() => setPassengerCount((prev) => prev + 1)}
-                      disabled={
-                        !!(
-                          selectedBus &&
-                          typeof selectedBus.capacity === "number" &&
-                          passengerCount >=
-                          selectedBus.capacity - (selectedBus.passengers || 0)
-                        )
-                      }
-                    >
-                      <Ionicons name="add" size={20} color="#fff" />
-                    </TouchableOpacity>
                   </View>
-                  {selectedBus && typeof selectedBus.capacity === "number" && (
-                    <Text style={styles.availableSeatsText}>
-                      Available seats:
-                      {selectedBus.capacity - (selectedBus.passengers || 0)}
+                ) : (
+                  <View style={styles.pickupSelectedBanner}>
+                    <Ionicons name="checkmark-circle" size={22} color="#10B981" />
+                    <Text style={styles.pickupSelectedText}>
+                      Pickup location selected successfully!
                     </Text>
+                  </View>
+                )}
+
+                {pickupLocation && (
+                  <View style={styles.passengerCard}>
+                    <View style={styles.passengerCardHeader}>
+                      <Ionicons name="people-circle" size={22} color="#4B5563" />
+                      <Text style={styles.passengerLabel}>Number of Passengers</Text>
+                    </View>
+
+                    <View style={styles.passengerControlsContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.passengerBtn,
+                          passengerCount <= 1 && styles.passengerBtnDisabled,
+                        ]}
+                        onPress={() =>
+                          setPassengerCount((prev) => Math.max(1, prev - 1))
+                        }
+                        disabled={passengerCount <= 1}
+                      >
+                        <Ionicons name="remove" size={24} color={passengerCount <= 1 ? "#D1D5DB" : "#007AFF"} />
+                      </TouchableOpacity>
+
+                      <View style={styles.passengerCountDisplay}>
+                        <Text style={styles.passengerCountNum}>{passengerCount}</Text>
+                        <Text style={styles.passengerCountLabelSmall}>person{passengerCount !== 1 ? 's' : ''}</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.passengerBtn,
+                          selectedBus &&
+                            typeof selectedBus.capacity === "number" &&
+                            passengerCount >=
+                            selectedBus.capacity - (selectedBus.passengers || 0)
+                            ? styles.passengerBtnDisabled
+                            : undefined,
+                        ]}
+                        onPress={() => setPassengerCount((prev) => prev + 1)}
+                        disabled={
+                          !!(
+                            selectedBus &&
+                            typeof selectedBus.capacity === "number" &&
+                            passengerCount >=
+                            selectedBus.capacity - (selectedBus.passengers || 0)
+                          )
+                        }
+                      >
+                        <Ionicons name="add" size={24} color="#007AFF" />
+                      </TouchableOpacity>
+                    </View>
+
+                    {selectedBus && typeof selectedBus.capacity === "number" && (
+                      <View style={styles.seatsAvailableContainer}>
+                        <Text style={styles.seatsAvailableText}>
+                          <Text style={{ fontWeight: '700', color: '#10B981' }}>{selectedBus.capacity - (selectedBus.passengers || 0)}</Text> seats available on this bus
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  style={[
+                    styles.currentLocationButtonEnhanced,
+                    locationLoading ? styles.disabledButton : undefined,
+                  ]}
+                  onPress={handleUseCurrentLocation}
+                  disabled={locationLoading}
+                >
+                  {locationLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="locate" size={18} color="#fff" />
+                      <Text style={styles.buttonTextEnhanced}>Use My Current Location</Text>
+                    </>
                   )}
+                </TouchableOpacity>
+
+                <View style={styles.actionButtonRowEnhanced}>
+                  <TouchableOpacity
+                    style={[styles.actionButtonEnhanced, styles.cancelButtonEnhanced]}
+                    onPress={handleCancelPickup}
+                  >
+                    <Text style={styles.cancelButtonTextEnhanced}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButtonEnhanced,
+                      styles.confirmButtonEnhanced,
+                      (!pickupLocation || isSubmittingPickup) &&
+                      styles.disabledButtonEnhanced,
+                    ]}
+                    onPress={handleConfirmPickup}
+                    disabled={!pickupLocation || isSubmittingPickup}
+                  >
+                    {isSubmittingPickup ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <>
+                        <Text style={styles.confirmButtonTextEnhanced}>Confirm Pickup</Text>
+                        <Ionicons name="arrow-forward" size={18} color="#fff" />
+                      </>
+                    )}
+                  </TouchableOpacity>
                 </View>
               </>
             )}
-
-            <TouchableOpacity
-              style={[
-                styles.currentLocationButton,
-                locationLoading ? styles.disabledButton : undefined,
-              ]}
-              onPress={handleUseCurrentLocation}
-              disabled={locationLoading}
-            >
-              {locationLoading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <>
-                  <Ionicons name="locate" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>Use My Current Location</Text>
-                </>
-              )}
-            </TouchableOpacity>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={[styles.actionButton, styles.cancelButton]}
-                onPress={handleCancelPickup}
-              >
-                <Text style={[styles.buttonText, { color: "#333" }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.actionButton,
-                  styles.confirmButton,
-                  (!pickupLocation || isSubmittingPickup) &&
-                  styles.disabledButton,
-                ]}
-                onPress={handleConfirmPickup}
-                disabled={!pickupLocation || isSubmittingPickup}
-              >
-                {isSubmittingPickup ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.buttonText}>Confirm Pickup</Text>
-                )}
-              </TouchableOpacity>
-            </View>
           </View>
         ) : (
           <>
-            <View style={styles.routeHeader}>
-              <SafeText style={[styles.routeName, { color: textColor }]}>
-                Route: {nearestRoute?.name || "Unknown Route"}
-              </SafeText>
-              <TouchableOpacity
-                onPress={onRefresh}
-                style={styles.refreshButtonSmall}
-                disabled={refreshing}
-              >
-                <Ionicons
-                  name="refresh"
-                  size={16}
-                  color={refreshing ? "#6c757d" : "#007AFF"}
-                />
-              </TouchableOpacity>
-            </View>
-            <SafeText style={styles.panelTitle}>
-              Available Buses (
-              {buses.filter((bus) => bus.status === "active").length || 0})
-            </SafeText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8, paddingHorizontal: 4 }}>
-              {buses.map((bus) => {
-                const availableSeats =
-                  typeof bus.capacity === "number" &&
-                    typeof bus.passengers === "number"
-                    ? Math.max(bus.capacity - bus.passengers, 0)
-                    : 0;
-                const isActive = bus.status === "active";
-                const isSelected = selectedBus?.id === bus.id;
-
-                return (
-                  <TouchableOpacity
-                    key={bus.id}
-                    style={[
-                      styles.busCard,
-                      {
-                        backgroundColor: "#fff",
-                        borderColor: isSelected
-                          ? "#007AFF"
-                          : isActive
-                            ? "rgba(0,0,0,0.1)"
-                            : "#ffebee",
-                        borderWidth: isSelected ? 2 : 1,
-                        shadowColor: isSelected ? "#007AFF" : "#000",
-                        shadowOpacity: isSelected ? 0.15 : 0.08,
-                        shadowRadius: isSelected ? 8 : 4,
-                        elevation: isSelected ? 4 : 2,
-                        transform: isSelected
-                          ? [{ scale: 1.02 }]
-                          : [{ scale: 1 }],
-                      },
-                    ]}
-                    onPress={() => {
-                      setModalBus(bus);
-                      setShowBusModal(true);
-                    }}
-                    disabled={!isActive}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.busCardHeader}>
-                      <View style={[styles.busIconBadge, { backgroundColor: isActive ? "#E3F2FD" : "#FFEBEE" }]}>
-                        <Ionicons name="bus" size={20} color={isActive ? "#007AFF" : "#FF5252"} />
-                      </View>
-                      <View style={{ flex: 1, marginLeft: 10 }}>
-                        <Text style={[styles.busPlate, { color: textColor, marginBottom: 0 }]}>
-                          {bus.plate_number || "N/A"}
-                        </Text>
-                        <Text style={[styles.busStatusText, { color: isActive ? "#4CAF50" : "#FF5252" }]}>
-                          {isActive ? "• Active Now" : "• Inactive"}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.busCardBody}>
-                      <View style={styles.busInfoItem}>
-                        <Ionicons name="person-circle-outline" size={16} color="#666" />
-                        <Text style={styles.busInfoText} numberOfLines={1}>
-                          {bus.driver?.fullName || "No driver"}
-                        </Text>
-                      </View>
-                      <View style={styles.busInfoItem}>
-                        <Ionicons name="people-outline" size={16} color="#666" />
-                        <Text style={[styles.busInfoText, { color: AvailableSeatsColor(availableSeats) }]}>
-                          {availableSeats} seats left
-                        </Text>
-                      </View>
-                    </View>
-
-                    {availableSeats > 0 && (
-                      <View style={styles.capacityBar}>
-                        <View
-                          style={[
-                            styles.capacityFill,
-                            {
-                              width: `${((bus.passengers || 0) / (bus.capacity || 1)) *
-                                100
-                                }%`,
-                              backgroundColor:
-                                availableSeats > 5
-                                  ? "#4CAF50"
-                                  : availableSeats > 2
-                                    ? "#FFC107"
-                                    : "#FF5252",
-                            },
-                          ]}
-                        />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-              {buses.length === 0 && (
-                <View style={styles.noBusesContainer}>
-                  <View style={styles.noBusesIconCircle}>
-                    <Ionicons name="bus-outline" size={32} color="#999" />
-                  </View>
-                  <Text style={styles.noBusesText}>
-                    No buses available nearby
-                  </Text>
-                  <Text style={styles.noBusesSubtext}>
-                    Wait a moment or pull down to refresh
-                  </Text>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                setShowBusList(!showBusList);
+              }}
+              style={styles.pickupHeaderContainer}
+            >
+              <View style={styles.pickupIconCircle}>
+                <Ionicons name="map" size={24} color="#007AFF" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <SafeText style={styles.pickupTitle}>{nearestRoute?.name || "Unknown Route"}</SafeText>
+                <View style={styles.pickupSubtitleRow}>
+                  <Ionicons name="bus" size={12} color="#6B7280" />
+                  <SafeText style={styles.pickupSubtitle}>
+                    <Text style={{ fontWeight: '600', color: '#111827' }}>
+                      {buses.filter((bus) => bus.status === "active").length}
+                    </Text> Active Buses Nearby
+                  </SafeText>
                 </View>
-              )}
-            </ScrollView>
+              </View>
+              <Ionicons
+                name={showBusList ? "chevron-down" : "chevron-up"}
+                size={22}
+                color="#9CA3AF"
+              />
+            </TouchableOpacity>
+
+            {showBusList && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8, paddingHorizontal: 4 }}>
+                {buses.map((bus) => {
+                  const availableSeats =
+                    typeof bus.capacity === "number" &&
+                      typeof bus.passengers === "number"
+                      ? Math.max(bus.capacity - bus.passengers, 0)
+                      : 0;
+                  const isActive = bus.status === "active";
+                  const isSelected = selectedBus?.id === bus.id;
+
+                  return (
+                    <TouchableOpacity
+                      key={bus.id}
+                      style={[
+                        styles.busCard,
+                        {
+                          backgroundColor: "#fff",
+                          borderColor: isSelected
+                            ? "#007AFF"
+                            : isActive
+                              ? "rgba(0,0,0,0.1)"
+                              : "#ffebee",
+                          borderWidth: isSelected ? 2 : 1,
+                          shadowColor: isSelected ? "#007AFF" : "#000",
+                          shadowOpacity: isSelected ? 0.15 : 0.08,
+                          shadowRadius: isSelected ? 8 : 4,
+                          elevation: isSelected ? 4 : 2,
+                          transform: isSelected
+                            ? [{ scale: 1.02 }]
+                            : [{ scale: 1 }],
+                        },
+                      ]}
+                      onPress={() => {
+                        setModalBus(bus);
+                        setShowBusModal(true);
+                      }}
+                      disabled={!isActive}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.busCardHeader}>
+                        <View style={[styles.busIconBadge, { backgroundColor: isActive ? "#E3F2FD" : "#FFEBEE" }]}>
+                          <Ionicons name="bus" size={20} color={isActive ? "#007AFF" : "#FF5252"} />
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                          <Text style={[styles.busPlate, { color: textColor, marginBottom: 0 }]}>
+                            {bus.plate_number || "N/A"}
+                          </Text>
+                          <Text style={[styles.busStatusText, { color: isActive ? "#4CAF50" : "#FF5252" }]}>
+                            {isActive ? "• Active Now" : "• Inactive"}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.busCardBody}>
+                        <View style={styles.busInfoItem}>
+                          <Ionicons name="person-circle-outline" size={16} color="#666" />
+                          <Text style={styles.busInfoText} numberOfLines={1}>
+                            {bus.driver?.fullName || "No driver"}
+                          </Text>
+                        </View>
+                        <View style={styles.busInfoItem}>
+                          <Ionicons name="people-outline" size={16} color="#666" />
+                          <Text style={[styles.busInfoText, { color: AvailableSeatsColor(availableSeats) }]}>
+                            {availableSeats} seats left
+                          </Text>
+                        </View>
+                      </View>
+
+                      {availableSeats > 0 && (
+                        <View style={styles.capacityBar}>
+                          <View
+                            style={[
+                              styles.capacityFill,
+                              {
+                                width: `${((bus.passengers || 0) / (bus.capacity || 1)) *
+                                  100
+                                  }%`,
+                                backgroundColor:
+                                  availableSeats > 5
+                                    ? "#4CAF50"
+                                    : availableSeats > 2
+                                      ? "#FFC107"
+                                      : "#FF5252",
+                              },
+                            ]}
+                          />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+                {buses.length === 0 && (
+                  <View style={styles.noBusesContainer}>
+                    <View style={styles.noBusesIconCircle}>
+                      <Ionicons name="bus-outline" size={32} color="#999" />
+                    </View>
+                    <Text style={styles.noBusesText}>
+                      No buses available nearby
+                    </Text>
+                    <Text style={styles.noBusesSubtext}>
+                      Wait a moment or pull down to refresh
+                    </Text>
+                  </View>
+                )}
+              </ScrollView>
+            )}
           </>
         )}
-      </View>
+      </LinearGradient>
 
       {/* Enhanced Bus Details Modal */}
       <Modal
@@ -1863,76 +2291,136 @@ export default function RouteDetailsScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContentCard}>
-            <View style={styles.modalHeader}>
+            {/* Premium Gradient Header */}
+            <LinearGradient
+              colors={['#007AFF', '#0055CC']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.modalHeader}
+            >
               <View style={styles.modalHeaderIcon}>
-                <Ionicons name="bus" size={32} color="#007AFF" />
+                <Ionicons name="bus" size={36} color="#fff" />
               </View>
-              <Text style={styles.modalTitle}>Minibus Details</Text>
+              <Text style={styles.modalTitle}>Bus Details</Text>
               <Text style={styles.modalSubtitle}>Vehicle Information</Text>
-            </View>
+            </LinearGradient>
 
             <View style={styles.modalBody}>
+              {/* Plate Number & Status Row */}
               <View style={styles.detailRow}>
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>Plate Number</Text>
-                  <Text style={styles.detailValue}>{modalBus?.plate_number}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                    <Ionicons name="card" size={18} color="#007AFF" style={{ marginRight: 8 }} />
+                    <Text style={styles.detailValue}>{modalBus?.plate_number}</Text>
+                  </View>
                 </View>
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>Status</Text>
-                  <Text style={[styles.detailValue, { color: modalBus?.status === 'active' ? '#4CAF50' : '#FF5252' }]}>
-                    {modalBus?.status === 'active' ? 'Active' : 'Inactive'}
-                  </Text>
+                  <View style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: modalBus?.status === 'active' ? '#E8F5E9' : '#FFEBEE',
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    borderRadius: 20,
+                    marginTop: 4,
+                    alignSelf: 'flex-start',
+                  }}>
+                    <View style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: modalBus?.status === 'active' ? '#4CAF50' : '#FF5252',
+                      marginRight: 6,
+                    }} />
+                    <Text style={{
+                      fontSize: 13,
+                      fontWeight: '700',
+                      color: modalBus?.status === 'active' ? '#2E7D32' : '#C62828',
+                    }}>
+                      {modalBus?.status === 'active' ? 'Active' : 'Inactive'}
+                    </Text>
+                  </View>
                 </View>
               </View>
 
+              {/* Driver Section */}
               <View style={styles.detailSection}>
                 <Text style={styles.detailLabel}>Driver</Text>
                 <View style={styles.driverRow}>
-                  <Ionicons name="person-circle" size={36} color="#007AFF" />
+                  <LinearGradient
+                    colors={['#E3F2FD', '#BBDEFB']}
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Ionicons name="person" size={24} color="#007AFF" />
+                  </LinearGradient>
                   <Text style={styles.driverValue}>{modalBus?.driver?.fullName || "No driver assigned"}</Text>
                 </View>
               </View>
 
+              {/* Capacity Section */}
               <View style={styles.detailSection}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <Text style={styles.detailLabel}>Capacity</Text>
-                  <Text style={styles.seatCountValue}>
-                    <Text style={{ color: '#007AFF', fontWeight: 'bold' }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <Text style={styles.detailLabel}>Seat Availability</Text>
+                  <View style={{
+                    flexDirection: 'row',
+                    alignItems: 'baseline',
+                  }}>
+                    <Text style={{
+                      fontSize: 24,
+                      fontWeight: '800',
+                      color: '#007AFF',
+                    }}>
                       {typeof modalBus?.capacity === 'number' && typeof modalBus?.passengers === 'number'
                         ? Math.max(modalBus.capacity - modalBus.passengers, 0)
                         : '?'}
                     </Text>
-                    /{modalBus?.capacity ?? "N/A"} seats available
-                  </Text>
+                    <Text style={styles.seatCountValue}>
+                      /{modalBus?.capacity ?? "N/A"} seats
+                    </Text>
+                  </View>
                 </View>
                 <View style={styles.modalCapacityBarBg}>
-                  <View
+                  <LinearGradient
+                    colors={['#007AFF', '#00C6FF']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
                     style={[
                       styles.modalCapacityBarFill,
                       {
                         width: modalBus?.capacity && modalBus?.passengers
                           ? `${(modalBus.passengers / modalBus.capacity) * 100}%`
                           : '0%',
-                        backgroundColor: '#007AFF'
                       }
                     ]}
                   />
                 </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+                  <Text style={{ fontSize: 11, color: '#9CA3AF' }}>Empty</Text>
+                  <Text style={{ fontSize: 11, color: '#9CA3AF' }}>Full</Text>
+                </View>
               </View>
             </View>
 
-            <View style={styles.modalButtonRow}>
+            {/* Footer Buttons */}
+            <View style={styles.modalFooter}>
               <TouchableOpacity
-                style={[styles.actionButton, styles.cancelButton]}
+                style={styles.modalCloseButton}
                 onPress={() => setShowBusModal(false)}
               >
-                <Text style={[styles.buttonText, { color: "#333" }]}>Close</Text>
+                <Text style={styles.modalCloseText}>Close</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
-                  styles.actionButton,
-                  styles.confirmButton,
-                  modalBus?.status !== "active" && styles.disabledButton,
+                  styles.modalSelectButton,
+                  modalBus?.status !== "active" && { opacity: 0.5 },
                 ]}
                 onPress={() => {
                   if (modalBus?.status === "active") {
@@ -1942,8 +2430,8 @@ export default function RouteDetailsScreen() {
                 }}
                 disabled={modalBus?.status !== "active"}
               >
-                <Text style={styles.buttonText}>Select Bus</Text>
-                <Ionicons name="arrow-forward" size={18} color="#fff" style={{ marginLeft: 8 }} />
+                <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                <Text style={styles.modalSelectText}>Select Bus</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1954,60 +2442,53 @@ export default function RouteDetailsScreen() {
       <Modal
         visible={showWaitingModal}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => {
           // Don't allow closing the modal - user must wait for response
         }}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.waitingModalContent}>
-            <View style={styles.waitingHeader}>
-              <Ionicons name="time" size={48} color="#FF9500" />
-              <Text style={styles.waitingTitle}>
-                Waiting for Driver Approval
-              </Text>
+          <View style={styles.waitingModalContentEnhanced}>
+            <View style={styles.waitingHeaderEnhanced}>
+              <View style={styles.waitingIconWrapper}>
+                <ActivityIndicator size="large" color="#FF9500" style={{ position: 'absolute' }} />
+                <View style={[styles.waitingIconCircle, { opacity: 0.2, transform: [{ scale: 1.5 }] }]} />
+                <Ionicons name="time" size={32} color="#FF9500" />
+              </View>
+              <Text style={styles.waitingTitleEnhanced}>Waiting for Approval</Text>
+              <Text style={styles.waitingSubtitleEnhanced}>Request sent to driver</Text>
             </View>
 
             {waitingPickupRequest && (
-              <View style={styles.waitingDetails}>
-                <View style={styles.waitingInfoRow}>
-                  <Ionicons name="bus" size={20} color="#007AFF" />
-                  <Text style={styles.waitingInfoText}>
-                    Bus: {waitingPickupRequest.busPlateNumber}
-                  </Text>
+              <View style={styles.waitingDetailsEnhanced}>
+                <View style={styles.waitingInfoRowEnhanced}>
+                  <View style={styles.waitingInfoIcon}>
+                    <Ionicons name="bus" size={18} color="#007AFF" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.waitingLabel}>Bus</Text>
+                    <Text style={styles.waitingValue}>{waitingPickupRequest.busPlateNumber}</Text>
+                  </View>
                 </View>
-
-                <View style={styles.waitingInfoRow}>
-                  <Ionicons name="person" size={20} color="#007AFF" />
-                  <Text style={styles.waitingInfoText}>
-                    Driver: {waitingPickupRequest.driverName}
-                  </Text>
-                </View>
-
-                <View style={styles.waitingInfoRow}>
-                  <Ionicons name="location" size={20} color="#007AFF" />
-                  <Text style={styles.waitingInfoText}>
-                    Pickup:
-                    {waitingPickupRequest.pickupLocation.latitude.toFixed(4)},
-                    {waitingPickupRequest.pickupLocation.longitude.toFixed(4)}
-                  </Text>
+                <View style={styles.waitingDivider} />
+                <View style={styles.waitingInfoRowEnhanced}>
+                  <View style={styles.waitingInfoIcon}>
+                    <Ionicons name="person" size={18} color="#007AFF" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.waitingLabel}>Driver</Text>
+                    <Text style={styles.waitingValue}>{waitingPickupRequest.driverName}</Text>
+                  </View>
                 </View>
               </View>
             )}
 
-            <View style={styles.waitingStatus}>
-              <ActivityIndicator size="large" color="#FF9500" />
-              <Text style={styles.waitingStatusText}>
-                Your pickup request has been sent to the driver.
+            <View style={styles.waitingStatusEnhanced}>
+              <Text style={styles.waitingStatusTextEnhanced}>
+                Please stay on this screen.
               </Text>
-              <Text style={styles.waitingStatusSubtext}>
-                Please wait for them to accept or decline your request.
-              </Text>
-            </View>
-
-            <View style={styles.waitingFooter}>
-              <Text style={styles.waitingFooterText}>
-                You will be notified as soon as the driver responds.
+              <Text style={styles.waitingStatusSubtextEnhanced}>
+                You will be notified immediately once the driver responds to your pickup request.
               </Text>
             </View>
           </View>
@@ -2053,234 +2534,603 @@ export default function RouteDetailsScreen() {
   );
 }
 
-// --- Styles ---
+
+
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
   centered: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: 'center',
+    alignItems: 'center',
     padding: 20,
     backgroundColor: '#fff',
   },
   loadingText: {
     fontSize: 18,
-    fontWeight: "600",
-    color: "#333",
-    marginTop: 16,
-    textAlign: "center",
+    fontWeight: 'bold',
+    marginTop: 10,
+    color: '#333',
   },
   loadingSubtext: {
     fontSize: 14,
-    color: "#6c757d",
-    marginTop: 8,
-    textAlign: "center",
+    color: '#666',
+    marginTop: 5,
   },
   errorTitle: {
     fontSize: 20,
-    fontWeight: "bold",
-    color: "#dc3545",
-    marginTop: 16,
-    textAlign: "center",
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 10,
+    marginBottom: 5,
   },
   errorText: {
     fontSize: 16,
-    color: "#6c757d",
-    marginTop: 8,
-    textAlign: "center",
-    lineHeight: 22,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
   },
   errorButtonRow: {
-    flexDirection: "row",
-    marginTop: 24,
-    gap: 12,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  actionButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 100,
+  },
+  cancelButton: {
+    backgroundColor: '#f3f4f6',
+  },
+  confirmButton: {
+    backgroundColor: '#007AFF',
+  },
+  buttonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
   },
   goBackButton: {
-    marginTop: 20,
     paddingVertical: 12,
     paddingHorizontal: 24,
-    backgroundColor: "#007AFF",
+    backgroundColor: '#f3f4f6',
     borderRadius: 8,
+    marginTop: 10,
   },
-  headerContainer: {
-    position: "absolute",
-    top: 50,
-    left: 20,
-    right: 20,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+  destinationMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destinationIcon: {
+    width: 40,
+    height: 40,
+  },
+  routeMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeMarkerIcon: {
+    width: 32,
+    height: 32,
+  },
+  pickupMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+  },
+  pickupMarkerHead: {
+    backgroundColor: '#10B981',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  pickupMarkerPoint: {
+    width: 4,
+    height: 10,
+    backgroundColor: '#10B981',
+    marginTop: -2,
+    borderRadius: 2,
+  },
+  userMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userLocationDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    zIndex: 2,
+  },
+  userLocationRipple: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
+    backgroundColor: 'rgba(0, 122, 255, 0.2)',
+    zIndex: 1,
+  },
+  userMarkerIcon: {
+    width: 40,
+    height: 40,
+  },
+  busMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  busMarkerIcon: {
+    width: 36,
+    height: 36,
+    marginBottom: 4,
+  },
+  busMarkerPointer: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+  },
+  enhancedHeaderContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: 'hidden',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
   },
-  backButton: {
-    backgroundColor: "rgba(0, 122, 255, 0.1)",
-    padding: 10,
+  enhancedHeaderGradient: {
+    paddingTop: Platform.OS === 'ios' ? 44 : 40,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+  },
+  headerDecorCircle1: {
+    position: 'absolute',
+    top: -20,
+    right: -20,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  headerDecorCircle2: {
+    position: 'absolute',
+    bottom: -10,
+    left: 40,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  enhancedHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  enhancedBackButton: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    elevation: 2,
-    shadowColor: "#007AFF",
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  headerInfo: {
+  enhancedHeaderInfo: {
     flex: 1,
-    alignItems: "center",
-    marginHorizontal: 16,
+    paddingHorizontal: 16,
+    alignItems: 'center',
   },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#007AFF",
-    marginBottom: 2,
+  enhancedHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 4,
   },
-  headerSubtitle: {
-    fontSize: 13,
-    color: "#666",
-    fontWeight: "500",
+  enhancedHeaderSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '500',
   },
-  refreshButton: {
-    backgroundColor: "rgba(0, 122, 255, 0.1)",
-    padding: 10,
+  enhancedRefreshButton: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    elevation: 2,
-    shadowColor: "#007AFF",
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   refreshingButton: {
-    backgroundColor: "rgba(108, 117, 125, 0.1)",
+    opacity: 0.7,
   },
-  errorBanner: {
-    position: "absolute",
-    top: 140,
-    left: 20,
-    right: 20,
-    backgroundColor: "#ffebee",
-    borderColor: "#f8bbd9",
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    elevation: 8,
-    shadowColor: "#dc3545",
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
+  instructionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
   },
-  errorBannerText: {
-    flex: 1,
-    color: "#721c24",
+  instructionsHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  instructionsHeaderText: {
     fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
     marginLeft: 8,
+  },
+  instructionsToggle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  instructionsContainer: {
+    marginTop: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 12,
+  },
+  instructionStep: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  instructionStepNumber: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 2,
+  },
+  instructionStepNumberText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#0052d4',
+  },
+  instructionStepText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#fff',
+    lineHeight: 18,
+  },
+  instructionStepBold: {
+    fontWeight: '700',
+  },
+  instructionTipBanner: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 4,
+    alignItems: 'center',
+  },
+  instructionTipIcon: {
     marginRight: 8,
   },
-  routeHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(0, 0, 0, 0.08)",
-  },
-  routeName: {
-    fontSize: 16,
-    fontWeight: "700",
+  instructionTipText: {
+    fontSize: 12,
+    color: '#fff',
     flex: 1,
-    letterSpacing: -0.2,
   },
-  refreshButtonSmall: {
-    padding: 10,
-    borderRadius: 22,
-    backgroundColor: "rgba(0, 122, 255, 0.12)",
-    shadowColor: "#007AFF",
+  dropoffInstructionsContainer: {
+    marginTop: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 12,
+  },
+  errorBanner: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 140 : 120,
+    left: 20,
+    right: 20,
+    backgroundColor: '#fee2e2',
+    padding: 12,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 9,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
   },
+  errorBannerText: {
+    flex: 1,
+    marginLeft: 10,
+    marginRight: 10,
+    color: '#b91c1c',
+    fontSize: 14,
+    fontWeight: '500',
+  },
   bottomPanel: {
-    position: "absolute",
+    position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#ffffff",
-    padding: 24,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    elevation: 24,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: -4 },
-    borderTopWidth: 1,
-    borderTopColor: "rgba(0, 0, 0, 0.05)",
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: -4,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 16,
   },
-  panelTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 16,
-    color: "#1a1a1a",
-    letterSpacing: -0.3,
-  },
-  panelSubtitle: {
-    fontSize: 15,
-    color: "#666",
-    marginBottom: 12,
-    fontWeight: "500",
-  },
-  panelInstruction: {
-    fontSize: 15,
-    color: "#444",
-    textAlign: "center",
-    marginBottom: 18,
-    lineHeight: 21,
-    fontWeight: "400",
-  },
-  // New Enhanced Bus Card Styles
-  busCard: {
-    width: 200,
-    marginRight: 16,
-    borderRadius: 20,
-    padding: 16,
-    justifyContent: 'space-between',
-    minHeight: 140,
-  },
-  busCardHeader: {
+  pickupHeaderContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
   },
+  pickupIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#E3F2FD',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  pickupTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  pickupSubtitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pickupSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginLeft: 4,
+  },
+  pickupInstructionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EBF5FF',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#007AFF',
+  },
+  pickupInstructionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1E40AF',
+    marginLeft: 10,
+    lineHeight: 20,
+  },
+  pickupSelectedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#10B981',
+  },
+  pickupSelectedText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#065F46',
+    marginLeft: 10,
+    fontWeight: '600',
+  },
+  passengerCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  passengerCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  passengerLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+    marginLeft: 8,
+  },
+  passengerControlsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  passengerBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  passengerBtnDisabled: {
+    opacity: 0.5,
+  },
+  passengerCountDisplay: {
+    alignItems: 'center',
+  },
+  passengerCountNum: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  passengerCountLabelSmall: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: -2,
+  },
+  seatsAvailableContainer: {
+    marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  seatsAvailableText: {
+    fontSize: 13,
+    color: '#4B5563',
+  },
+  currentLocationButtonEnhanced: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4B5563',
+    paddingVertical: 14,
+    borderRadius: 14,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  disabledButton: {
+    opacity: 0.7,
+  },
+  buttonTextEnhanced: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  actionButtonRowEnhanced: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButtonEnhanced: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  cancelButtonEnhanced: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  cancelButtonTextEnhanced: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+  confirmButtonEnhanced: {
+    backgroundColor: '#007AFF',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  disabledButtonEnhanced: {
+    backgroundColor: '#93C5FD',
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  confirmButtonTextEnhanced: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  busCard: {
+    width: 280,
+    marginRight: 16,
+    borderRadius: 16,
+    padding: 0,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  busCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
   busIconBadge: {
     width: 40,
     height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
+    borderRadius: 20,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   busPlate: {
-    fontWeight: "700",
-    fontSize: 18,
-    letterSpacing: 0.5,
+    fontSize: 16,
+    fontWeight: '700',
   },
   busStatusText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
     marginTop: 2,
   },
   busCardBody: {
-    marginBottom: 12,
-    gap: 6,
+    padding: 12,
+    gap: 8,
   },
   busInfoItem: {
     flexDirection: 'row',
@@ -2288,539 +3138,338 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   busInfoText: {
-    fontSize: 13,
-    color: '#555',
-    fontWeight: '500',
-    flex: 1,
+    fontSize: 14,
+    color: '#4b5563',
   },
-
+  capacityBar: {
+    height: 4,
+    backgroundColor: '#f3f4f6',
+    marginTop: 8,
+  },
+  capacityFill: {
+    height: '100%',
+  },
   noBusesContainer: {
-    alignItems: "center",
-    padding: 24,
     width: 300,
-    backgroundColor: "#f8f9fa",
-    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: '#fff',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.05)",
+    borderColor: '#f0f0f0',
     borderStyle: 'dashed',
-    marginLeft: 4,
   },
   noBusesIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#eee',
-    justifyContent: 'center',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#f5f5f5',
     alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'center',
+    marginBottom: 12,
   },
   noBusesText: {
-    color: "#333",
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: '600',
+    color: '#333',
     marginBottom: 4,
   },
   noBusesSubtext: {
-    color: "#888",
-    fontSize: 13,
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
   },
-
-  // Modal Content Card Style
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
   modalContentCard: {
-    backgroundColor: "#fff",
+    backgroundColor: '#fff',
     borderRadius: 28,
-    padding: 0,
-    width: "90%",
-    maxWidth: 400,
-    elevation: 24,
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.25,
+    shadowRadius: 32,
+    elevation: 24,
+    width: '100%',
+    maxWidth: 380,
   },
   modalHeader: {
     alignItems: 'center',
-    paddingVertical: 24,
-    backgroundColor: '#F8F9FA',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
+    paddingTop: 28,
+    paddingBottom: 24,
+    paddingHorizontal: 20,
+    backgroundColor: '#007AFF',
   },
   modalHeaderIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#E3F2FD',
-    justifyContent: 'center',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 16,
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
   },
   modalTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#1a1a1a",
-    letterSpacing: -0.5,
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 4,
   },
   modalSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 4,
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
   },
   modalBody: {
     padding: 24,
-    gap: 24,
   },
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 16,
+    marginBottom: 24,
   },
   detailItem: {
     flex: 1,
   },
   detailLabel: {
-    fontSize: 12,
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    fontWeight: '600',
+    fontSize: 13,
+    color: '#6B7280',
     marginBottom: 6,
+    fontWeight: '600',
+    textTransform: 'uppercase',
   },
   detailValue: {
-    fontSize: 16,
-    color: '#333',
+    fontSize: 17,
     fontWeight: '700',
+    color: '#111827',
   },
-  detailSection: {},
+  detailSection: {
+    marginBottom: 24,
+  },
   driverRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    backgroundColor: '#F9FAFB',
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
   driverValue: {
     fontSize: 16,
-    color: '#333',
     fontWeight: '600',
+    color: '#374151',
+    marginLeft: 12,
   },
   seatCountValue: {
     fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
+    color: '#6B7280',
   },
   modalCapacityBarBg: {
-    height: 10,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 5,
+    height: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 6,
     overflow: 'hidden',
   },
   modalCapacityBarFill: {
     height: '100%',
-    borderRadius: 5,
+    borderRadius: 6,
   },
-
-  modalButtonRow: {
-    flexDirection: "row",
-    padding: 24,
-    paddingTop: 0,
+  modalFooter: {
+    flexDirection: 'row',
+    padding: 20,
+    backgroundColor: '#F9FAFB',
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
     gap: 12,
   },
-  actionButton: {
+  modalCloseButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 16,
-    alignItems: "center",
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCloseText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  modalSelectButton: {
+    flex: 2,
+    paddingVertical: 16,
+    borderRadius: 14,
+    backgroundColor: '#007AFF',
+    alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    shadowColor: "#000",
+    gap: 8,
+    shadowColor: '#007AFF',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
   },
-  cancelButton: {
-    backgroundColor: "#f5f5f5",
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  confirmButton: {
-    backgroundColor: "#007AFF",
-    shadowColor: "#007AFF",
-  },
-  disabledButton: {
-    backgroundColor: "#B0C4DE",
-    opacity: 0.7,
-    shadowOpacity: 0.05,
-  },
-  buttonText: {
-    color: "#fff",
-    fontWeight: "700",
+  modalSelectText: {
     fontSize: 16,
-  },
-  // Override for cancel button text
-  cancelButtonText: {
-    color: '#333',
+    fontWeight: '700',
+    color: '#fff',
   },
 
-  // ... other existing styles ...
-  capacityBar: {
-    height: 6,
-    backgroundColor: "#F0F0F0",
-    borderRadius: 3,
-    marginTop: 10,
-    marginBottom: 4,
-    width: "100%",
-    overflow: "hidden",
-  },
-  capacityFill: {
-    height: "100%",
-    borderRadius: 3,
-  },
-  passengerCountContainer: {
-    backgroundColor: "#f8f9fa",
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.05)",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  passengerCountLabel: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 10,
-  },
-  passengerCountControls: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 15,
-  },
-  passengerCountButton: {
-    backgroundColor: "#007AFF",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  passengerCountText: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#333",
-    minWidth: 30,
-    textAlign: "center",
-  },
-  availableSeatsText: {
-    fontSize: 14,
-    color: "#6c757d",
-    textAlign: "center",
-    marginTop: 10,
-    fontStyle: "italic",
-  },
-
-  // Bus Marker Styles
-  busMarkerContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  busMarkerIcon: {
-    width: 50,
-    height: 50,
-  },
-  busMarkerPointer: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderTopWidth: 10,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-  },
-  // Enhanced Marker Styles
-  destinationMarkerContainer: {
-    alignItems: "center",
-    justifyContent: "flex-end",
-    height: 50,
-    width: 50,
-  },
-  destinationMarkerHead: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#FF4B4B",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-  }, destinationMarkerPoint: {
-    width: 0,
-    height: 0,
-    backgroundColor: "transparent",
-    borderStyle: "solid",
-    borderTopWidth: 8,
-    borderRightWidth: 4,
-    borderBottomWidth: 0,
-    borderLeftWidth: 4,
-    borderTopColor: "#FF4B4B",
-    borderRightColor: "transparent",
-    borderBottomColor: "transparent",
-    borderLeftColor: "transparent",
-    marginTop: -2,
-  },
-  destinationIcon: {
-    width: 44,
-    height: 44,
-    zIndex: 2,
-  },
-  pickupMarkerContainer: {
-    alignItems: "center",
-    justifyContent: "flex-end",
-    height: 50,
-    width: 50,
-  },
-  pickupMarkerHead: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#34C759",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-  },
-  pickupMarkerPoint: {
-    width: 0,
-    height: 0,
-    backgroundColor: "transparent",
-    borderStyle: "solid",
-    borderTopWidth: 8,
-    borderRightWidth: 4,
-    borderBottomWidth: 0,
-    borderLeftWidth: 4,
-    borderTopColor: "#34C759",
-    borderRightColor: "transparent",
-    borderBottomColor: "transparent",
-    borderLeftColor: "transparent",
-    marginTop: -2,
-  },
-  userMarkerContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    width: 40,
-    height: 40,
-  },
-  userLocationDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#007AFF",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-  },
-  userLocationRipple: {
-    position: "absolute",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(0, 122, 255, 0.3)",
-    borderWidth: 2,
-    borderColor: "rgba(0, 122, 255, 0.5)",
-  },
-  userMarkerIcon: {
-    width: 32,
-    height: 32,
-  },
-
-  // Route Start/End Marker Styles
-  routeMarkerContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  routeMarkerIcon: {
-    width: 36,
-    height: 36,
-    zIndex: 2,
-  },
-  // Waiting Modal Styles (retained)
-  waitingModalContent: {
-    backgroundColor: "#fff",
-    borderRadius: 28,
-    padding: 36,
-    width: "92%",
-    maxWidth: 420,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 16,
-    borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.05)",
-  },
-  waitingHeader: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  waitingTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#FF9500",
-    marginTop: 16,
-    textAlign: "center",
-  },
-  waitingDetails: {
-    backgroundColor: "#f8f9fa",
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-  },
-  waitingInfoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  waitingInfoText: {
-    fontSize: 16,
-    color: "#333",
-    marginLeft: 12,
-    fontWeight: "500",
-  },
-  waitingStatus: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  waitingStatusText: {
-    fontSize: 18,
-    color: "#333",
-    fontWeight: "600",
-    marginTop: 16,
-    textAlign: "center",
-  },
-  waitingStatusSubtext: {
-    fontSize: 14,
-    color: "#666",
-    marginTop: 8,
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  waitingFooter: {
-    alignItems: "center",
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#e5e5e7",
-  },
-  waitingFooterText: {
-    fontSize: 14,
-    color: "#8e8e93",
-    textAlign: "center",
-    fontStyle: "italic",
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.4)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  // Legacy "simple" modal styles (still referenced in some JSX)
   modalContent: {
-    backgroundColor: "#fff",
-    borderRadius: 24,
-    padding: 28,
-    width: "85%",
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    width: '90%',
     maxWidth: 400,
-    elevation: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  // Location Permission Modal
-  modalLabel: {
-    fontSize: 15,
-    color: "#6c757d",
-    marginTop: 8,
-  },
-  modalValue: {
-    fontSize: 16,
-    color: "#333",
-    fontWeight: "bold",
-    marginBottom: 4,
+    alignItems: 'center',
   },
   modalText: {
     fontSize: 16,
-    color: "#6c757d",
-    textAlign: "center",
-    lineHeight: 22,
-    marginBottom: 8,
-    marginTop: 10,
+    color: '#4B5563',
+    textAlign: 'center',
+    marginVertical: 12,
+    lineHeight: 24,
   },
-  pickupLocationInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#e8f5e8",
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#c8e6c9",
-    shadowColor: "#4caf50",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  pickupLocationText: {
-    marginLeft: 8,
-    fontSize: 15,
-    color: "#2e7d32",
-    fontWeight: "600",
-    letterSpacing: 0.2,
-  },
-  currentLocationButton: {
-    backgroundColor: "#007AFF",
-    padding: 16,
-    borderRadius: 14,
-    alignItems: "center",
-    marginBottom: 12,
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 10,
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  modalButtonRow: {
+    flexDirection: 'row',
+    marginTop: 20,
+    width: '100%',
+    justifyContent: 'space-between',
     gap: 12,
+  },
+
+  // Waiting modal (enhanced)
+  waitingModalContentEnhanced: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 24,
+    width: '90%',
+    maxWidth: 400,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  waitingHeaderEnhanced: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  waitingIconWrapper: {
+    width: 80,
+    height: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  waitingIconCircle: {
+    position: 'absolute',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FF9500',
+  },
+  waitingTitleEnhanced: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  waitingSubtitleEnhanced: {
+    fontSize: 15,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+  waitingDetailsEnhanced: {
+    width: '100%',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 24,
+  },
+  waitingInfoRowEnhanced: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  waitingInfoIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E3F2FD',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  waitingLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  waitingValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  waitingDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 12,
+    marginLeft: 48,
+  },
+  waitingStatusEnhanced: {
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    width: '100%',
+  },
+  waitingStatusTextEnhanced: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#B45309',
+    marginBottom: 4,
+  },
+  waitingStatusSubtextEnhanced: {
+    fontSize: 12,
+    color: '#92400E',
+    textAlign: 'center',
+  },
+
+  // Compass Direction Indicator Styles
+  userMarkerWithCompass: {
+    width: 80,
+    height: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compassConeContainer: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

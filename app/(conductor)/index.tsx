@@ -131,6 +131,19 @@ export function ConductorScreen() {
   const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(
     new Set()
   );
+
+  // Drop-off modal state for partial group drop-offs
+  const [showDropOffModal, setShowDropOffModal] = useState(false);
+  const [dropOffCount, setDropOffCount] = useState(1);
+  const [selectedPassengerForDropOff, setSelectedPassengerForDropOff] = useState<Passenger | null>(null);
+
+  // Single guest passenger entry - Use a fixed UUID format for guest passengers
+  // This is a reserved UUID that won't conflict with real user IDs
+  const GUEST_PASSENGER_ID = "00000000-0000-0000-0000-000000000000";
+  const [guestPassengerCount, setGuestPassengerCount] = useState(0);
+
+  const currentTripRef = useRef<Trip | null>(null);
+
   // Store the assigned bus information even when there's no active trip
   const [assignedBus, setAssignedBus] = useState<{
     id: string;
@@ -248,7 +261,7 @@ export function ConductorScreen() {
   useEffect(() => {
     const waitingCount = passengers.filter((p) => p.status === "waiting").length;
     let animationRef: Animated.CompositeAnimation | null = null;
-    
+
     if (waitingCount > 0) {
       const pulse = Animated.sequence([
         Animated.timing(pulseAnimation, {
@@ -267,7 +280,7 @@ export function ConductorScreen() {
     } else {
       pulseAnimation.setValue(1);
     }
-    
+
     return () => {
       if (animationRef) {
         animationRef.stop();
@@ -443,24 +456,39 @@ export function ConductorScreen() {
           boarded_at: p.boarded_at,
           passenger_count: p.passenger_count,
           users: Array.isArray(p.users) ? p.users[0] : p.users,
-        })),
-      };      // Calculate data before state updates to batch them
+        })),      };      // Calculate data before state updates to batch them
       const boardedPassengers = transformedTrip.trip_passengers.filter(
         (p: Passenger) => p.status === "boarded"
       );
-      const totalBoardedCount = boardedPassengers.reduce(
-        (sum: number, p: Passenger) => sum + (p.passenger_count || 1),
-        0
+      
+      // Find the guest passenger record from the database (if exists)
+      const guestPassengerFromDB = transformedTrip.trip_passengers.find(
+        (p: Passenger) => p.passenger_id === GUEST_PASSENGER_ID
       );
+      
+      // Calculate registered passengers (excluding guest entry)
+      const registeredBoardedCount = boardedPassengers
+        .filter((p: Passenger) => p.passenger_id !== GUEST_PASSENGER_ID)
+        .reduce((sum: number, p: Passenger) => sum + (p.passenger_count || 1), 0);
+      
       const passengerIds = new Set(
-        boardedPassengers.map((p: Passenger) => p.passenger_id)
+        boardedPassengers
+          .filter((p: Passenger) => p.passenger_id !== GUEST_PASSENGER_ID)
+          .map((p: Passenger) => p.passenger_id)
       );
+
+      // Get guest count from the database record (not calculated)
+      const guestCount = guestPassengerFromDB?.passenger_count || 0;
+      const busPassengerCount = busInfo.passengers || 0;
+
+      console.log(`📊 Passenger calculation: Bus=${busPassengerCount}, Registered=${registeredBoardedCount}, Guests=${guestCount}`);
 
       // Batch all state updates together to prevent multiple re-renders
       setCurrentTrip(transformedTrip);
-      setPassengers(transformedTrip.trip_passengers);
-      setPassengerCount(totalBoardedCount);
+      setPassengers(transformedTrip.trip_passengers.filter((p: Passenger) => p.status !== "cancelled"));
+      setPassengerCount(busPassengerCount); // Use actual bus passenger count
       setScannedPassengers(passengerIds);
+      setGuestPassengerCount(guestCount); // Restore guest count from database
 
       // Check for waiting passengers and show alert
       const waitingPassengers = transformedTrip.trip_passengers.filter(
@@ -480,6 +508,12 @@ export function ConductorScreen() {
       setLoading(false);
     }
   }, [showAlert]);
+
+  // Keep the ref in sync with the current trip state
+  useEffect(() => {
+    currentTripRef.current = currentTrip;
+  }, [currentTrip]);
+
   useEffect(() => {
     fetchCurrentTrip();
   }, [fetchCurrentTrip]);
@@ -635,28 +669,28 @@ export function ConductorScreen() {
         }, (payload) => {
           console.log("New pickup request received:", payload.new);
 
-          // Use InteractionManager to prevent state updates during render
-          InteractionManager.runAfterInteractions(() => {
-            // Add the new pickup request to the state
-            const newPickup = {
-              id: payload.new.id,
-              commuter_id: payload.new.commuter_id,
-              commuter_name: payload.new.commuter_name,
-              passenger_count: payload.new.passenger_count,
-              status: payload.new.status,
-              created_at: payload.new.created_at,
-              pickup_lat: payload.new.pickup_lat,
-              pickup_lng: payload.new.pickup_lng,
-              dest_lat: payload.new.dest_lat,
-              dest_lng: payload.new.dest_lng,
-              notes: payload.new.notes,
-            };
+          // Immediate haptic feedback for new pickup request
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
 
-            setPendingPickups((prev) => {
-              const updatedPickups = [...prev, newPickup];
-              console.log("Updated _pendingPickups state:", updatedPickups);
-              return updatedPickups;
-            });
+          // Add the new pickup request to the state immediately
+          const newPickup = {
+            id: payload.new.id,
+            commuter_id: payload.new.commuter_id,
+            commuter_name: payload.new.commuter_name,
+            passenger_count: payload.new.passenger_count,
+            status: payload.new.status,
+            created_at: payload.new.created_at,
+            pickup_lat: payload.new.pickup_lat,
+            pickup_lng: payload.new.pickup_lng,
+            dest_lat: payload.new.dest_lat,
+            dest_lng: payload.new.dest_lng,
+            notes: payload.new.notes,
+          };
+
+          setPendingPickups((prev) => {
+            const updatedPickups = [...prev, newPickup];
+            console.log("Updated _pendingPickups state:", updatedPickups);
+            return updatedPickups;
           });
         }
       )
@@ -670,18 +704,15 @@ export function ConductorScreen() {
         }, (payload) => {
           console.log("Pickup request updated:", payload.new);
 
-          // Use InteractionManager to prevent state updates during render
-          InteractionManager.runAfterInteractions(() => {
-            // If status changed to accepted or declined, remove from pending list
-            if (payload.new.status === "accepted" || payload.new.status === "declined") {
-              setPendingPickups((prev) => prev.filter((p) => p.id !== payload.new.id));
-            } else {
-              // Update the pickup request in state
-              setPendingPickups((prev) =>
-                prev.map((p) => (p.id === payload.new.id ? { ...p, ...payload.new } : p))
-              );
-            }
-          });
+          // If status changed to accepted or declined, remove from pending list
+          if (payload.new.status === "accepted" || payload.new.status === "declined") {
+            setPendingPickups((prev) => prev.filter((p) => p.id !== payload.new.id));
+          } else {
+            // Update the pickup request in state
+            setPendingPickups((prev) =>
+              prev.map((p) => (p.id === payload.new.id ? { ...p, ...payload.new } : p))
+            );
+          }
         }
       )
       .subscribe();
@@ -693,6 +724,149 @@ export function ConductorScreen() {
       pickupSubscription.unsubscribe();
     };
   }, [currentTrip?.buses?.id, assignedBus?.id]);
+
+  // Real-time subscription to detect new trips for the assigned bus
+  // This ensures the conductor is automatically notified when a driver starts a trip
+  useEffect(() => {
+    const busId = assignedBus?.id;
+    if (!busId) {
+      console.log("No assigned bus ID available for trip detection subscription.");
+      return;
+    }
+
+    console.log("🚌 Setting up trip detection subscription for bus ID:", busId); const tripSubscription = supabase
+      .channel(`trips_bus_${busId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "trips",
+          filter: `bus_id=eq.${busId}`,
+        }, (payload) => {
+          console.log("🆕 New trip detected for bus:", payload.new);
+
+          // Only refresh if there's no active trip currently
+          // This prevents unnecessary refreshes when we already have a trip
+          if (currentTripRef.current) {
+            console.log("⏭️ Skipping refresh - already have an active trip");
+            return;
+          }
+
+          // Use InteractionManager to prevent state updates during render
+          InteractionManager.runAfterInteractions(() => {
+            // Trigger haptic feedback to alert conductor
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+            // Show notification about new trip
+            setNotificationData({ name: "Driver Started Trip", count: 0 });
+            setShowNotification(true);
+
+            // Animate notification
+            Animated.sequence([
+              Animated.timing(notificationAnimation, {
+                toValue: 1,
+                duration: 300,
+                useNativeDriver: true,
+              }),
+              Animated.delay(3000),
+              Animated.timing(notificationAnimation, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: true,
+              }),
+            ]).start(() => {
+              setShowNotification(false);
+            });
+
+            // Refresh trip data to load the new trip
+            fetchCurrentTrip();
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "trips",
+          filter: `bus_id=eq.${busId}`,
+        },
+        (payload) => {
+          console.log("🔄 Trip updated for bus:", payload.new);
+
+          const newStatus = payload.new.status;
+          const oldStatus = payload.old?.status;
+
+          // Only process if status actually changed (not just location updates)
+          if (newStatus === oldStatus) {
+            console.log("⏭️ Skipping - no status change");
+            return;
+          }
+
+          console.log(`Trip status changed: ${oldStatus} -> ${newStatus}`);          // Only refresh if:
+          // 1. There's no active trip AND driver started a new trip (ongoing/waiting)
+          // 2. OR the current trip ended (completed/cancelled) and we need to clear it
+          const isNewTripStarting = !currentTripRef.current &&
+            (newStatus === "ongoing" || newStatus === "waiting" ||
+              newStatus === "Ongoing" || newStatus === "Waiting");
+
+          const isCurrentTripEnding = currentTripRef.current?.id === payload.new.id &&
+            (newStatus === "completed" || newStatus === "cancelled" ||
+              newStatus === "Completed" || newStatus === "Cancelled");
+
+          if (!isNewTripStarting && !isCurrentTripEnding) {
+            console.log("⏭️ Skipping refresh - not relevant status change");
+            return;
+          }
+
+          // Use InteractionManager to prevent state updates during render
+          InteractionManager.runAfterInteractions(() => {
+            if (isNewTripStarting) {
+              // Trigger haptic feedback
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+              // Show notification
+              setNotificationData({ name: "Driver Started Trip", count: 0 });
+              setShowNotification(true);
+
+              Animated.sequence([
+                Animated.timing(notificationAnimation, {
+                  toValue: 1,
+                  duration: 300,
+                  useNativeDriver: true,
+                }),
+                Animated.delay(2000),
+                Animated.timing(notificationAnimation, {
+                  toValue: 0,
+                  duration: 300,
+                  useNativeDriver: true,
+                }),
+              ]).start(() => {
+                setShowNotification(false);
+              });
+            }
+
+            // Refresh trip data
+            fetchCurrentTrip();
+          });
+        }
+      )
+      .subscribe((status) => {
+        console.log("🚌 Trip detection subscription status:", status);
+        if (status === "SUBSCRIBED") {
+          console.log("✅ Successfully subscribed to trip updates for bus:", busId);
+        } else if (status === "CHANNEL_ERROR") {
+          console.error("❌ Failed to subscribe to trip updates");
+        }
+      });
+
+    return () => {
+      console.log("🔌 Unsubscribing from trip detection for bus ID:", busId);
+      tripSubscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignedBus?.id]); // Only re-subscribe when bus ID changes, not on every fetchCurrentTrip change
 
   const handleAcceptPickup = async (pickupId: string) => {
     try {
@@ -999,7 +1173,7 @@ export function ConductorScreen() {
     }
   };
 
-  // Add guest passenger - only updates passenger count, doesn't create trip_passengers record
+  // Add guest passenger - creates or updates a single guest trip_passengers record
   const addGuestPassenger = async () => {
     if (!currentTrip || guestCount < 1) {
       showAlert(
@@ -1020,7 +1194,7 @@ export function ConductorScreen() {
     }
 
     try {
-      // Only update the bus passenger count - guests are just a headcount
+      // Update the bus passenger count in database
       const newPassengerCount = passengerCount + guestCount;
       const { error: busError } = await supabase
         .from("buses")
@@ -1028,10 +1202,88 @@ export function ConductorScreen() {
         .eq("id", currentTrip.buses.id);
 
       if (busError) {
+        console.error("Error updating bus passenger count:", busError);
         throw busError;
       }
 
-      // Update local state
+      console.log("Bus passenger count updated to:", newPassengerCount);
+
+      // Check if guest passenger entry already exists for this trip
+      const existingGuestPassenger = passengers.find(
+        (p) => p.id === GUEST_PASSENGER_ID || p.passenger_id === GUEST_PASSENGER_ID
+      );
+
+      if (existingGuestPassenger) {
+        // Update existing guest passenger record - increment the count
+        const newGuestCount = (existingGuestPassenger.passenger_count || 0) + guestCount;
+        
+        // Update in database
+        const { error: updateError } = await supabase
+          .from("trip_passengers")
+          .update({ 
+            passenger_count: newGuestCount,
+            boarded_at: new Date().toISOString() // Update timestamp
+          })
+          .eq("trip_id", currentTrip.id)
+          .eq("passenger_id", GUEST_PASSENGER_ID);
+
+        if (updateError) {
+          console.error("Error updating guest passenger count:", updateError);
+          throw updateError;
+        }
+
+        // Update local state
+        setPassengers((prev) =>
+          prev.map((p) =>
+            p.id === GUEST_PASSENGER_ID || p.passenger_id === GUEST_PASSENGER_ID
+              ? { ...p, passenger_count: newGuestCount, boarded_at: new Date().toISOString() }
+              : p
+          )
+        );
+        setGuestPassengerCount(newGuestCount);
+
+        console.log(`Guest passenger count updated to: ${newGuestCount}`);      } else {
+        // Create new guest passenger record in database
+        // Use dummy coordinates (0,0) for guests since they don't have pickup/destination
+        const { data: insertedGuest, error: insertError } = await supabase
+          .from("trip_passengers")
+          .insert({
+            trip_id: currentTrip.id,
+            bus_id: currentTrip.buses.id,
+            passenger_id: GUEST_PASSENGER_ID, // Special ID for guest passengers
+            pickup_lat: 0, // Dummy coordinate for guest passengers
+            pickup_lng: 0, // Dummy coordinate for guest passengers
+            dest_lat: 0, // Dummy coordinate for guest passengers
+            dest_lng: 0, // Dummy coordinate for guest passengers
+            status: "boarded",
+            passenger_count: guestCount,
+            boarded_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error("Error creating guest passenger record:", insertError);
+          throw insertError;
+        }
+
+        console.log("Created guest passenger record:", insertedGuest);
+
+        // Create local guest passenger entry for display
+        const guestPassenger: Passenger = {
+          id: insertedGuest?.id || GUEST_PASSENGER_ID,
+          passenger_id: GUEST_PASSENGER_ID,
+          status: "boarded",
+          boarded_at: new Date().toISOString(),
+          passenger_count: guestCount,
+          users: undefined,
+        };
+
+        // Add guest to local passengers list
+        setPassengers((prev) => [...prev, guestPassenger]);
+        setGuestPassengerCount(guestCount);
+      }
+
       setPassengerCount(newPassengerCount);
 
       // Haptic feedback
@@ -1040,7 +1292,7 @@ export function ConductorScreen() {
       const guestText = guestCount > 1 ? `${guestCount} guests` : "1 guest";
       showAlert(
         "Guests Added! ✅",
-        `${guestText} added to the passenger count.`,
+        `${guestText} added successfully.`,
         "success"
       );
 
@@ -1055,11 +1307,167 @@ export function ConductorScreen() {
       );
     }
   };
+
+  // Remove passenger - handles both registered and guest passengers
+  const handleRemovePassenger = async (passenger: Passenger) => {
+    if (!currentTrip) return;
+
+    const totalCount = passenger.passenger_count || 1;
+
+    // If group has more than 1 passenger, show modal for selecting drop-off count
+    if (totalCount > 1) {
+      setSelectedPassengerForDropOff(passenger);
+      setDropOffCount(1); // Reset to 1
+      setShowDropOffModal(true);
+    } else {
+      // Single passenger - drop off directly with confirmation
+      confirmDropOff(passenger, 1);
+    }
+  };
+  // Confirm and execute the drop-off
+  const confirmDropOff = async (passenger: Passenger, countToDropOff: number) => {
+    if (!currentTrip) return;
+
+    const isGuest = passenger.passenger_id === GUEST_PASSENGER_ID || !passenger.passenger_id || passenger.id.startsWith("guest-");
+    const passengerName = passenger.users?.fullName ||
+      (isGuest ? "Guest Passenger" : `Passenger #${passenger.id.substring(0, 8)}`);
+    const totalCount = passenger.passenger_count || 1;
+    const remainingCount = totalCount - countToDropOff;
+
+    // Show confirmation dialog
+    showAlert(
+      "Drop Off Passenger",
+      `Are you sure you want to drop off ${countToDropOff} of ${totalCount} passenger${countToDropOff > 1 ? "s" : ""}?`,
+      "warning",
+      async () => {
+        try {
+          // Update bus passenger count
+          const newBusPassengerCount = Math.max(0, passengerCount - countToDropOff);
+          const { error: busError } = await supabase
+            .from("buses")
+            .update({ passengers: newBusPassengerCount })
+            .eq("id", currentTrip.buses.id);
+
+          if (busError) {
+            throw busError;
+          }
+
+          setPassengerCount(newBusPassengerCount);
+
+          if (remainingCount <= 0) {
+            // Drop off all - remove or mark as completed
+            if (isGuest) {
+              // Guest: update database to mark as completed (since it's now stored in Supabase)
+              const { error: updateError } = await supabase
+                .from("trip_passengers")
+                .update({ status: "completed" })
+                .eq("trip_id", currentTrip.id)
+                .eq("passenger_id", GUEST_PASSENGER_ID);
+
+              if (updateError) {
+                console.error("Error updating guest passenger:", updateError);
+              }
+              
+              // Remove from local list
+              setPassengers((prev) => prev.filter((p) => p.passenger_id !== GUEST_PASSENGER_ID && p.id !== passenger.id));
+              setGuestPassengerCount(0);
+            } else {
+              // Registered: update database status
+              const { error: updateError } = await supabase
+                .from("trip_passengers")
+                .update({ status: "completed" })
+                .eq("id", passenger.id);
+
+              if (updateError) throw updateError;
+
+              // Update pickup_requests if exists
+              await supabase
+                .from("pickup_requests")
+                .update({ status: "completed" })
+                .eq("commuter_id", passenger.passenger_id)
+                .eq("bus_id", currentTrip.buses.id)
+                .in("status", ["pending", "accepted"]);
+
+              // Remove from local list
+              setPassengers((prev) => prev.filter((p) => p.id !== passenger.id));
+            }          } else {
+            // Partial drop-off - reduce the passenger_count
+            if (isGuest) {
+              // Guest: update database with reduced count
+              const { error: updateError } = await supabase
+                .from("trip_passengers")
+                .update({ passenger_count: remainingCount })
+                .eq("trip_id", currentTrip.id)
+                .eq("passenger_id", GUEST_PASSENGER_ID);
+
+              if (updateError) {
+                console.error("Error updating guest passenger count:", updateError);
+              }
+
+              // Update local state
+              setPassengers((prev) =>
+                prev.map((p) =>
+                  p.passenger_id === GUEST_PASSENGER_ID || p.id === passenger.id
+                    ? { ...p, passenger_count: remainingCount }
+                    : p
+                )
+              );
+              setGuestPassengerCount(remainingCount);
+            } else {
+              // Registered: update database
+              const { error: updateError } = await supabase
+                .from("trip_passengers")
+                .update({ passenger_count: remainingCount })
+                .eq("id", passenger.id);
+
+              if (updateError) throw updateError;
+
+              // Update local state
+              setPassengers((prev) =>
+                prev.map((p) =>
+                  p.id === passenger.id
+                    ? { ...p, passenger_count: remainingCount }
+                    : p
+                )
+              );
+            }
+          }
+
+          // Haptic feedback
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+          const dropText = countToDropOff > 1 ? `${countToDropOff} passengers` : "1 passenger";
+          showAlert(
+            "Passenger Dropped Off ✅",
+            `${dropText} from ${passengerName} dropped off successfully.${remainingCount > 0 ? ` ${remainingCount} remaining.` : ""}`,
+            "success"
+          );
+
+          setShowDropOffModal(false);
+          setSelectedPassengerForDropOff(null);
+        } catch (error) {
+          console.error("Error removing passenger:", error);
+          showAlert(
+            "Error",
+            "Failed to drop off passenger. Please try again.",
+            "error"
+          );
+        }
+      },
+      "Drop Off",
+      true,
+      () => { },
+      "Cancel"
+    );
+  };
   const renderPassengerItem = ({ item }: { item: Passenger }) => {
-    // Guests have null passenger_id
-    const isGuest = !item.passenger_id;
+    // Don't show passenger if status is cancelled or completed
+    if (item.status === "cancelled" || item.status === "completed") return null;
+
+    // Detect guest: check for GUEST_PASSENGER_ID or empty passenger_id
+    const isGuest = item.passenger_id === GUEST_PASSENGER_ID || !item.passenger_id || item.id.startsWith("guest-");
     const passengerName = item.users?.fullName ||
-      (isGuest ? `Guest Passenger` : `Passenger #${item.id.substring(0, 8)}`);
+      (isGuest ? `Guest Passengers` : `Passenger #${item.id.substring(0, 8)}`);
 
     return (
       <Animated.View
@@ -1111,21 +1519,35 @@ export function ConductorScreen() {
           </View>
         </View>
 
-        <Animated.View
-          style={[
-            styles.statusIndicator,
-            {
-              backgroundColor: item.status === "boarded" ? "#34C759" : "#FF9500",
-              transform: item.status === "waiting" ? [{ scale: pulseAnimation }] : [{ scale: 1 }],
-            },
-          ]}
-        >
-          <Ionicons
-            name={item.status === "boarded" ? "checkmark" : "hourglass"}
-            size={16}
-            color="#fff"
-          />
-        </Animated.View>
+        <View style={styles.passengerActions}>
+          {/* Drop Off Button - Only show for boarded passengers */}
+          {item.status === "boarded" && (
+            <TouchableOpacity
+              style={styles.dropOffButton}
+              onPress={() => handleRemovePassenger(item)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="exit-outline" size={18} color="#FF3B30" />
+              <Text style={styles.dropOffButtonText}>Drop</Text>
+            </TouchableOpacity>
+          )}
+
+          <Animated.View
+            style={[
+              styles.statusIndicator,
+              {
+                backgroundColor: item.status === "boarded" ? "#34C759" : "#FF9500",
+                transform: item.status === "waiting" ? [{ scale: pulseAnimation }] : [{ scale: 1 }],
+              },
+            ]}
+          >
+            <Ionicons
+              name={item.status === "boarded" ? "checkmark" : "hourglass"}
+              size={16}
+              color="#fff"
+            />
+          </Animated.View>
+        </View>
       </Animated.View>
     );
   };
@@ -1144,7 +1566,7 @@ export function ConductorScreen() {
 
     const runPulse = () => {
       if (!isMounted) return;
-      
+
       animationRef = Animated.sequence([
         Animated.timing(pulseAnimationRef, {
           toValue: 1.3,
@@ -1157,7 +1579,7 @@ export function ConductorScreen() {
           useNativeDriver: true,
         }),
       ]);
-      
+
       animationRef.start(({ finished }) => {
         if (finished && isMounted && selectedRequest) {
           runPulse();
@@ -1658,11 +2080,11 @@ export function ConductorScreen() {
   useEffect(() => {
     let animationRef: Animated.CompositeAnimation | null = null;
     let isMounted = true;
-    
+
     if (_pendingPickups.length > 0) {
       const runPulse = () => {
         if (!isMounted) return;
-        
+
         animationRef = Animated.sequence([
           Animated.timing(pendingRequestsPulse, {
             toValue: 1.05,
@@ -1675,7 +2097,7 @@ export function ConductorScreen() {
             useNativeDriver: true,
           }),
         ]);
-        
+
         animationRef.start(({ finished }) => {
           if (finished && isMounted) {
             runPulse();
@@ -1698,53 +2120,51 @@ export function ConductorScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingScreen}>
+      <SafeAreaView style={styles.container}>
         <StatusBar style="light" />
-        <LinearGradient
-          colors={["#0891B2", "#06B6D4", "#22D3EE"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.loadingGradient}
-        >
-          <View style={styles.loadingIconContainer}>
-            <View style={styles.loadingIconBg}>
-              <Ionicons name="bus" size={56} color="#0891B2" />
-            </View>
-            <View style={styles.loadingPulseRing} />
+        <View style={styles.loadingContainer}>
+          <View style={styles.loadingSpinner}>
+            <ActivityIndicator size="large" color="#0891B2" />
           </View>
-
-          <Text style={styles.loadingTitle}>Conductor Dashboard</Text>
-          <Text style={styles.loadingSubtitle}>Preparing your workspace...</Text>
-
-          <View style={styles.loadingIndicatorContainer}>
-            <ActivityIndicator size="large" color="#fff" />
-          </View>
-
-          <View style={styles.loadingDotsContainer}>
-            <View style={[styles.loadingDotActive]} />
-            <View style={[styles.loadingDotInactive]} />
-            <View style={[styles.loadingDotInactive]} />
-          </View>
-        </LinearGradient>
-      </View>
+          <Text style={styles.loadingText}>Loading your Dashboard...</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
   if (!currentTrip) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar style={theme === "dark" ? "light" : "dark"} />
-        <View style={styles.header}>
-          <View style={styles.headerContent}>
-            <Ionicons name="person-circle" size={28} color="#fff" />
-            <Text style={styles.headerTitle}>Conductor Dashboard</Text>
+        <StatusBar style="light" />
+
+        {/* Premium Gradient Header - Enhanced for No Active Trip */}
+        <LinearGradient
+          colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
+        >
+          <View style={styles.headerTop}>
+            <View style={styles.headerContent}>
+              <View style={styles.headerIconBg}>
+                <Ionicons name="bus" size={24} color="#0891B2" />
+              </View>
+              <View style={styles.headerTextContainer}>
+                <Text style={styles.headerTitle}>Conductor Dashboard</Text>
+                <Text style={styles.headerSubtitle}>
+                  {assignedBus
+                    ? `${assignedBus.plate_number} • ${assignedBus.routes?.name || "No Route Assigned"}`
+                    : "Not Assigned • Offline"
+                  }
+                </Text>
+              </View>
+            </View>
+            <View style={styles.tripStatusBadge}>
+              <View style={[styles.statusPulse, { backgroundColor: "#FFB000" }]} />
+              <Text style={styles.tripStatusText}>Standby</Text>
+            </View>
           </View>
-          {assignedBus && (
-            <Text style={styles.headerSubtitle}>
-              {assignedBus.plate_number} • {assignedBus.routes?.name || "No Route Assigned"}
-            </Text>
-          )}
-        </View>
+        </LinearGradient>
 
         {/* Show assigned bus info card */}
         {assignedBus && (
@@ -2075,7 +2495,7 @@ export function ConductorScreen() {
         <View style={styles.passengersSection}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>
-              All Passengers ({passengers.length})
+              All Passengers ({passengers.filter((p) => p.status !== "cancelled" && p.status !== "completed").length})
             </Text>
             <TouchableOpacity
               style={styles.reloadButton}
@@ -2090,11 +2510,13 @@ export function ConductorScreen() {
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.passengersList} showsVerticalScrollIndicator={true}>
-            {passengers.map((item) => (
-              <View key={item.id} style={styles.passengerItem}>
-                {renderPassengerItem({ item })}
-              </View>
-            ))}
+            {passengers
+              .filter((p) => p.status !== "cancelled" && p.status !== "completed")
+              .map((item) => (
+                <View key={item.id}>
+                  {renderPassengerItem({ item })}
+                </View>
+              ))}
           </ScrollView>
         </View>
       </ScrollView>
@@ -2316,6 +2738,132 @@ export function ConductorScreen() {
         </View>
       </Modal>
 
+      {/* Drop-Off Modal for partial group drop-offs */}
+      <Modal
+        visible={showDropOffModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowDropOffModal(false);
+          setSelectedPassengerForDropOff(null);
+        }}
+      >
+        <View style={styles.guestModalOverlay}>
+          <View style={styles.guestModalContainer}>
+            {/* Modal Header */}
+            <LinearGradient
+              colors={["#EF4444", "#DC2626"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.guestModalHeader}
+            >
+              <View style={styles.guestModalHeaderText}>
+                <View style={styles.guestModalIconBg}>
+                  <Ionicons name="exit-outline" size={24} color="#EF4444" />
+                </View>
+                <Text style={styles.guestModalTitle}>Drop Off Passengers</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.guestModalClose}
+                onPress={() => {
+                  setShowDropOffModal(false);
+                  setSelectedPassengerForDropOff(null);
+                }}
+              >
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </LinearGradient>
+
+            {/* Modal Content */}
+            <View style={styles.guestModalContent}>
+              <Text style={styles.guestModalDescription}>
+                How many passengers do you want to drop off from this group?
+              </Text>
+
+              {/* Number Picker */}
+              <View style={styles.guestNumberPicker}>
+                <TouchableOpacity
+                  style={styles.guestNumberButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setDropOffCount(Math.max(1, dropOffCount - 1));
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="remove" size={28} color="#EF4444" />
+                </TouchableOpacity>
+
+                <View style={styles.guestNumberDisplay}>
+                  <Text style={[styles.guestNumberValue, { color: "#EF4444" }]}>{dropOffCount}</Text>
+                  <Text style={styles.guestNumberLabel}>
+                    of {selectedPassengerForDropOff?.passenger_count || 1}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.guestNumberButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setDropOffCount(
+                      Math.min(
+                        selectedPassengerForDropOff?.passenger_count || 1,
+                        dropOffCount + 1
+                      )
+                    );
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="add" size={28} color="#EF4444" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Info */}
+              <View style={styles.guestCapacityInfo}>
+                <View style={styles.guestCapacityRow}>
+                  <Ionicons name="people-outline" size={16} color="#64748B" />
+                  <Text style={styles.guestCapacityText}>
+                    {(selectedPassengerForDropOff?.passenger_count || 0) - dropOffCount} will remain after drop-off
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Modal Actions */}
+            <View style={styles.guestModalActions}>
+              <TouchableOpacity
+                style={styles.guestCancelButton}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowDropOffModal(false);
+                  setSelectedPassengerForDropOff(null);
+                }}
+              >
+                <Text style={styles.guestCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.guestConfirmButton}
+                onPress={() => {
+                  if (selectedPassengerForDropOff) {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    confirmDropOff(selectedPassengerForDropOff, dropOffCount);
+                  }
+                }}
+              >
+                <LinearGradient
+                  colors={["#EF4444", "#DC2626"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.guestConfirmGradient}
+                >
+                  <Ionicons name="exit-outline" size={18} color="#fff" />
+                  <Text style={styles.guestConfirmText}>Drop Off {dropOffCount}</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Custom Alert Modal */}
       <Modal
         visible={showCustomAlert}
@@ -2456,6 +3004,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#f2f2f7",
+  },
+  loadingSpinner: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    backgroundColor: "#E0F2FE",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
   },
   loadingContent: {
     alignItems: "center",
@@ -2747,20 +3304,21 @@ const styles = StyleSheet.create({
   scrollContent: {
     flex: 1,
     marginTop: -10,
-  }, emptyState: {
+  },
+  emptyState: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 40,
   },
   emptyStateIcon: {
-    width: 120,
-    height: 120,
+    width: 90,
+    height: 90,
     borderRadius: 60,
     backgroundColor: "#F0F8FF",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 24,
+    marginBottom: 14,
     borderWidth: 2,
     borderColor: "#E3F2FD",
   },
@@ -4657,6 +5215,30 @@ const styles = StyleSheet.create({
     color: "#64748B",
     textAlign: "center",
   },
+
+  // Passenger Actions Styles
+  passengerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  dropOffButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FEF2F2",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    gap: 4,
+  },
+  dropOffButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#FF3B30",
+  },
 });
 
 export default ConductorScreen;
+

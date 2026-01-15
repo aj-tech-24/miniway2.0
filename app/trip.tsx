@@ -1,8 +1,11 @@
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBusLocation, useRoute } from "@/contexts/RouteContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { supabase } from "@/lib/supabase";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
+import { Audio } from 'expo-av';
+import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from "expo-router";
 import React, {
   useCallback,
@@ -19,14 +22,49 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import MapView, { Camera, LatLng, Marker, Polyline } from "react-native-maps";
 import QRCode from "react-native-qrcode-svg";
+import Svg, { G, Path } from "react-native-svg";
 
 type BusLocation = LatLng;
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
+
+// --- Constants for Short Distance Testing ---
+// NOTE: Keep these sane to avoid excessive animations / memory pressure while still feeling realtime.
+const CAMERA_ZOOM_WAITING = 19;
+const CAMERA_ZOOM_BOARDED = 18;
+const CAMERA_ANIMATION_DURATION = 500; // ms
+const MARKER_ANIMATION_DURATION = 700; // ms
+const ARRIVAL_THRESHOLD = 10; // meters
+
+// Custom SVG Map Marker Component (same as DrivingModeScreen)
+const CustomMapMarker = ({
+  size = 40,
+  color = "#FF9500",
+}: {
+  size?: number;
+  color?: string;
+}) => {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <G transform="translate(0 -1028.4)">
+        <Path
+          d="m12 0c-4.4183 2.3685e-15 -8 3.5817-8 8 0 1.421 0.3816 2.75 1.0312 3.906 0.1079 0.192 0.221 0.381 0.3438 0.563l6.625 11.531 6.625-11.531c0.102-0.151 0.19-0.311 0.281-0.469l0.063-0.094c0.649-1.156 1.031-2.485 1.031-3.906 0-4.4183-3.582-8-8-8zm0 4c2.209 0 4 1.7909 4 4 0 2.209-1.791 4-4 4-2.2091 0-4-1.791-4-4 0-2.2091 1.7909-4 4-4z"
+          transform="translate(0 1028.4)"
+          fill={color}
+        />
+        <Path
+          d="m12 3c-2.7614 0-5 2.2386-5 5 0 2.761 2.2386 5 5 5 2.761 0 5-2.239 5-5 0-2.7614-2.239-5-5-5zm0 2c1.657 0 3 1.3431 3 3s-1.343 3-3 3-3-1.3431-3-3 1.343-3 3-3z"
+          transform="translate(0 1028.4)"
+          fill="white"
+        />
+      </G>
+    </Svg>
+  );
+};
 
 const haversineMeters = (a: LatLng, b: LatLng) => {
   const R = 6371000;
@@ -65,6 +103,101 @@ const getMinDistanceToRoute = (busLocation: LatLng, route: LatLng[]) => {
   return Math.min(...route.map((pt) => haversineMeters(busLocation, pt)));
 };
 
+// Clamp threshold in meters - if bus is within this distance of route, snap to it
+const ROUTE_CLAMP_THRESHOLD = 15;
+
+// Helper: Find the closest point on a line segment to a given point
+const closestPointOnSegment = (
+  point: LatLng,
+  segmentStart: LatLng,
+  segmentEnd: LatLng
+): LatLng => {
+  const dx = segmentEnd.longitude - segmentStart.longitude;
+  const dy = segmentEnd.latitude - segmentStart.latitude;
+
+  // If segment is a point (start == end), return the start point
+  if (dx === 0 && dy === 0) {
+    return segmentStart;
+  }
+
+  // Calculate the projection of the point onto the line segment
+  // t is a value between 0 and 1 representing where on the segment the closest point lies
+  const t = Math.max(0, Math.min(1, (
+    (point.longitude - segmentStart.longitude) * dx +
+    (point.latitude - segmentStart.latitude) * dy
+  ) / (dx * dx + dy * dy)));
+
+  return {
+    latitude: segmentStart.latitude + t * dy,
+    longitude: segmentStart.longitude + t * dx,
+  };
+};
+
+// Helper: Find the closest point on the entire route to the bus location
+const getClosestPointOnRoute = (busLocation: LatLng, route: LatLng[]): { point: LatLng; distance: number } => {
+  if (!busLocation || route.length === 0) {
+    return { point: busLocation, distance: Infinity };
+  }
+
+  if (route.length === 1) {
+    return { point: route[0], distance: haversineMeters(busLocation, route[0]) };
+  }
+
+  let closestPoint = route[0];
+  let minDistance = haversineMeters(busLocation, route[0]);
+
+  // Check each segment of the route
+  for (let i = 0; i < route.length - 1; i++) {
+    const segmentClosest = closestPointOnSegment(busLocation, route[i], route[i + 1]);
+    const segmentDistance = haversineMeters(busLocation, segmentClosest);
+
+    if (segmentDistance < minDistance) {
+      minDistance = segmentDistance;
+      closestPoint = segmentClosest;
+    }
+  }
+
+  return { point: closestPoint, distance: minDistance };
+};
+
+// Sound helper
+const playSound = async (type: 'success' | 'alert') => {
+  try {
+    const soundSource = type === 'success'
+      ? require('@/assets/sounds/success.mp3')
+      : require('@/assets/sounds/pickup.mp3');
+
+    const { sound } = await Audio.Sound.createAsync(soundSource, { shouldPlay: true });
+
+    sound.setOnPlaybackStatusUpdate(async (status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        await sound.unloadAsync();
+      }
+    });
+  } catch (error) {
+    // Silently fail sound playback errors
+  }
+};
+
+// Helper: Clamp bus location to route if within threshold distance
+const clampToRoute = (busLocation: LatLng, route: LatLng[]): LatLng => {
+  if (!busLocation || route.length === 0) {
+    return busLocation;
+  }
+
+  const { point, distance } = getClosestPointOnRoute(busLocation, route);
+
+  // While we are scanning, we don't clamp? Actually update happens in real-time subscription.
+
+  if (distance <= ROUTE_CLAMP_THRESHOLD) {
+    return point;
+  }
+
+  return busLocation;
+};
+
+
+
 export default function TripScreen() {
   const { theme } = useAppTheme();
   const { session } = useAuth();
@@ -74,6 +207,56 @@ export default function TripScreen() {
   const tripFinalizedRef = useRef(false);
 
   const busId = params.busId as string;
+  const tripId = params.tripId as string | undefined;
+
+  // RouteContext integration - for syncing bus location across commuters
+  const { updateBusLocation: syncBusLocation, setCurrentRoute, subscribeToBus, unsubscribeFromBus } = useRoute();
+  const trackedBus = useBusLocation(busId);
+
+  // Subscribe ASAP to this bus' updates.
+  // This listens to:
+  // 1) Postgres realtime changes on `trips` for this bus (slower, but reliable), and
+  // 2) Realtime broadcast `driver_location` (fastest, ephemeral)
+  useEffect(() => {
+    if (!busId) return;
+    subscribeToBus(busId);
+    return () => {
+      unsubscribeFromBus(busId);
+    };
+  }, [busId, subscribeToBus, unsubscribeFromBus]);
+
+  // Subscribe to route-level broadcasts for this trip's bus
+  useEffect(() => {
+    let active = true;
+
+    const setRouteFromBus = async () => {
+      if (!busId) return;
+
+      const { data: busData, error: busError } = await supabase
+        .from("buses")
+        .select("route_id")
+        .eq("id", busId)
+        .single();
+
+      if (!active) return;
+      if (busError || !busData?.route_id) return;
+
+      setCurrentRoute(busData.route_id);
+    };
+
+    setRouteFromBus();
+
+    return () => {
+      active = false;
+      // NOTE: Don't clear the route here. Clearing on unmount can tear down
+      // route subscriptions unexpectedly when navigating between commuter screens.
+      // RouteContext should be cleared by the owning flow when the user truly leaves.
+    };
+  }, [busId, setCurrentRoute]);
+
+  // NEW: keep a small debug string for the "bus location unavailable" screen
+  const [locationError, setLocationError] = useState<string | null>(null);
+
   const initialPlateNumber = (params.busPlateNumber as string) || "Unknown Bus";
   const passengerCount = parseInt(params.passengerCount as string) || 1;
 
@@ -108,6 +291,13 @@ export default function TripScreen() {
   const polylineCoords = useMemo(() => completeRoutePath, [completeRoutePath]);
 
   const [busLocation, setBusLocation] = useState<BusLocation | null>(null);
+  // Animated bus position for smooth marker transitions
+  const [animatedBusPosition, setAnimatedBusPosition] = useState<BusLocation | null>(null);
+  // Reference to the bus marker for native animation
+  const busMarkerRef = useRef<any>(null);
+  // Animation frame reference for cleanup
+  const animationFrameRef = useRef<number | null>(null);
+  const [markerUpdateSeq, setMarkerUpdateSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [eta, setEta] = useState<string | null>("Calculating...");
 
@@ -115,6 +305,8 @@ export default function TripScreen() {
   const [tripStatus, setTripStatus] = useState<"waiting" | "picked_up">(
     "waiting"
   );
+
+
   const [saving, setSaving] = useState(false);
   const [showQRCode, setShowQRCode] = useState(true);
 
@@ -125,6 +317,46 @@ export default function TripScreen() {
     LatLng[]
   >([]);
   const [routeLoading, setRouteLoading] = useState(false);
+
+  // Refs for stale closure fix in realtime subscription
+  const tripStatusRef = useRef(tripStatus);
+  const completeRouteRef = useRef(completeRoute);
+
+  // Sync refs with state
+  useEffect(() => {
+    tripStatusRef.current = tripStatus;
+  }, [tripStatus]);
+
+  useEffect(() => {
+    completeRouteRef.current = completeRoute;
+  }, [completeRoute]);
+
+  // RouteContext: Sync bus location updates to shared context
+  // This enables multiple commuters to see the same bus location
+  useEffect(() => {
+    if (busLocation && !loading) {
+      syncBusLocation(busId, busLocation);
+    }
+  }, [busLocation, busId, loading, syncBusLocation]);
+
+  // RouteContext: Listen for bus location updates from shared context
+  // This provides a secondary source of truth for bus location
+  useEffect(() => {
+    if (!trackedBus?.location || loading) return;
+
+    // Always apply context updates so the marker keeps moving.
+    // (Previously this ran only once due to `&& !busLocation` gating.)
+    setBusLocation(trackedBus.location);
+
+    // Ensure the marker is driven by an updated coordinate immediately.
+    // The smoothing effect below will still animate from this new target.
+    setAnimatedBusPosition(trackedBus.location);
+
+    // Force marker re-render in case react-native-maps doesn't update reliably.
+    setMarkerUpdateSeq((s) => s + 1);
+
+    console.log("📍 RouteContext bus location update:", trackedBus.location);
+  }, [trackedBus?.location, loading]);
 
   // transient overlay after successful scan
   const [showScanSuccess, setShowScanSuccess] = useState(false);
@@ -170,6 +402,11 @@ export default function TripScreen() {
 
   // Drop off / Cancel confirmation modal state
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
+
+  // Compass/Magnetometer state for direction indicator
+  const [compassHeading, setCompassHeading] = useState(0);
+  const [isMagnetometerAvailable, setIsMagnetometerAvailable] = useState(false);
+  const [mapCameraHeading, setMapCameraHeading] = useState(0); // Track map rotation
 
   // added: reverse geocoding with caching
   const geocodeCache = useRef<Map<string, string>>(new Map());
@@ -273,20 +510,95 @@ export default function TripScreen() {
     })();
   }, []);
 
+  // Compass heading using expo-location for better accuracy
+  useEffect(() => {
+    let headingSub: Location.LocationSubscription | null = null;
+
+    const subscribe = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setIsMagnetometerAvailable(false);
+          return;
+        }
+
+        // Check if heading is available
+        const available = await Location.hasServicesEnabledAsync();
+        setIsMagnetometerAvailable(available);
+        if (!available) return;
+
+        headingSub = await Location.watchHeadingAsync((h) => {
+          // Use trueHeading if available (more accurate), otherwise use magHeading
+          const bearing = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          setCompassHeading(Math.round(bearing));
+        });
+      } catch (error) {
+        console.error('Error setting up heading watch:', error);
+        setIsMagnetometerAvailable(false);
+      }
+    };
+
+    subscribe();
+    return () => {
+      if (headingSub) {
+        headingSub.remove();
+      }
+    };
+  }, []);
+
+
   // show green check for 0.5s when status becomes picked_up
+  // Also animate camera to point towards destination
   useEffect(() => {
     if (prevStatusRef.current === "waiting" && tripStatus === "picked_up") {
       setShowScanSuccess(true);
       setTimeout(() => setShowScanSuccess(false), 500);
+
+      // Animate camera to point towards destination when boarded
+      if (busLocation && mapRef.current) {
+        const headingToDestination = calculateBearing(busLocation, destCoords);
+        mapRef.current.animateCamera(
+          {
+            center: busLocation,
+            pitch: 60,
+            heading: headingToDestination,
+            zoom: CAMERA_ZOOM_BOARDED,
+          },
+          { duration: 800 }
+        );
+      }
     }
     prevStatusRef.current = tripStatus;
-  }, [tripStatus]);
+  }, [tripStatus, busLocation, destCoords]);
 
   // Check if bus is off route
   useEffect(() => {
     if (!busLocation || !completeRoute.length) return;
     const minDist = getMinDistanceToRoute(busLocation, completeRoute);
     setOffRouteWarning(minDist > 100); // 100 meters threshold
+  }, [busLocation, completeRoute]);
+
+  // Animate bus marker smoothly when location changes
+  // Also clamp to route if within threshold distance
+  useEffect(() => {
+    if (!busLocation) return;
+
+    // Cancel any ongoing animation
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    // Clamp the bus location to the route if within 5 meters
+    const clampedLocation = clampToRoute(busLocation, completeRoute);
+
+    // Directly update the marker position (no native interpolation / no animations).
+    // This avoids Android crashes in MapMarker.interpolate when the native side
+    // tries to animate from/to a null coordinate.
+    setAnimatedBusPosition(clampedLocation);
+
+    return;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busLocation, completeRoute]);
 
   // QR payload the conductor can scan (adjust fields as backend expects)
@@ -393,7 +705,7 @@ export default function TripScreen() {
 
     setRouteLoading(true);
     try {
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude}&key=${GOOGLE_MAPS_API_KEY}`;
       const response = await fetch(url);
       const json = await response.json();
 
@@ -515,20 +827,41 @@ export default function TripScreen() {
 
         // FIRST: Update trip_passengers status to completed/cancelled
         const newStatus = reason === "cancelled" ? "cancelled" : "completed";
-        const { error: tripPassengerError } = await supabase
-          .from("trip_passengers")
-          .update({
-            status: newStatus,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("passenger_id", session.user.id)
-          .eq("bus_id", busId);
-
-        if (tripPassengerError) {
-          throw new Error("Failed to update trip status");
+        if (reason === "arrived") {
+          await playSound('success');
         }
 
-        // SECOND: Save to travel history
+        const { error: updateError } = await supabase
+          .from("trip_passengers")
+          .update({
+            status: reason === "cancelled" ? "cancelled" : "completed",
+            dropoff_time: new Date().toISOString(),
+          })
+          .eq("passenger_id", session.user.id)
+          .eq("bus_id", busId)
+          .in("status", ["boarded", "waiting"]);
+
+        if (updateError) {
+          // Log but continue if possible, or retry?
+          console.error("Failed to update status in DB:", updateError);
+        }
+
+        // ALSO: Update pickup_requests status so driver no longer sees the pickup marker
+        const pickupRequestStatus = reason === "cancelled" ? "cancelled" : "completed";
+        const { error: pickupRequestError } = await supabase
+          .from("pickup_requests")
+          .update({
+            status: pickupRequestStatus,
+          })
+          .eq("commuter_id", session.user.id)
+          .eq("bus_id", busId)
+          .in("status", ["pending", "accepted"]);
+
+        if (pickupRequestError) {
+          console.error("Failed to update pickup_requests status:", pickupRequestError);
+        }
+
+        // 3. Update travel history
         const startName = pickupName || "Pickup location";
         const endName = destinationName || "Destination";
         const { error: historyError } = await supabase
@@ -544,6 +877,7 @@ export default function TripScreen() {
 
         if (historyError) {
           // Don't throw here - trip status is already updated, history is less critical
+          console.log("Error saving travel history:", historyError);
         }
 
         // Navigate directly to history without showing additional alerts
@@ -564,6 +898,7 @@ export default function TripScreen() {
     const fetchInitialLocation = async () => {
       if (!busId || !session?.user?.id) return;
       setLoading(true);
+      setLocationError(null);
       try {
         // Check if passenger is already boarded or cancelled
         // Use limit(1) and order by created_at desc to get the most recent record
@@ -587,10 +922,6 @@ export default function TripScreen() {
             // Fetch complete route since user is already boarded
             await fetchPickupToDestinationRoute(pickupCoords, destCoords);
           } else if (existingBoarding.status === "cancelled") {
-            Alert.alert(
-              "Trip Cancelled",
-              "Your trip has been cancelled. You will be redirected to the home screen."
-            );
             await finalizeTrip("cancelled");
             return;
           } else if (existingBoarding.status === "waiting") {
@@ -603,35 +934,61 @@ export default function TripScreen() {
         }
 
         // Location
-        const { data, error } = await supabase.rpc("get_initial_bus_location", {
-          p_bus_id: busId,
-        });
-        if (error) throw error;
+        // Prefer tripId (single source of truth). Fallback to latest by busId if tripId is missing.
+        const tripLocationQuery = supabase
+          .from("trips_with_geojson")
+          .select("current_location")
+          .order("created_at", { ascending: false })
+          .limit(1);
 
-        if (data?.coordinates) {
-          const location = {
-            latitude: data.coordinates[1],
-            longitude: data.coordinates[0],
-          };
-          setBusLocation(location);
-          previousLocationRef.current = location;
-          // While waiting, ETA to pickup
+        const { data: latestTrip, error: latestTripError } = tripId
+          ? await tripLocationQuery.eq("trip_id", tripId).maybeSingle()
+          : await tripLocationQuery.eq("bus_id", busId).maybeSingle();
+
+        if (latestTripError) throw latestTripError;
+
+        let initialLocation: LatLng | null = null;
+        if (latestTrip?.current_location) {
+          const loc =
+            typeof latestTrip.current_location === "string"
+              ? JSON.parse(latestTrip.current_location)
+              : latestTrip.current_location;
+
+          if (loc?.coordinates) {
+            initialLocation = {
+              latitude: loc.coordinates[1],
+              longitude: loc.coordinates[0],
+            };
+          }
+        }
+
+        if (initialLocation) {
+          const clampedInitial = clampToRoute(initialLocation, completeRouteRef.current);
+          setBusLocation(clampedInitial);
+          setAnimatedBusPosition(clampedInitial);
+          previousLocationRef.current = clampedInitial;
+
           await fetchETA(
-            location,
+            clampedInitial,
             tripStatus === "picked_up" ? destCoords : pickupCoords
           );
         } else {
+          setLocationError(
+            `No location found in trips_with_geojson. tripId=${tripId ?? "(missing)"}, busId=${busId}`
+          );
           Alert.alert("Error", "Could not find the bus's initial location.");
         }
 
         // NEW: Fetch initial trip status (assumes trips.status reflects pickup)
-        // Use limit(1) and order by created_at desc to get the most recent trip
-        const { data: tripRows } = await supabase
-          .from("trips")
-          .select("status")
-          .eq("bus_id", busId)
-          .order("created_at", { ascending: false })
-          .limit(1);
+        // IMPORTANT: Prefer tripId to avoid desync when multiple trips share bus_id.
+        const tripStatusQuery = supabase.from("trips").select("status");
+
+        const { data: tripRows } = tripId
+          ? await tripStatusQuery.eq("id", tripId).limit(1)
+          : await tripStatusQuery
+            .eq("bus_id", busId)
+            .order("created_at", { ascending: false })
+            .limit(1);
 
         const tripRow = tripRows?.[0];
 
@@ -670,7 +1027,11 @@ export default function TripScreen() {
 
         // Fetch bus plate number if unknown
         await fetchBusPlateNumber();
-      } catch (err) {
+      } catch (err: any) {
+        setLocationError(
+          `Failed to load initial location. tripId=${tripId ?? "(missing)"}, busId=${busId}. ${err?.message ?? String(err)
+          }`
+        );
         Alert.alert(
           "Error",
           "An error occurred while fetching the bus location."
@@ -686,7 +1047,7 @@ export default function TripScreen() {
     };
 
     initializeTrip();
-  }, [busId, session?.user?.id]);
+  }, [busId, session?.user?.id, tripId]);
 
   useEffect(() => {
     if (!busId || !session?.user?.id) return;
@@ -930,26 +1291,59 @@ export default function TripScreen() {
     const pickupPollingInterval = setInterval(checkPickupRequestStatus, 15000); // Reduced frequency
 
     // Listen for trip updates (location and status)
+    // IMPORTANT: subscribe to the specific trip row when tripId is available.
     const tripChannel = supabase
-      .channel(`realtime-trip-${busId}`)
+      .channel(`realtime-trip-${tripId || busId}`)
       .on(
         "postgres_changes",
         {
           event: "UPDATE",
           schema: "public",
           table: "trips",
-          filter: `bus_id=eq.${busId}`,
+          filter: tripId ? `id=eq.${tripId}` : `bus_id=eq.${busId}`,
         },
         async (payload) => {
           const updatedTrip = payload.new as any;
 
           // Location update
-          if (updatedTrip.current_location?.coordinates) {
-            const newLocation: LatLng = {
-              latitude: updatedTrip.current_location.coordinates[1],
-              longitude: updatedTrip.current_location.coordinates[0],
-            };
-            setBusLocation(newLocation);
+          // Fetch the latest valid GeoJSON location from the view because payload might have WKB
+          const geoQuery = supabase
+            .from("trips_with_geojson")
+            .select("current_location")
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          const { data: geoData } = updatedTrip?.id
+            ? await geoQuery.eq("trip_id", updatedTrip.id).maybeSingle()
+            : await geoQuery.eq("bus_id", busId).maybeSingle();
+
+          let newLocation: LatLng | null = null;
+
+          if (geoData?.current_location) {
+            // Handle both object and string JSON
+            const loc = typeof geoData.current_location === "string"
+              ? JSON.parse(geoData.current_location)
+              : geoData.current_location;
+
+            if (loc?.coordinates) {
+              newLocation = {
+                latitude: loc.coordinates[1],
+                longitude: loc.coordinates[0],
+              };
+            }
+          }
+
+          if (newLocation) {
+
+            // Clamp bus location to route
+            const clampedLocation = clampToRoute(newLocation, completeRouteRef.current);
+
+            // IMPORTANT: update both positions from the realtime event.
+            // If you only update busLocation and rely on the animation effect,
+            // Android marker animations + tracksViewChanges=false can appear "stuck".
+            setBusLocation(clampedLocation);
+            setAnimatedBusPosition(clampedLocation);
+            setMarkerUpdateSeq((s) => s + 1);
 
             // Throttle ETA fetching to reduce memory usage
             const now = Date.now();
@@ -957,33 +1351,37 @@ export default function TripScreen() {
               lastEtaFetch.current = now;
               await fetchETA(
                 newLocation,
-                tripStatus === "picked_up" ? destCoords : pickupCoords
+                tripStatusRef.current === "picked_up" ? destCoords : pickupCoords
               );
             }
 
-            const prevLocation = previousLocationRef.current;
+            // Calculate heading based on trip status
             let heading = 0;
-            if (prevLocation) {
-              heading = calculateBearing(prevLocation, newLocation);
+            if (tripStatusRef.current === "picked_up") {
+              // When boarded, always point camera towards destination
+              heading = calculateBearing(newLocation, destCoords);
+            } else {
+              // When waiting, point towards pickup location
+              heading = calculateBearing(newLocation, pickupCoords);
             }
 
-            // Enhanced camera animations for better driving mode experience
+            // Enhanced camera animations for short distance testing
             const camera: Partial<Camera> = {
               center: newLocation,
-              pitch: tripStatus === "picked_up" ? 85 : 90, // Lower pitch when boarded for better route view
+              pitch: tripStatusRef.current === "picked_up" ? 60 : 45, // Lower pitch when boarded for better route view
               heading: heading,
-              zoom: tripStatus === "picked_up" ? 16 : 18, // Slightly zoomed out when boarded to see more route
+              zoom: tripStatusRef.current === "picked_up" ? CAMERA_ZOOM_BOARDED : CAMERA_ZOOM_WAITING, // High zoom for short distance
             };
 
-            // Smooth camera animation matched to update interval
-            mapRef.current?.animateCamera(camera, { duration: 1000 });
+            // Quick camera animation for responsive short distance tracking
+            mapRef.current?.animateCamera(camera, { duration: CAMERA_ANIMATION_DURATION });
             previousLocationRef.current = newLocation;
 
-            // Auto-finish near destination
-            if (tripStatus === "picked_up") {
+            // Auto-finish near destination (reduced threshold for short distance testing)
+            if (tripStatusRef.current === "picked_up") {
               try {
                 const d = haversineMeters(newLocation, destCoords);
-                if (d <= 60) {
+                if (d <= ARRIVAL_THRESHOLD) {
                   await finalizeTrip("arrived");
                 }
               } catch { }
@@ -1014,7 +1412,7 @@ export default function TripScreen() {
       clearInterval(boardingPollingInterval);
       clearInterval(pickupPollingInterval);
     };
-  }, [busId, session?.user?.id]);
+  }, [busId, session?.user?.id, tripId]);
 
   // Loading state remains the same
   if (loading) {
@@ -1040,6 +1438,15 @@ export default function TripScreen() {
         <Text style={styles.errorSubText}>
           The bus location is currently unavailable.
         </Text>
+
+        {/* NEW: lightweight debug info to identify missing tripId / missing view rows */}
+        {!!locationError && (
+          <View style={styles.fallbackContainer}>
+            <Text style={styles.fallbackText}>Debug</Text>
+            <Text style={styles.fallbackPayload}>{locationError}</Text>
+          </View>
+        )}
+
         <TouchableOpacity
           style={styles.goBackButton}
           onPress={() => router.back()}
@@ -1104,42 +1511,70 @@ export default function TripScreen() {
           />
         )}
 
-        {/* Pickup point marker */}
-        <Marker
-          coordinate={pickupCoords}
-          title="Pickup Location"
-          pinColor="blue"
-        >
-          <View style={styles.pickupMarker}>
-            <Ionicons name="location" size={24} color="#007AFF" />
-          </View>
-        </Marker>
-
-        {/* Destination marker */}
-        <Marker coordinate={destCoords} title="Your Destination" pinColor="red">
-          <View style={styles.destinationMarker}>
-            <Ionicons name="flag" size={24} color="#dc3545" />
-          </View>
-        </Marker>
-
-        {/* Bus marker with enhanced styling */}
-        {busLocation && (
+        {/* Pickup point marker - Enhanced */}
+        {/* Pickup point marker - Enhanced. Hide when picked up */}
+        {tripStatus === "waiting" && (
           <Marker
-            coordinate={busLocation}
+            coordinate={pickupCoords}
+            title="Pickup Location"
+            anchor={{ x: 0.5, y: 1 }}
+            tracksViewChanges={false}
+          >
+            <View style={styles.pickupMarkerContainer}>
+              <View style={styles.pickupMarkerLabel}>
+                <Text style={styles.pickupMarkerLabelText}>Your Pickup</Text>
+              </View>
+              <CustomMapMarker size={44} color="#007AFF" />
+            </View>
+          </Marker>
+        )}
+
+        {/* Destination marker - Enhanced */}
+        <Marker
+          coordinate={destCoords}
+          title="Your Destination"
+          anchor={{ x: 0.5, y: 1 }}
+          tracksViewChanges={false}
+        >
+          <View style={styles.destinationMarkerContainer}>
+            <View style={styles.destinationMarkerLabel}>
+              <Text style={styles.destinationMarkerLabelText}>Destination</Text>
+            </View>
+            <CustomMapMarker size={44} color="#dc3545" />
+          </View>
+        </Marker>
+
+        {/* Bus marker with enhanced styling (no native animation) */}
+        {animatedBusPosition && (
+          <Marker
+            ref={busMarkerRef}
+            coordinate={animatedBusPosition}
             title={busPlateNumber || "Bus"}
             description="Your bus location"
             anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
           >
-            <View
-              style={[
-                styles.busMarker,
-                tripStatus === "picked_up" && styles.busMarkerBoarded,
-              ]}
-            >
-              <Image
-                source={require("@/assets/images/bus-icon.png")}
-                style={styles.busIcon}
-              />
+            <View style={styles.busMarkerContainer}>
+              <View
+                style={[
+                  styles.busMarkerOuter,
+                  tripStatus === "picked_up" && styles.busMarkerOuterBoarded,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.busMarkerInner,
+                    tripStatus === "picked_up" && styles.busMarkerInnerBoarded,
+                  ]}
+                >
+                  <Image
+                    source={require("@/assets/images/bus-icon.png")}
+                    style={styles.busMarkerIcon}
+                    resizeMode="contain"
+                  />
+                </View>
+              </View>
+
             </View>
           </Marker>
         )}
@@ -1335,7 +1770,7 @@ export default function TripScreen() {
             {/* Decorative circles */}
             <View style={styles.confirmModalDecoCircle1} />
             <View style={styles.confirmModalDecoCircle2} />
-            
+
             {/* Icon */}
             <View style={styles.confirmModalIconWrapper}>
               <View style={[
@@ -1423,71 +1858,97 @@ export default function TripScreen() {
       {/* Trip Summary Modal */}
       <Modal
         visible={showTripSummary}
-        animationType="slide"
+        animationType="fade"
         transparent={true}
         onRequestClose={() => setShowTripSummary(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Ionicons
-                name={tripSummaryData.status === "completed" ? "checkmark-circle" : "close-circle"}
-                size={48}
-                color={tripSummaryData.status === "completed" ? "#28a745" : "#dc3545"}
-              />
-              <Text style={styles.modalTitle}>
+          <View style={styles.completedModalContent}>
+            {/* Header Section */}
+            <View style={styles.completedHeader}>
+              <View style={[
+                styles.completedIconContainer,
+                { backgroundColor: tripSummaryData.status === "completed" ? "#DCFCE7" : "#FEE2E2" }
+              ]}>
+                <Ionicons
+                  name={tripSummaryData.status === "completed" ? "checkmark-sharp" : "close-sharp"}
+                  size={40}
+                  color={tripSummaryData.status === "completed" ? "#10B981" : "#EF4444"}
+                />
+              </View>
+              <Text style={styles.completedTitle}>
                 {tripSummaryData.status === "completed" ? "Trip Completed!" : "Trip Cancelled"}
               </Text>
-              <Text style={styles.modalSubtitle}>Here's your trip summary</Text>
+              <Text style={styles.completedSubtitle}>
+                {tripSummaryData.status === "completed"
+                  ? "You have arrived at your destination."
+                  : "This trip has been cancelled."}
+              </Text>
             </View>
 
-            <View style={styles.tripSummaryContainer}>
-              <View style={styles.summaryRow}>
-                <Ionicons name="time-outline" size={20} color="#666" />
-                <Text style={styles.summaryLabel}>Duration:</Text>
-                <Text style={styles.summaryValue}>{tripSummaryData.duration}</Text>
+            {/* Stats Row */}
+            <View style={styles.completedStatsRow}>
+              <View style={styles.completedStatItem}>
+                <Ionicons name="time-outline" size={20} color="#6B7280" style={{ marginBottom: 4 }} />
+                <Text style={styles.completedStatValue}>{tripSummaryData.duration}</Text>
+                <Text style={styles.completedStatLabel}>Duration</Text>
+              </View>
+              <View style={styles.completedVerticalDivider} />
+              <View style={styles.completedStatItem}>
+                <Ionicons name="resize-outline" size={20} color="#6B7280" style={{ marginBottom: 4 }} />
+                <Text style={styles.completedStatValue}>{tripSummaryData.distance}</Text>
+                <Text style={styles.completedStatLabel}>Distance</Text>
+              </View>
+              <View style={styles.completedVerticalDivider} />
+              <View style={styles.completedStatItem}>
+                <Ionicons name="bus-outline" size={20} color="#6B7280" style={{ marginBottom: 4 }} />
+                <Text style={styles.completedStatValue}>{tripSummaryData.busPlate}</Text>
+                <Text style={styles.completedStatLabel}>Bus No.</Text>
+              </View>
+            </View>
+
+            <View style={styles.completedDivider} />
+
+            {/* Location Details */}
+            <View style={{ width: '100%', paddingHorizontal: 4 }}>
+              <View style={styles.completedLocationRow}>
+                <View style={[styles.completedLocationIcon, { backgroundColor: '#EFF6FF' }]}>
+                  <Ionicons name="location" size={16} color="#3B82F6" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.completedLocationLabel}>From</Text>
+                  <Text style={styles.completedLocationValue} numberOfLines={1}>
+                    {tripSummaryData.pickupLocation}
+                  </Text>
+                </View>
               </View>
 
-              <View style={styles.summaryRow}>
-                <Ionicons name="speedometer-outline" size={20} color="#666" />
-                <Text style={styles.summaryLabel}>Distance:</Text>
-                <Text style={styles.summaryValue}>{tripSummaryData.distance}</Text>
-              </View>
+              <View style={{ height: 16, borderLeftWidth: 1, borderLeftColor: '#E5E7EB', marginLeft: 16, marginVertical: 2 }} />
 
-              <View style={styles.summaryRow}>
-                <Ionicons name="bus-outline" size={20} color="#666" />
-                <Text style={styles.summaryLabel}>Bus:</Text>
-                <Text style={styles.summaryValue}>{tripSummaryData.busPlate}</Text>
-              </View>
-
-              <View style={styles.summaryDivider} />
-
-              <View style={styles.summaryRow}>
-                <Ionicons name="location-outline" size={20} color="#007AFF" />
-                <Text style={styles.summaryLabel}>From:</Text>
-                <Text style={[styles.summaryValue, styles.summaryLocation]} numberOfLines={2}>
-                  {tripSummaryData.pickupLocation}
-                </Text>
-              </View>
-
-              <View style={styles.summaryRow}>
-                <Ionicons name="flag-outline" size={20} color="#28a745" />
-                <Text style={styles.summaryLabel}>To:</Text>
-                <Text style={[styles.summaryValue, styles.summaryLocation]} numberOfLines={2}>
-                  {tripSummaryData.destination}
-                </Text>
+              <View style={styles.completedLocationRow}>
+                <View style={[styles.completedLocationIcon, { backgroundColor: '#ECFDF5' }]}>
+                  <Ionicons name="flag" size={16} color="#10B981" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.completedLocationLabel}>To</Text>
+                  <Text style={styles.completedLocationValue} numberOfLines={1}>
+                    {tripSummaryData.destination}
+                  </Text>
+                </View>
               </View>
             </View>
 
             <TouchableOpacity
-              style={styles.modalCloseButton}
+              activeOpacity={0.8}
+              style={styles.completedButton}
               onPress={() => {
                 setShowTripSummary(false);
                 // Finalize trip with skipSummary=true to actually complete the trip
                 finalizeTrip(tripSummaryData.status === "completed" ? "arrived" : "cancelled", true);
               }}
             >
-              <Text style={styles.modalCloseButtonText}>Continue</Text>
+              <Text style={styles.completedButtonText}>Continue</Text>
+              <Ionicons name="arrow-forward" size={18} color="#fff" />
             </TouchableOpacity>
           </View>
         </View>
@@ -1702,6 +2163,104 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#495057",
   },
+
+  // Enhanced Bus Marker Styles
+  busMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  busMarkerOuter: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "rgba(255, 193, 7, 0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "rgba(255, 193, 7, 0.4)",
+  },
+  busMarkerOuterBoarded: {
+    backgroundColor: "rgba(40, 167, 69, 0.2)",
+    borderColor: "rgba(40, 167, 69, 0.4)",
+  },
+  busMarkerInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#ffc107",
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 6,
+    shadowColor: "#ffc107",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    borderWidth: 3,
+    borderColor: "white",
+  },
+  busMarkerInnerBoarded: {
+    backgroundColor: "#28a745",
+    shadowColor: "#28a745",
+    borderColor: "white",
+  },
+  busMarkerIcon: {
+    width: 24,
+    height: 24,
+  },
+
+  // Enhanced Pickup Marker Styles
+  pickupMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pickupMarkerLabel: {
+    backgroundColor: "rgba(0, 122, 255, 0.9)",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.3)",
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  pickupMarkerLabelText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+
+  // Enhanced Destination Marker Styles
+  destinationMarkerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  destinationMarkerLabel: {
+    backgroundColor: "rgba(220, 53, 69, 0.9)",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.3)",
+    shadowColor: "#dc3545",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  destinationMarkerLabelText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+
+  // Legacy marker styles (kept for backward compatibility)
   busMarker: {
     padding: 5,
     borderRadius: 20,
@@ -2071,5 +2630,127 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "700",
     fontSize: 15,
+  },
+  // --- Enhanced Completed Modal Styles ---
+  completedModalContent: {
+    width: "88%",
+    maxWidth: 380,
+    backgroundColor: "#fff",
+    borderRadius: 32,
+    padding: 24,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.2,
+    shadowRadius: 32,
+    elevation: 24,
+  },
+  completedHeader: {
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  completedIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  completedTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#111827",
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  completedSubtitle: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: "center",
+  },
+  completedStatsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#F3F4F6",
+  },
+  completedStatItem: {
+    flex: 1,
+    alignItems: "center",
+  },
+  completedStatValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 2,
+  },
+  completedStatLabel: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    fontWeight: "500",
+    textTransform: "uppercase",
+  },
+  completedVerticalDivider: {
+    width: 1,
+    height: "80%",
+    backgroundColor: "#E5E7EB",
+    alignSelf: "center",
+  },
+  completedDivider: {
+    width: "100%",
+    height: 1,
+    backgroundColor: "#E5E7EB",
+    marginBottom: 20,
+  },
+  completedLocationRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  completedLocationIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  completedLocationLabel: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    marginBottom: 2,
+    fontWeight: "500",
+    textTransform: "uppercase",
+  },
+  completedLocationValue: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  completedButton: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#007AFF",
+    paddingVertical: 16,
+    borderRadius: 16,
+    marginTop: 24,
+    gap: 8,
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  completedButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });

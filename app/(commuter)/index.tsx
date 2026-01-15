@@ -1,9 +1,11 @@
 import { mapDarkStyle } from "@/constants/mapDarkStyle";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCommuterUI } from "@/contexts/CommuterUIContext";
+import { useBusesOnRoute, useRoute } from "@/contexts/RouteContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
-import { FontAwesome, Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
@@ -19,18 +21,22 @@ import {
   FlatList,
   Image,
   Keyboard,
+  LayoutAnimation,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
+  UIManager,
   View,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Path, Polygon } from "react-native-svg";
 
 // --- Type Definitions ---
 type Minibus = {
@@ -107,6 +113,10 @@ export function CommuterHomeScreen() {
   // Hooks and State declarations remain the same...
   const { session } = useAuth();
   const { theme } = useAppTheme();
+  // Route Context Hooks
+  const { setCurrentRoute } = useRoute();
+  const { buses: contextBuses } = useBusesOnRoute();
+
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
   const scrollViewRef = useRef<ScrollView>(null);
@@ -123,7 +133,7 @@ export function CommuterHomeScreen() {
   const [noResultsFound, setNoResultsFound] = useState(false);
   const [dropoffLocation, setDropoffLocation] = useState("");
   const [isGeocoding, setIsGeocoding] = useState(false);
-  const [isPinDroppingMode, setIsPinDroppingMode] = useState(false);
+  const { isPinDroppingMode, setIsPinDroppingMode } = useCommuterUI();
   const [isPinDropLoading, setIsPinDropLoading] = useState(false);
   const [droppedPinLocation, setDroppedPinLocation] = useState<{
     latitude: number;
@@ -145,16 +155,19 @@ export function CommuterHomeScreen() {
     null
   );
   const [showSearchBar, setShowSearchBar] = useState(false);
-  const [isMapExpanded, setIsMapExpanded] = useState(false);  const [isCheckingExistingTrip, setIsCheckingExistingTrip] = useState(true);
+  const [isMapExpanded, setIsMapExpanded] = useState(false); const [isCheckingExistingTrip, setIsCheckingExistingTrip] = useState(true);
   const [showPendingRequestModal, setShowPendingRequestModal] = useState(false);
   const [pendingRequestData, setPendingRequestData] = useState<any>(null);
   const [showContinueTripModal, setShowContinueTripModal] = useState(false);
   const [existingTripData, setExistingTripData] = useState<any>(null);
+  const [showPinDropInstructions, setShowPinDropInstructions] = useState(true);
   // Animation values
   const headerOpacity = useRef(new Animated.Value(1)).current;
   const cardsOpacity = useRef(new Animated.Value(1)).current;
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const cardsTranslateY = useRef(new Animated.Value(0)).current;
+  // Track ignored request ID to prevent modal re-appearing after navigation
+  const ignoredRequestIdRef = useRef<string | null>(null);
 
   // Beating circle animation values for user location marker
   const beatingScale1 = useRef(new Animated.Value(0)).current;
@@ -164,6 +177,57 @@ export function CommuterHomeScreen() {
   const beatingOpacity2 = useRef(new Animated.Value(1)).current;
   const beatingOpacity3 = useRef(new Animated.Value(1)).current;
 
+  // Compass/Magnetometer state for direction indicator
+  const [compassHeading, setCompassHeading] = useState(0);
+  const [isMagnetometerAvailable, setIsMagnetometerAvailable] = useState(false);
+  const [mapCameraHeading, setMapCameraHeading] = useState(0); // Track map rotation
+
+  // Enable LayoutAnimation for Android
+  useEffect(() => {
+    if (Platform.OS === "android") {
+      if (UIManager.setLayoutAnimationEnabledExperimental) {
+        UIManager.setLayoutAnimationEnabledExperimental(true);
+      }
+    }
+  }, []);
+
+  // Compass heading using expo-location for better accuracy
+  useEffect(() => {
+    let headingSub: Location.LocationSubscription | null = null;
+
+    const subscribe = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setIsMagnetometerAvailable(false);
+          return;
+        }
+
+        // Check if heading is available
+        const available = await Location.hasServicesEnabledAsync();
+        setIsMagnetometerAvailable(available);
+        if (!available) return;
+
+        headingSub = await Location.watchHeadingAsync((h) => {
+          // Use trueHeading if available (more accurate), otherwise use magHeading
+          const bearing = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          setCompassHeading(Math.round(bearing));
+        });
+      } catch (error) {
+        console.error('Error setting up heading watch:', error);
+        setIsMagnetometerAvailable(false);
+      }
+    };
+
+    subscribe();
+    return () => {
+      if (headingSub) {
+        headingSub.remove();
+      }
+    };
+  }, []);
+
+
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
   const primaryColor = useThemeColor({}, "tint");
@@ -172,13 +236,7 @@ export function CommuterHomeScreen() {
   const placeholderTextColor = useThemeColor({}, "placeholderTextColor");
   const separatorColor = useThemeColor({}, "separatorColor");
 
-  const handleFindRide = () => {
-    console.log("=== FIND RIDE DEBUG ===");
-    console.log("User location:", userLocation);
-    console.log("Confirmed destination:", confirmedDestination);
-    console.log("Selected route ID:", selectedRouteId);
-    console.log("Selected route name:", selectedRouteName);
-
+  const handleFindRide = async () => {
     // If a route is selected, we only need user location
     if (selectedRouteId) {
       if (!userLocation) {
@@ -202,7 +260,6 @@ export function CommuterHomeScreen() {
         routeParams.destLng = confirmedDestination.longitude;
       }
 
-      console.log("Navigating to route-details with params:", routeParams);
       router.push({
         pathname: "/route-details",
         params: routeParams,
@@ -219,11 +276,32 @@ export function CommuterHomeScreen() {
       return;
     }
 
+    // Compute best route id up-front so we can pass `routeId` to route-details.
+    // This helps RouteContext subscribe to realtime broadcast immediately.
+    let bestRouteId: string | null = null;
+    try {
+      const { data: routeData, error: routeError } = await supabase.rpc(
+        "find_best_route_for_trip",
+        {
+          origin_lon: userLocation.coords.longitude,
+          origin_lat: userLocation.coords.latitude,
+          dest_lon: confirmedDestination.longitude,
+          dest_lat: confirmedDestination.latitude,
+        }
+      );
+      if (!routeError && routeData && routeData.length > 0 && routeData[0]?.id) {
+        bestRouteId = routeData[0].id as string;
+      }
+    } catch {
+      // ignore; route-details will fall back to its own best-route fetch
+    }
+
     const routeParams: any = {
       originLat: userLocation.coords.latitude,
       originLng: userLocation.coords.longitude,
       destLat: confirmedDestination.latitude,
       destLng: confirmedDestination.longitude,
+      ...(bestRouteId ? { routeId: bestRouteId } : {}),
     };
 
     console.log("Navigating to route-details with params:", routeParams);
@@ -260,12 +338,6 @@ export function CommuterHomeScreen() {
         if (typeof location === "string") {
           // Check for binary format (starts with hex like 0101000020E6100000...)
           if (location.startsWith("01") && location.length > 20) {
-            console.log(
-              `⚠️ Binary PostGIS format detected: ${location.substring(
-                0,
-                30
-              )}... - Using trips_with_geojson view should prevent this`
-            );
             return null;
           }
 
@@ -276,11 +348,9 @@ export function CommuterHomeScreen() {
             if (coords.length >= 2) {
               const [lng, lat] = coords.map(Number);
               if (!isNaN(lat) && !isNaN(lng)) {
-                console.log(`✅ Parsed POINT format: ${lat}, ${lng}`);
                 return { latitude: lat, longitude: lng };
               }
             }
-            console.log(`⚠️ Invalid POINT format: ${location}`);
             return null;
           }
 
@@ -293,7 +363,6 @@ export function CommuterHomeScreen() {
             ) {
               const [lng, lat] = geoJson.coordinates;
               if (!isNaN(lat) && !isNaN(lng)) {
-                console.log(`✅ Parsed GeoJSON string: ${lat}, ${lng}`);
                 return { latitude: lat, longitude: lng };
               }
             }
@@ -302,9 +371,6 @@ export function CommuterHomeScreen() {
           }
 
           // If we get here, it's an unrecognized string format
-          console.log(
-            `⚠️ Unrecognized location format: ${location.substring(0, 50)}`
-          );
           return null;
         }
 
@@ -317,7 +383,6 @@ export function CommuterHomeScreen() {
           ) {
             const [lng, lat] = location.coordinates;
             if (!isNaN(lat) && !isNaN(lng)) {
-              console.log(`✅ Parsed GeoJSON object: ${lat}, ${lng}`);
               return { latitude: lat, longitude: lng };
             }
           }
@@ -326,19 +391,14 @@ export function CommuterHomeScreen() {
           if (location.latitude && location.longitude) {
             const { latitude, longitude } = location;
             if (!isNaN(latitude) && !isNaN(longitude)) {
-              console.log(
-                `✅ Parsed lat/lng object: ${latitude}, ${longitude}`
-              );
               return { latitude, longitude };
             }
           }
-
-          console.log(`⚠️ Unrecognized object format:`, location);
         }
 
         return null;
       } catch (error) {
-        console.error("Error parsing location:", error);
+        // Silently fail parsing errors
         return null;
       }
     },
@@ -353,10 +413,7 @@ export function CommuterHomeScreen() {
     }
 
     try {
-      console.log(
-        "🚨 PRIORITY: Checking for existing trips and requests for user ID:",
-        session.user.id
-      );
+
 
       // 1. Check for ANY PENDING pickup request first
       // This is the most important state for the commuter
@@ -381,7 +438,14 @@ export function CommuterHomeScreen() {
 
       if (pendingRequests && pendingRequests.length > 0) {
         const pendingRequest = pendingRequests[0];
-        console.log("ℹ️ Found pending pickup request:", pendingRequest);
+
+
+        // Check if we've already ignored/handled this request
+        if (pendingRequest.id === ignoredRequestIdRef.current) {
+
+          setIsCheckingExistingTrip(false);
+          return;
+        }
 
         let plateNumber = "Unknown";
         let routeId = null;
@@ -438,14 +502,23 @@ export function CommuterHomeScreen() {
         console.error("Error checking for existing trips:", error);
         setIsCheckingExistingTrip(false);
         return;
-      }      if (existingTrips && existingTrips.length > 0) {
+      } if (existingTrips && existingTrips.length > 0) {
         const existingTrip = existingTrips[0];
-        console.log("✅ Found ongoing trip:", existingTrip);
+
 
         let plateNumber = "Unknown";
         if (existingTrip.buses) {
-          const busData = Array.isArray(existingTrip.buses) ? existingTrip.buses[0] : existingTrip.buses;
-          plateNumber = busData?.plate_number || "Unknown";
+          if (
+            Array.isArray(existingTrip.buses) &&
+            existingTrip.buses.length > 0
+          ) {
+            plateNumber = existingTrip.buses[0]?.plate_number || "Unknown";
+          } else if (
+            typeof existingTrip.buses === "object" &&
+            (existingTrip.buses as any).plate_number
+          ) {
+            plateNumber = (existingTrip.buses as any).plate_number;
+          }
         }
 
         // Show custom modal instead of native Alert
@@ -455,7 +528,7 @@ export function CommuterHomeScreen() {
         });
         setShowContinueTripModal(true);
       } else {
-        console.log("ℹ️ No existing waiting trips found");
+
       }
     } catch (error) {
       console.error("Error in checkForExistingTrip:", error);
@@ -488,7 +561,7 @@ export function CommuterHomeScreen() {
           "Could not cancel the existing trip. Please try again."
         );
       } else {
-        console.log("✅ Existing trip and pending requests cancelled successfully");
+
       }
     } catch (error) {
       console.error("Error cancelling trip:", error);
@@ -497,7 +570,7 @@ export function CommuterHomeScreen() {
   // Function to continue existing trip
   const continueExistingTrip = (existingTrip: any) => {
     try {
-      console.log("🚀 Continuing existing trip:", existingTrip); // Extract plate number - handle both array and object formats
+
       let plateNumber = "Unknown";
       if (existingTrip.buses) {
         if (
@@ -512,7 +585,7 @@ export function CommuterHomeScreen() {
           plateNumber = (existingTrip.buses as any).plate_number;
         }
       }
-      console.log("🚌 Using plate number for navigation:", plateNumber);
+
 
       // Navigate to trip screen with the existing trip data
       const tripParams = {
@@ -527,7 +600,7 @@ export function CommuterHomeScreen() {
         routePath: "[]", // Will be fetched in trip screen
       };
 
-      console.log("Navigating to trip with params:", tripParams);
+
       router.push({
         pathname: "/trip",
         params: tripParams,
@@ -538,8 +611,11 @@ export function CommuterHomeScreen() {
     }
   }; // Fetch nearby buses on routes
   const fetchActiveMinibuses = useCallback(async () => {
+    // If a route is selected, let RouteContext handle the buses
+    if (selectedRouteId) return;
+
     try {
-      console.log("🚌 Fetching active buses from trips...");
+
 
       // Get active trips with bus information and current location
       // Include both 'waiting' and 'ongoing' trips to show all available buses
@@ -563,7 +639,7 @@ export function CommuterHomeScreen() {
         console.error("Error fetching trips:", tripsError);
         throw tripsError;
       }
-      console.log("📍 Found active trips:", activeTripsData?.length || 0);
+
       // Transform the data to match expected format
       // Filter out trips with invalid/binary location data
       const busesData =
@@ -571,29 +647,18 @@ export function CommuterHomeScreen() {
           ?.filter((trip: TripWithGeoJSON) => {
             // Check if location is valid
             if (!trip.current_location) {
-              console.log(
-                `⚠️ Trip with bus ${trip.plate_number} has no location data`
-              );
+
               return false;
             }
 
-            // Log the location format for debugging
-            console.log(
-              `📍 Bus ${trip.plate_number
-              } - Location type: ${typeof trip.current_location}`,
-              typeof trip.current_location === "string"
-                ? trip.current_location.substring(0, 50)
-                : JSON.stringify(trip.current_location).substring(0, 50)
-            );
+
 
             // GeoJSON view should return objects, but handle strings just in case
             if (typeof trip.current_location === "string") {
               // Check for binary format
               const isBinaryFormat = trip.current_location.startsWith("01");
               if (isBinaryFormat) {
-                console.log(
-                  `⚠️ Skipping bus ${trip.plate_number} - location in binary format`
-                );
+
                 return false;
               }
             }
@@ -623,16 +688,15 @@ export function CommuterHomeScreen() {
         throw routesError;
       }
 
-      console.log("🗺️ Found routes:", routesData?.length || 0);
-      console.log("🗺️ Found routes:", routesData?.length || 0);
+
 
       if (!busesData || busesData.length === 0) {
-        console.log("⚠️ No buses found");
+
         setBuses([]);
         return;
       }
       if (!userLocation) {
-        console.log("⚠️ No user location available");
+
         // Fallback to showing all buses if no user location
         const formattedData = busesData.map((bus: BusWithLocation) => {
           const parsedLocation = parseLocation(bus.currentLocation);
@@ -645,10 +709,7 @@ export function CommuterHomeScreen() {
             currentLocation: { latitude, longitude },
           };
         });
-        console.log(
-          "✅ Setting buses from trips (no location filter):",
-          formattedData.length
-        );
+
         setBuses(formattedData);
         return;
       } // Filter buses that are on routes near the user
@@ -656,7 +717,7 @@ export function CommuterHomeScreen() {
         const parsedLocation = parseLocation(bus.currentLocation);
 
         if (!parsedLocation) {
-          console.log(`⚠️ Could not parse location for bus ${bus.plateNumber}`);
+
           return false;
         }
 
@@ -670,9 +731,7 @@ export function CommuterHomeScreen() {
           longitude
         );
 
-        console.log(
-          `🚌 Bus ${bus.plateNumber}: ${distanceToBus.toFixed(2)}km away`
-        );
+
 
         // Only include buses within 5km of user
         if (distanceToBus > 5) return false;
@@ -728,12 +787,7 @@ export function CommuterHomeScreen() {
         return distanceToBus <= 3; // 3km radius for buses without route data
         */
       });
-      console.log(
-        `📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`
-      );
-      console.log(
-        `📍 Filtered ${nearbyBuses.length} nearby buses out of ${busesData.length} active trips`
-      );
+
 
       // Format the data
       const formattedData = nearbyBuses.map((bus: BusWithLocation) => {
@@ -747,18 +801,11 @@ export function CommuterHomeScreen() {
           currentLocation: { latitude, longitude },
         };
       });
-      console.log("✅ Setting buses from active trips:", formattedData.length);
+
       setBuses(formattedData);
 
       // Log final bus data for debugging
-      formattedData.forEach((bus: Minibus, index: number) => {
-        console.log(
-          `🚌 Bus ${index + 1}: ${bus.plateNumber
-          } at (${bus.currentLocation.latitude.toFixed(
-            4
-          )}, ${bus.currentLocation.longitude.toFixed(4)})`
-        );
-      });
+
     } catch (error) {
       console.error("❌ Error in fetchActiveMinibuses:", error);
       setBuses([]); // Set empty array on error
@@ -768,20 +815,15 @@ export function CommuterHomeScreen() {
         Alert.alert("Error", "Could not fetch bus locations: " + error.message);
       }
     }
-  }, [userLocation, calculateDistance, parseLocation]);
+  }, [userLocation, calculateDistance, parseLocation, selectedRouteId]);
 
   // Handle route selection from route tab (for backward compatibility)
   useEffect(() => {
-    console.log("=== ROUTE SELECTION DEBUG ===");
-    console.log("Params:", params);
-    console.log("Current selectedRouteId:", selectedRouteId);
-    console.log("Current selectedRouteName:", selectedRouteName);
+
 
     // Check if we have route selection params (for backward compatibility)
     if (params.selectedRouteId && params.selectedRouteName) {
-      console.log("Processing route selection from params");
-      console.log("Setting selectedRouteId to:", params.selectedRouteId);
-      console.log("Setting selectedRouteName to:", params.selectedRouteName);
+
 
       setSelectedRouteId(params.selectedRouteId as string);
       setSelectedRouteName(params.selectedRouteName as string);
@@ -793,25 +835,50 @@ export function CommuterHomeScreen() {
           setSelectedRouteMessage(null);
         }, 8000);
       }
-    }  }, [params.selectedRouteId, params.selectedRouteName, params.message]);
+    }
+  }, [params.selectedRouteId, params.selectedRouteName, params.message]);
+
+  // Sync selected route with RouteContext for real-time updates
+  useEffect(() => {
+    setCurrentRoute(selectedRouteId);
+  }, [selectedRouteId, setCurrentRoute]);
+
+  // Update local buses state from RouteContext when a route is selected
+  useEffect(() => {
+    // Only use context buses if a specific route is selected
+    if (selectedRouteId) {
+      // Map BusOnRoute to Minibus format
+      // contextBuses is already an array of BusOnRoute objects
+      const formattedBuses = contextBuses.map((bus: any) => ({
+        id: bus.id,
+        plateNumber: bus.plateNumber,
+        currentLocation: bus.location || { latitude: 0, longitude: 0 },
+      })).filter((bus: any) => bus.currentLocation.latitude !== 0 && bus.currentLocation.longitude !== 0);
+
+      // Only update if we have buses, or if we want to show empty state for that route
+      // We should be careful not to flicker
+      console.log(`🚌 Real-time update: ${formattedBuses.length} buses on route ${selectedRouteId}`);
+      setBuses(formattedBuses);
+    }
+  }, [selectedRouteId, contextBuses]);
 
   // Handle destination name from history screen navigation
   useEffect(() => {
     if (params.destinationName) {
       const destinationName = params.destinationName as string;
-      console.log("📍 Received destination from history:", destinationName);
-      
+
+
       // Set the search query with the destination name
       setSearchQuery(destinationName);
       setDropoffLocation(destinationName);
-      
+
       // Show the search bar and trigger search
       setShowSearchBar(true);
-      
+
       // Fetch place predictions for the destination
       const fetchPredictions = async () => {
         if (!GOOGLE_MAPS_API_KEY) return;
-        
+
         try {
           setIsSearching(true);
           const response = await fetch(
@@ -829,7 +896,7 @@ export function CommuterHomeScreen() {
           setIsSearching(false);
         }
       };
-      
+
       fetchPredictions();
     }
   }, [params.destinationName]);
@@ -838,10 +905,7 @@ export function CommuterHomeScreen() {
   // This runs BEFORE any other initialization to ensure trip recovery happens first
   useEffect(() => {
     if (session?.user?.id) {
-      console.log(
-        "🚨 PRIORITY: Session detected - immediately checking for existing trips"
-      );
-      console.log("🚨 PRIORITY: User ID:", session.user.id);
+
       checkForExistingTrip();
     }
   }, [session?.user?.id, checkForExistingTrip]);
@@ -1398,40 +1462,114 @@ export function CommuterHomeScreen() {
       )}
 
       {/* Full Screen Header for pin dropping mode */}
+      {/* Full Screen Header for pin dropping mode */}
       {isPinDroppingMode && (
-        <LinearGradient
-          colors={theme === "dark"
-            ? ["#1a365d", "#2563eb", "#3b82f6"]
-            : ["#0052d4", "#4364f7", "#6fb1fc"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.fullScreenHeader}
-        >
-          <View style={styles.headerContent}>
-            <View style={styles.headerIconContainer}>
-              <LinearGradient
-                colors={["#ffffff", "#f0f9ff"]}
-                style={styles.headerIconGradient}
+        <View style={styles.pinDropHeaderContainer}>
+          <LinearGradient
+            colors={theme === "dark"
+              ? ["#1a365d", "#2563eb", "#3b82f6"]
+              : ["#0052d4", "#4364f7", "#6fb1fc"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.pinDropHeaderGradient}
+          >
+            {/* Decorative elements */}
+            <View style={styles.pinDropDecorCircle1} />
+            <View style={styles.pinDropDecorCircle2} />
+
+            {/* Main Header Row */}
+            <View style={styles.pinDropHeaderRow}>
+              <View style={styles.headerIconContainer}>
+                <LinearGradient
+                  colors={["#ffffff", "#f0f9ff"]}
+                  style={styles.headerIconGradient}
+                >
+                  <Ionicons name="location" size={28} color="#0066FF" />
+                </LinearGradient>
+              </View>
+              <View style={styles.headerTextContainer}>
+                <Text style={styles.title}>
+                  {selectedRouteId
+                    ? `Set Destination for ${selectedRouteName}`
+                    : "Set Your Drop-off Point"}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.fullScreenCloseButton}
+                onPress={handleCancelPinDrop}
               >
-                <Ionicons name="location" size={28} color="#0066FF" />
-              </LinearGradient>
+                <Ionicons name="close" size={24} color="#fff" />
+              </TouchableOpacity>
             </View>
-            <View style={styles.headerTextContainer}>
-              <Text style={styles.title}>
-                {selectedRouteId
-                  ? `Set Destination for ${selectedRouteName}`
-                  : "Set Destination"}
-              </Text>
-              <Text style={styles.subtitle}>Tap on the map to drop a pin</Text>
-            </View>
+
             <TouchableOpacity
-              style={styles.fullScreenCloseButton}
-              onPress={handleCancelPinDrop}
+              style={styles.pinDropInstructionsHeader}
+              onPress={() => {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                setShowPinDropInstructions(!showPinDropInstructions);
+              }}
+              activeOpacity={0.8}
             >
-              <Ionicons name="close" size={24} color="#fff" />
+              <View style={styles.pinDropInstructionsHeaderLeft}>
+                <Ionicons name="help-circle" size={18} color="#fff" />
+                <Text style={styles.pinDropInstructionsHeaderText}>
+                  How to drop a pin
+                </Text>
+              </View>
+              <View style={styles.pinDropInstructionsToggle}>
+                <Ionicons
+                  name={showPinDropInstructions ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color="#fff"
+                />
+              </View>
             </TouchableOpacity>
-          </View>
-        </LinearGradient>
+
+            {showPinDropInstructions && (
+              <View style={styles.pinDropInstructionsContainer}>
+                {/* Step 1 */}
+                <View style={styles.pinDropStep}>
+                  <View style={styles.pinDropStepNumber}>
+                    <Text style={styles.pinDropStepNumberText}>1</Text>
+                  </View>
+                  <Text style={styles.pinDropStepText}>
+                    Find a highway or national road on the map.
+                  </Text>
+                </View>
+
+                {/* Step 2 */}
+                <View style={styles.pinDropStep}>
+                  <View style={styles.pinDropStepNumber}>
+                    <Text style={styles.pinDropStepNumberText}>2</Text>
+                  </View>
+                  <Text style={styles.pinDropStepText}>
+                    Tap to drop your pin where you want to drop off.
+                  </Text>
+                </View>
+
+                {/* Step 3 */}
+                <View style={styles.pinDropStep}>
+                  <View style={styles.pinDropStepNumber}>
+                    <Text style={styles.pinDropStepNumberText}>3</Text>
+                  </View>
+                  <Text style={styles.pinDropStepText}>
+                    Tap "Confirm Destination" to save your drop-off location.
+                  </Text>
+                </View>
+
+                {/* Important Notice */}
+                <View style={styles.pinDropWarningBanner}>
+                  <View style={styles.pinDropWarningIcon}>
+                    <Ionicons name="warning" size={16} color="#F59E0B" />
+                  </View>
+                  <Text style={styles.pinDropWarningText}>
+                    Only drop a pin on <Text style={styles.pinDropWarningBold}>highways or national roads</Text> where the bus can safely stop.
+                  </Text>
+                </View>
+              </View>
+            )}
+          </LinearGradient>
+        </View>
       )}
 
       <View style={[styles.contentContainer, { backgroundColor }]}>
@@ -1654,7 +1792,40 @@ export function CommuterHomeScreen() {
                       title="Your Location"
                       anchor={{ x: 0.5, y: 0.5 }}
                     >
-                      <View style={[styles.userMarkerContainer, { display: "flex" }]}>
+                      <View style={[styles.userMarkerWithCompass, { display: "flex" }]}>
+                        {/* Compass Cone Direction Indicator */}
+                        {isMagnetometerAvailable && (
+                          <View
+                            pointerEvents="none"
+                            style={[
+                              styles.compassConeContainer,
+                              { transform: [{ rotate: `${(compassHeading - mapCameraHeading + 360) % 360}deg` }] },
+                            ]}
+                          >
+                            <Svg width={80} height={80} viewBox="0 0 120 120">
+                              <Path
+                                d="M60,60 L60,8 A52,52 0 0,1 95,25 Z"
+                                fill="rgba(59, 130, 246, 0.25)"
+                              />
+                              <Path
+                                d="M60,60 L95,25 A52,52 0 0,1 100,40 Z"
+                                fill="rgba(59, 130, 246, 0.25)"
+                              />
+                              <Path
+                                d="M60,60 L25,25 A52,52 0 0,1 60,8 Z"
+                                fill="rgba(59, 130, 246, 0.25)"
+                              />
+                              <Path
+                                d="M60,60 L20,40 A52,52 0 0,1 25,25 Z"
+                                fill="rgba(59, 130, 246, 0.25)"
+                              />
+                              <Polygon
+                                points="60,10 55,30 60,25 65,30"
+                                fill="rgba(59, 130, 246, 0.6)"
+                              />
+                            </Svg>
+                          </View>
+                        )}
                         {/* Beating Circle Animation */}
                         <Animated.View
                           style={[
@@ -1843,6 +2014,55 @@ export function CommuterHomeScreen() {
                     <Ionicons name="close-circle" size={20} color="rgba(255,255,255,0.8)" />
                   </TouchableOpacity>
                 </LinearGradient>
+              )}
+
+              {/* How to Complete a Ride - Instructions Section */}
+              {!confirmedDestination && !selectedRouteId && (
+                <View style={[styles.instructionsSection, theme === "dark" && styles.instructionsSectionDark]}>
+                  <View style={styles.instructionsHeader}>
+                    <Ionicons name="help-circle" size={18} color={theme === "dark" ? "#60A5FA" : "#3B82F6"} />
+                    <Text style={[styles.instructionsTitle, { color: textColor }]}>
+                      How to Complete a Ride
+                    </Text>
+                  </View>
+
+                  {/* Option 1 - Set Destination First */}
+                  <View style={styles.instructionOption}>
+                    <View style={[styles.optionNumberBadge, { backgroundColor: theme === "dark" ? "#065F46" : "#ECFDF5" }]}>
+                      <Text style={[styles.optionNumber, { color: "#10B981" }]}>1</Text>
+                    </View>
+                    <View style={styles.optionContent}>
+                      <Text style={[styles.optionTitle, { color: textColor }]}>
+                        Set Your Destination First
+                      </Text>
+                      <Text style={[styles.optionDescription, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                        Tap "Destination" below → Pin your drop-off location → Tap "Find Best Route" to see available buses
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Divider with OR */}
+                  <View style={styles.orDividerContainer}>
+                    <View style={[styles.orDividerLine, { backgroundColor: theme === "dark" ? "#374151" : "#E5E7EB" }]} />
+                    <Text style={[styles.orDividerText, { color: theme === "dark" ? "#6B7280" : "#9CA3AF" }]}>OR</Text>
+                    <View style={[styles.orDividerLine, { backgroundColor: theme === "dark" ? "#374151" : "#E5E7EB" }]} />
+                  </View>
+
+                  {/* Option 2 - View Route and Select */}
+                  <View style={styles.instructionOption}>
+                    <View style={[styles.optionNumberBadge, { backgroundColor: theme === "dark" ? "#1E3A5F" : "#EFF6FF" }]}>
+                      <Text style={[styles.optionNumber, { color: "#3B82F6" }]}>2</Text>
+                    </View>
+                    <View style={styles.optionContent}>
+                      <Text style={[styles.optionTitle, { color: textColor }]}>
+                        Browse Routes Directly
+                      </Text>
+                      <Text style={[styles.optionDescription, { color: theme === "dark" ? "#9CA3AF" : "#6B7280" }]}>
+                        View Routes Tab → Select Route → Choose your drop-off point on the route
+                      </Text>
+                    </View>
+                  </View>
+                </View>
               )}
 
               {/* Destination Selection */}
@@ -2146,7 +2366,40 @@ export function CommuterHomeScreen() {
                   title="Your Location"
                   anchor={{ x: 0.5, y: 0.5 }}
                 >
-                  <View style={styles.userMarkerContainer}>
+                  <View style={styles.userMarkerWithCompass}>
+                    {/* Compass Cone Direction Indicator */}
+                    {isMagnetometerAvailable && (
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.compassConeContainer,
+                          { transform: [{ rotate: `${compassHeading}deg` }] },
+                        ]}
+                      >
+                        <Svg width={70} height={70} viewBox="0 0 120 120">
+                          <Path
+                            d="M60,60 L60,8 A52,52 0 0,1 95,25 Z"
+                            fill="rgba(59, 130, 246, 0.25)"
+                          />
+                          <Path
+                            d="M60,60 L95,25 A52,52 0 0,1 100,40 Z"
+                            fill="rgba(59, 130, 246, 0.25)"
+                          />
+                          <Path
+                            d="M60,60 L25,25 A52,52 0 0,1 60,8 Z"
+                            fill="rgba(59, 130, 246, 0.25)"
+                          />
+                          <Path
+                            d="M60,60 L20,40 A52,52 0 0,1 25,25 Z"
+                            fill="rgba(59, 130, 246, 0.25)"
+                          />
+                          <Polygon
+                            points="60,10 55,30 60,25 65,30"
+                            fill="rgba(59, 130, 246, 0.6)"
+                          />
+                        </Svg>
+                      </View>
+                    )}
                     {/* Beating Circle Animation */}
                     <Animated.View
                       style={[
@@ -2199,7 +2452,10 @@ export function CommuterHomeScreen() {
                   title={`Bus: ${bus.plateNumber}`}
                 >
                   <View style={styles.markerContainer}>
-                    <FontAwesome name="bus" size={20} color="#fff" />
+                    <Image
+                      source={require("@/assets/images/bus-icon.png")}
+                      style={styles.busIcon}
+                    />
                   </View>
                 </Marker>
               ))}
@@ -2388,7 +2644,6 @@ export function CommuterHomeScreen() {
         </Modal>
       )}
 
-      {/* Pending Request Modal */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -2462,6 +2717,10 @@ export function CommuterHomeScreen() {
               <TouchableOpacity
                 style={styles.modalButtonPrimary}
                 onPress={() => {
+                  // Mark this request as handled/ignored so it doesn't pop up again immediately
+                  if (pendingRequestData?.request?.id) {
+                    ignoredRequestIdRef.current = pendingRequestData.request.id;
+                  }
                   setShowPendingRequestModal(false);
                   router.push({
                     pathname: "/route-details",
@@ -2503,7 +2762,7 @@ export function CommuterHomeScreen() {
             {/* Decorative Background Elements */}
             <View style={styles.continueTripDecoCircle1} />
             <View style={styles.continueTripDecoCircle2} />
-            
+
             {/* Icon Container with Animation-style Background */}
             <View style={styles.continueTripIconWrapper}>
               <LinearGradient
@@ -2539,9 +2798,9 @@ export function CommuterHomeScreen() {
                   </Text>
                 </View>
               </View>
-              
+
               <View style={styles.continueTripInfoDivider} />
-              
+
               <View style={styles.continueTripInfoRow}>
                 <View style={[styles.continueTripInfoIcon, { backgroundColor: theme === "dark" ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5' }]}>
                   <Ionicons name="navigate-outline" size={18} color="#10B981" />
@@ -2699,7 +2958,7 @@ export function CommuterHomeScreen() {
       {/* Pin Dropping UI */}
       {isPinDroppingMode && (
         <>
-          <View
+          {/* <View
             style={[
               styles.instructionContainer,
               droppedPinLocation && styles.instructionContainerWithPin,
@@ -2712,32 +2971,60 @@ export function CommuterHomeScreen() {
                   ? "📍 Tap on the map to set your destination for this route"
                   : "📍 Tap on the map to drop a pin"}
             </Text>
-          </View>
-          <View style={styles.pinActionContainer}>
-            <TouchableOpacity
-              style={[styles.pinActionButton, styles.cancelButton]}
-              onPress={handleCancelPinDrop}
+          </View> */}
+          <View style={styles.pinActionWrapper}>
+            <LinearGradient
+              colors={theme === "dark"
+                ? ["rgba(31, 41, 55, 0.95)", "rgba(17, 24, 39, 0.98)"]
+                : ["rgba(255, 255, 255, 0.95)", "rgba(248, 250, 252, 0.98)"]}
+              style={styles.pinActionContainer}
             >
-              <Text style={styles.pinActionButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.pinActionButton,
-                styles.confirmButton,
-                droppedPinLocation && styles.confirmButtonActive,
-                (!droppedPinLocation || isGeocoding) && styles.disabledButton,
-              ]}
-              onPress={handleConfirmDestination}
-              disabled={!droppedPinLocation || isGeocoding}
-            >
-              {isGeocoding ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.pinActionButtonText}>
-                  {droppedPinLocation ? "✓ Confirm" : "Confirm Pin"}
-                </Text>
+              {/* Status indicator when pin is dropped */}
+              {droppedPinLocation && (
+                <View style={styles.pinStatusIndicator}>
+                  <View style={styles.pinStatusDot} />
+                  <Text style={styles.pinStatusText}>Pin placed - Ready to confirm</Text>
+                </View>
               )}
-            </TouchableOpacity>
+
+              <View style={styles.pinActionButtonsRow}>
+                <TouchableOpacity
+                  style={[styles.pinActionButton, styles.cancelButton]}
+                  onPress={handleCancelPinDrop}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="close-circle-outline" size={20} color="#fff" />
+                  <Text style={styles.pinActionButtonText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.pinActionButton,
+                    styles.confirmButton,
+                    droppedPinLocation && styles.confirmButtonActive,
+                    (!droppedPinLocation || isGeocoding) && styles.disabledButton,
+                  ]}
+                  onPress={handleConfirmDestination}
+                  disabled={!droppedPinLocation || isGeocoding}
+                  activeOpacity={0.8}
+                >
+                  {isGeocoding ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons
+                        name={droppedPinLocation ? "checkmark-circle" : "location-outline"}
+                        size={20}
+                        color="#fff"
+                      />
+                      <Text style={styles.pinActionButtonText}>
+                        {droppedPinLocation ? "Confirm Destination" : "Drop a Pin First"}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </LinearGradient>
           </View>
         </>
       )}
@@ -2775,6 +3062,135 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
     zIndex: 1001,
+  },
+
+  // Enhanced Pin Drop Header Styles
+  pinDropHeaderContainer: {
+    zIndex: 1001,
+  },
+  pinDropHeaderGradient: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    paddingTop: 50, // Account for status bar
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    position: "relative",
+    overflow: "hidden",
+  },
+  pinDropDecorCircle1: {
+    position: "absolute",
+    top: -40,
+    right: -40,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
+  pinDropDecorCircle2: {
+    position: "absolute",
+    top: 60,
+    right: 30,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+  },
+  pinDropHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pinDropInstructionsContainer: {
+    marginTop: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+    borderRadius: 14,
+    padding: 14,
+    gap: 10,
+  },
+  pinDropStep: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  pinDropStepNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinDropStepNumberText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  pinDropStepText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#fff",
+    lineHeight: 18,
+  },
+  pinDropWarningBanner: {
+    marginTop: 14,
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.3)",
+  },
+  pinDropWarningIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(245, 158, 11, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  pinDropWarningText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#fff",
+    lineHeight: 18,
+  },
+  pinDropWarningBold: {
+    fontWeight: "800",
+    color: "#FCD34D",
+  },
+  // Collapsible Instructions Header
+  pinDropInstructionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginTop: 14,
+  },
+  pinDropInstructionsHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  pinDropInstructionsHeaderText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  pinDropInstructionsToggle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
   },
   fullScreenCloseButton: {
     padding: 8,
@@ -3556,47 +3972,84 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
   },
-  pinActionContainer: {
+  // Enhanced Pin Action Container
+  pinActionWrapper: {
     position: "absolute",
-    bottom: 40,
-    left: 20,
-    right: 20,
+    bottom: 30, // Navbar is hidden in pin dropping mode, so we can position lower
+    left: 15,
+    right: 15,
+    zIndex: 1002,
+  },
+  pinActionContainer: {
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 12,
+    borderWidth: 1,
+    borderColor: "rgba(59, 130, 246, 0.2)",
+  },
+  pinStatusIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+    gap: 8,
+  },
+  pinStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#10B981",
+  },
+  pinStatusText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#10B981",
+  },
+  pinActionButtonsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    zIndex: 1002, // Above the map but below header
+    gap: 12,
   },
   pinActionButton: {
     flex: 1,
-    paddingVertical: 16,
-    borderRadius: 25,
+    flexDirection: "row",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    marginHorizontal: 8,
-    elevation: 8,
+    gap: 8,
+    elevation: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.2,
     shadowRadius: 6,
   },
   confirmButton: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#3B82F6",
+    flex: 1.5,
   },
   confirmButtonActive: {
-    backgroundColor: "#34C759",
-    transform: [{ scale: 1.05 }],
+    backgroundColor: "#10B981",
   },
   cancelButton: {
-    backgroundColor: "#6c757d",
+    backgroundColor: "#6B7280",
+    flex: 0.8,
   },
   disabledButton: {
-    backgroundColor: "#8E8E93",
-    opacity: 0.6,
+    backgroundColor: "#9CA3AF",
+    opacity: 0.7,
   },
   pinActionButtonText: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "700",
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
 
   // Loading Overlay
@@ -3987,6 +4440,80 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
 
+  // Instructions Section Styles
+  instructionsSection: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderStyle: "dashed",
+  },
+  instructionsSectionDark: {
+    backgroundColor: "rgba(30, 58, 95, 0.3)",
+    borderColor: "#374151",
+  },
+  instructionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 14,
+  },
+  instructionsTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  instructionOption: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    paddingVertical: 8,
+  },
+  optionNumberBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  optionNumber: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  optionContent: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  optionDescription: {
+    fontSize: 12,
+    fontWeight: "400",
+    lineHeight: 18,
+  },
+  orDividerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 10,
+    paddingHorizontal: 8,
+  },
+  orDividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  orDividerText: {
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    marginHorizontal: 12,
+  },
+
   // Premium Nearby Section Styles
   nearbyIconWrapper: {
     marginRight: 14,
@@ -4079,7 +4606,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 14,
     gap: 8,
-  },  modalButtonPrimaryText: {
+  }, modalButtonPrimaryText: {
     color: "#fff",
     fontWeight: "600",
     fontSize: 12,
@@ -4278,6 +4805,21 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "700",
     fontSize: 14,
+  },
+
+  // Compass Direction Indicator Styles
+  userMarkerWithCompass: {
+    width: 80,
+    height: 80,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  compassConeContainer: {
+    position: "absolute",
+    width: 80,
+    height: 80,
+    justifyContent: "center",
+    alignItems: "center",
   },
 });
 

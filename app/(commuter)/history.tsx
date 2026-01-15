@@ -623,7 +623,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 20,
-  },  loadingIconContainer: {
+  }, loadingIconContainer: {
     width: 80,
     height: 80,
     borderRadius: 24,
@@ -713,7 +713,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(0, 0, 0, 0.04)",
-  },  statsCardDark: {
+  }, statsCardDark: {
     backgroundColor: "#1F2937",
     borderColor: "rgba(59, 130, 246, 0.15)",
   },
@@ -976,7 +976,7 @@ const styles = StyleSheet.create({
     marginBottom: 3,
     textTransform: "uppercase",
     letterSpacing: 0.5,
-  },  locationText: {
+  }, locationText: {
     fontSize: 14,
     fontWeight: "500",
     lineHeight: 20,

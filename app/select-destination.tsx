@@ -12,18 +12,40 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
-  FlatList,
   Image,
   Keyboard,
+  LayoutAnimation,
+  Platform,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import MapView, { Marker, Polyline } from "react-native-maps";
+import Svg, { Path, Polygon } from "react-native-svg";
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
+const MARKER_ANIMATION_DURATION = 500; // ms - smooth marker transition duration
+
+// --- Helper Functions ---
+// Calculate bearing between two points (for camera rotation)
+const calculateBearing = (
+  start: { latitude: number; longitude: number },
+  end: { latitude: number; longitude: number }
+): number => {
+  const toRadians = (deg: number) => deg * (Math.PI / 180);
+  const toDegrees = (rad: number) => rad * (180 / Math.PI);
+
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const dLng = toRadians(end.longitude - start.longitude);
+
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+
+  let bearing = toDegrees(Math.atan2(y, x));
+  return (bearing + 360) % 360; // Normalize to 0-360
+};
 
 // --- Data Types ---
 type Route = {
@@ -74,6 +96,7 @@ export default function SelectDestinationScreen() {
   const [isSearching, setIsSearching] = useState(false);
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [showInstruction, setShowInstruction] = useState(true);
+  const [showPinDropInstructions, setShowPinDropInstructions] = useState(false);
 
   // Animation states
   const [searchBarFocused, setSearchBarFocused] = useState(false);
@@ -89,6 +112,21 @@ export default function SelectDestinationScreen() {
   const confirmButtonScale = useRef(new Animated.Value(1)).current;
   const confirmButtonGlow = useRef(new Animated.Value(0)).current;
   const userLocationPulse = useRef(new Animated.Value(1)).current;
+
+  // Animated user location for smooth marker transitions
+  const [animatedUserLocation, setAnimatedUserLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  // Reference to the user location marker for native animation
+  const userMarkerRef = useRef<any>(null);
+  // Animation frame reference for cleanup
+  const markerAnimationFrameRef = useRef<number | null>(null);
+
+  // Compass/Magnetometer state for direction indicator
+  const [compassHeading, setCompassHeading] = useState(0);
+  const [isMagnetometerAvailable, setIsMagnetometerAvailable] = useState(false);
+  const [mapCameraHeading, setMapCameraHeading] = useState(0); // Track map rotation
 
   // Debounced location update to prevent excessive map animations
   const updateLocationWithDebounce = useCallback(
@@ -174,6 +212,9 @@ export default function SelectDestinationScreen() {
       if (mapAnimationTimeoutRef.current) {
         clearTimeout(mapAnimationTimeoutRef.current);
       }
+      if (markerAnimationFrameRef.current) {
+        cancelAnimationFrame(markerAnimationFrameRef.current);
+      }
       targetPulse.stopAnimation();
       pinBounce.stopAnimation();
       cancelButtonScale.stopAnimation();
@@ -182,6 +223,102 @@ export default function SelectDestinationScreen() {
       userLocationPulse.stopAnimation();
     };
   }, []);
+
+  // Animate user location marker smoothly when location changes
+  useEffect(() => {
+    if (!userLocation) return;
+
+    const targetLocation = {
+      latitude: userLocation.coords.latitude,
+      longitude: userLocation.coords.longitude,
+    };
+
+    // Cancel any ongoing animation
+    if (markerAnimationFrameRef.current) {
+      cancelAnimationFrame(markerAnimationFrameRef.current);
+    }
+
+    // Initialize animated position if not set
+    if (!animatedUserLocation) {
+      setAnimatedUserLocation(targetLocation);
+      return;
+    }
+
+    // For Android, use native animateMarkerToCoordinate method
+    if (Platform.OS === 'android' && userMarkerRef.current) {
+      userMarkerRef.current.animateMarkerToCoordinate(
+        targetLocation,
+        MARKER_ANIMATION_DURATION
+      );
+      // Also update state for tracking
+      setAnimatedUserLocation(targetLocation);
+    } else {
+      // For iOS and web, use smooth interpolation
+      const startPos = { ...animatedUserLocation };
+      const endPos = targetLocation;
+      const startTime = Date.now();
+      const duration = MARKER_ANIMATION_DURATION;
+
+      const animateStep = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // Ease out cubic for smoother deceleration
+        const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+        const newLat = startPos.latitude + (endPos.latitude - startPos.latitude) * easeProgress;
+        const newLng = startPos.longitude + (endPos.longitude - startPos.longitude) * easeProgress;
+
+        setAnimatedUserLocation({
+          latitude: newLat,
+          longitude: newLng,
+        });
+
+        if (progress < 1) {
+          markerAnimationFrameRef.current = requestAnimationFrame(animateStep);
+        }
+      };
+
+      markerAnimationFrameRef.current = requestAnimationFrame(animateStep);
+    }
+  }, [userLocation]);
+
+  // Compass heading using expo-location for better accuracy
+  useEffect(() => {
+    let headingSub: Location.LocationSubscription | null = null;
+
+    const subscribe = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setIsMagnetometerAvailable(false);
+          return;
+        }
+
+        // Check if heading is available
+        const available = await Location.hasServicesEnabledAsync();
+        setIsMagnetometerAvailable(available);
+        if (!available) return;
+
+        headingSub = await Location.watchHeadingAsync((h) => {
+          // Use trueHeading if available (more accurate), otherwise use magHeading
+          const bearing = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          setCompassHeading(Math.round(bearing));
+        });
+      } catch (error) {
+        console.error('Error setting up heading watch:', error);
+        setIsMagnetometerAvailable(false);
+      }
+    };
+
+    subscribe();
+    return () => {
+      if (headingSub) {
+        headingSub.remove();
+      }
+    };
+  }, []);
+
 
   // Hide instruction after 5 seconds
   useEffect(() => {
@@ -492,13 +629,25 @@ export default function SelectDestinationScreen() {
     const paddedLngDistance = lngDistance * 1.5;
     const paddedTotalDistance = Math.max(paddedLatDistance, paddedLngDistance);
 
-    let zoomLevel = 18;
-    if (paddedTotalDistance < 0.005) zoomLevel = 19;
-    else if (paddedTotalDistance < 0.01) zoomLevel = 18;
-    else if (paddedTotalDistance < 0.05) zoomLevel = 17;
-    else if (paddedTotalDistance < 0.1) zoomLevel = 14;
-    else if (paddedTotalDistance < 0.2) zoomLevel = 12;
-    else zoomLevel = 12;
+    let zoomLevel = 20;
+    if (paddedTotalDistance < 0.005) zoomLevel = 20;
+    else if (paddedTotalDistance < 0.01) zoomLevel = 19;
+    else if (paddedTotalDistance < 0.05) zoomLevel = 18;
+    else if (paddedTotalDistance < 0.1) zoomLevel = 17;
+    else if (paddedTotalDistance < 0.2) zoomLevel = 16;
+    else zoomLevel = 16;
+
+    // Calculate heading to view route from bottom (start) to top (end)
+    const routeStart = {
+      latitude: coordinates[0][1],
+      longitude: coordinates[0][0],
+    };
+    const routeEnd = {
+      latitude: coordinates[coordinates.length - 1][1],
+      longitude: coordinates[coordinates.length - 1][0],
+    };
+    const heading = calculateBearing(routeStart, routeEnd);
+    setMapCameraHeading(heading); // Store map rotation
 
     setTimeout(() => {
       if (mapRef.current) {
@@ -507,7 +656,7 @@ export default function SelectDestinationScreen() {
             center: { latitude: centerLat, longitude: centerLng },
             zoom: zoomLevel,
             pitch: 55,
-            heading: 0,
+            heading: heading, // Rotate camera so route goes from bottom to top
           },
           { duration: 1500 }
         );
@@ -517,6 +666,7 @@ export default function SelectDestinationScreen() {
 
   const zoomToUserLocation = useCallback(() => {
     if (!mapRef.current || !userLocation) return;
+    setMapCameraHeading(0); // Reset to North-up
     setTimeout(() => {
       if (mapRef.current) {
         mapRef.current.animateCamera(
@@ -563,12 +713,19 @@ export default function SelectDestinationScreen() {
       const centerLat = (minLat + maxLat) / 2;
       const centerLng = (minLng + maxLng) / 2;
 
+      // Calculate heading from user to destination (bottom to top view)
+      const heading = calculateBearing(
+        { latitude: userLat, longitude: userLng },
+        { latitude: destLat, longitude: destLng }
+      );
+      setMapCameraHeading(heading); // Store map rotation
+
       mapRef.current.animateCamera(
         {
           center: { latitude: centerLat, longitude: centerLng },
           zoom: zoomLevel,
           pitch: pitch,
-          heading: 0,
+          heading: heading, // Rotate so destination is at top
         },
         { duration: 1200 }
       );
@@ -696,31 +853,113 @@ export default function SelectDestinationScreen() {
     <View style={[styles.container, { backgroundColor }]}>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
 
-      {/* Premium Gradient Header */}
-      <LinearGradient
-        colors={isDark ? ["#0e7490", "#155e75", "#164e63"] : ["#22d3ee", "#06b6d4", "#0891b2"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.header}
-      >
-        <View style={styles.headerDecorativeCircle1} />
-        <View style={styles.headerDecorativeCircle2} />
-        <View style={styles.headerContent}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={handleCancel}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerTextContainer}>
-            <Text style={styles.title}>Set Destination</Text>
-            <Text style={styles.subtitle} numberOfLines={1}>
-              {selectedRouteName || "Commuter Route"}
-            </Text>
+      {/* Premium Pin Drop Header */}
+      <View style={styles.pinDropHeaderContainer}>
+        <LinearGradient
+          colors={isDark
+            ? ["#1a365d", "#2563eb", "#3b82f6"]
+            : ["#0052d4", "#4364f7", "#6fb1fc"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.pinDropHeaderGradient}
+        >
+          {/* Decorative elements */}
+          <View style={styles.pinDropDecorCircle1} />
+          <View style={styles.pinDropDecorCircle2} />
+
+          {/* Main Header Row */}
+          <View style={styles.pinDropHeaderRow}>
+            <View style={styles.headerIconContainer}>
+              <LinearGradient
+                colors={["#ffffff", "#f0f9ff"]}
+                style={styles.headerIconGradient}
+              >
+                <Ionicons name="location" size={28} color="#0066FF" />
+              </LinearGradient>
+            </View>
+            <View style={styles.headerTextContainer}>
+              <Text style={styles.title}>
+                {selectedRouteId
+                  ? `Set Destination for ${selectedRouteName}`
+                  : "Set Your Drop-off Point"}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.fullScreenCloseButton}
+              onPress={handleCancel}
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
           </View>
-        </View>
-      </LinearGradient>
+
+          <TouchableOpacity
+            style={styles.pinDropInstructionsHeader}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setShowPinDropInstructions(!showPinDropInstructions);
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={styles.pinDropInstructionsHeaderLeft}>
+              <Ionicons name="help-circle" size={18} color="#fff" />
+              <Text style={styles.pinDropInstructionsHeaderText}>
+                How to drop a pin
+              </Text>
+            </View>
+            <View style={styles.pinDropInstructionsToggle}>
+              <Ionicons
+                name={showPinDropInstructions ? "chevron-up" : "chevron-down"}
+                size={18}
+                color="#fff"
+              />
+            </View>
+          </TouchableOpacity>
+
+          {showPinDropInstructions && (
+            <View style={styles.pinDropInstructionsContainer}>
+              {/* Step 1 */}
+              <View style={styles.pinDropStep}>
+                <View style={styles.pinDropStepNumber}>
+                  <Text style={styles.pinDropStepNumberText}>1</Text>
+                </View>
+                <Text style={styles.pinDropStepText}>
+                  Find a highway or national road on the map.
+                </Text>
+              </View>
+
+              {/* Step 2 */}
+              <View style={styles.pinDropStep}>
+                <View style={styles.pinDropStepNumber}>
+                  <Text style={styles.pinDropStepNumberText}>2</Text>
+                </View>
+                <Text style={styles.pinDropStepText}>
+                  Tap to drop your pin where you want to drop off.
+                </Text>
+              </View>
+
+              {/* Step 3 */}
+              <View style={styles.pinDropStep}>
+                <View style={styles.pinDropStepNumber}>
+                  <Text style={styles.pinDropStepNumberText}>3</Text>
+                </View>
+                <Text style={styles.pinDropStepText}>
+                  Tap "Confirm" to save your drop-off location.
+                </Text>
+              </View>
+
+              {/* Important Notice */}
+              <View style={styles.pinDropWarningBanner}>
+                <View style={styles.pinDropWarningIcon}>
+                  <Ionicons name="warning" size={16} color="#F59E0B" />
+                </View>
+                <Text style={styles.pinDropWarningText}>
+                  Only drop a pin on <Text style={styles.pinDropWarningBold}>highways or national roads</Text> where the bus can safely stop.
+                </Text>
+              </View>
+            </View>
+          )}
+        </LinearGradient>
+      </View>
 
       {/* Map */}
       <MapView
@@ -771,15 +1010,16 @@ export default function SelectDestinationScreen() {
                 latitude: routeData.path.coordinates[0][1],
                 longitude: routeData.path.coordinates[0][0],
               }}
-              title="Start"
-              description={routeData.start_address || "Route Start"}
               anchor={{ x: 0.5, y: 0.5 }}
+              onPress={() => { }}
             >
-              <Image
-                source={require("../assets/images/start-route.png")}
-                style={{ width: 32, height: 32 }}
-                resizeMode="contain"
-              />
+              <View style={{ width: 32, height: 32 }}>
+                <Image
+                  source={require("../assets/images/start-route.png")}
+                  style={{ width: 32, height: 32 }}
+                  resizeMode="contain"
+                />
+              </View>
             </Marker>
 
             <Marker
@@ -787,44 +1027,67 @@ export default function SelectDestinationScreen() {
                 latitude: routeData.path.coordinates[routeData.path.coordinates.length - 1][1],
                 longitude: routeData.path.coordinates[routeData.path.coordinates.length - 1][0],
               }}
-              title="End"
-              description={routeData.end_address || "Route End"}
               anchor={{ x: 0.5, y: 0.5 }}
+              onPress={() => { }}
             >
-              <Image
-                source={require("../assets/images/end-route.png")}
-                style={{ width: 32, height: 32 }}
-                resizeMode="contain"
-              />
+              <View style={{ width: 32, height: 32 }}>
+                <Image
+                  source={require("../assets/images/end-route.png")}
+                  style={{ width: 32, height: 32 }}
+                  resizeMode="contain"
+                />
+              </View>
             </Marker>
           </>
         )}
 
-        {/* User Location Marker */}
-        {userLocation && (
+        {/* User Location Marker with smooth animation */}
+        {animatedUserLocation && (
           <Marker
-            coordinate={{
-              latitude: userLocation.coords.latitude,
-              longitude: userLocation.coords.longitude,
-            }}
+            ref={userMarkerRef}
+            coordinate={animatedUserLocation}
             anchor={{ x: 0.5, y: 0.5 }}
+            onPress={() => { }}
           >
-            <View style={styles.userMarkerContainer}>
-              <Animated.View
-                style={[
-                  styles.userLocationRipple,
-                  {
-                    transform: [{ scale: userLocationPulse }],
-                    opacity: userLocationPulse.interpolate({
-                      inputRange: [1, 1.3],
-                      outputRange: [0.6, 0.1],
-                    }),
-                  },
-                ]}
-              />
+            <View style={{ width: 80, height: 80, alignItems: "center", justifyContent: "center" }}>
+              {/* Compass Cone Direction Indicator */}
+              {isMagnetometerAvailable && (
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: "absolute",
+                    width: 80,
+                    height: 80,
+                    transform: [{ rotate: `${(compassHeading - mapCameraHeading + 360) % 360}deg` }],
+                  }}
+                >
+                  <Svg width={80} height={80} viewBox="0 0 120 120">
+                    <Path
+                      d="M60,60 L60,8 A52,52 0 0,1 95,25 Z"
+                      fill="rgba(59, 130, 246, 0.35)"
+                    />
+                    <Path
+                      d="M60,60 L95,25 A52,52 0 0,1 100,40 Z"
+                      fill="rgba(59, 130, 246, 0.25)"
+                    />
+                    <Path
+                      d="M60,60 L25,25 A52,52 0 0,1 60,8 Z"
+                      fill="rgba(59, 130, 246, 0.35)"
+                    />
+                    <Path
+                      d="M60,60 L20,40 A52,52 0 0,1 25,25 Z"
+                      fill="rgba(59, 130, 246, 0.25)"
+                    />
+                    <Polygon
+                      points="60,10 55,30 60,25 65,30"
+                      fill="rgba(59, 130, 246, 0.6)"
+                    />
+                  </Svg>
+                </View>
+              )}
               <Image
                 source={require("../assets/images/user-pin.png")}
-                style={styles.userMarkerIcon}
+                style={{ width: 36, height: 36 }}
                 resizeMode="contain"
               />
             </View>
@@ -838,41 +1101,21 @@ export default function SelectDestinationScreen() {
             draggable
             onDragEnd={handleDestinationDragEnd}
             anchor={{ x: 0.5, y: 1 }}
+            onPress={() => { }}
           >
-            <Animated.View
-              style={[
-                styles.destinationPin,
-                {
-                  transform: [
-                    {
-                      scale: pinBounce.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [1, 1.15],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-            >
+            <View style={{ width: 40, height: 40 }}>
               <Image
                 source={require("../assets/images/destination-flag.png")}
-                style={styles.destinationIcon}
+                style={{ width: 40, height: 40 }}
                 resizeMode="contain"
               />
-              <Animated.View
-                style={[
-                  styles.targetCircle,
-                  {
-                    transform: [{ scale: targetPulse }],
-                  },
-                ]}
-              />
-            </Animated.View>
+            </View>
           </Marker>
         )}
       </MapView>
 
-      {/* Search Bar - Floating */}
+      {/* Search Bar - Floating
+      
       <Animated.View
         style={[
           styles.searchContainer,
@@ -919,7 +1162,7 @@ export default function SelectDestinationScreen() {
         </View>
 
         {/* Search Results */}
-        {showSearchResults && predictions.length > 0 && (
+      {/* {showSearchResults && predictions.length > 0 && (
           <View style={[styles.searchResultsContainer, { backgroundColor: isDark ? "#1f2937" : "#fff" }]}>
             <FlatList
               data={predictions}
@@ -940,10 +1183,10 @@ export default function SelectDestinationScreen() {
             />
           </View>
         )}
-      </Animated.View>
+      </Animated.View> */}
 
       {/* Floating Map Controls */}
-      <View style={styles.floatingControls}>
+      {/* <View style={styles.floatingControls}>
         <TouchableOpacity
           style={styles.floatingButtonWrapper}
           onPress={zoomToUserLocation}
@@ -971,9 +1214,9 @@ export default function SelectDestinationScreen() {
             </LinearGradient>
           </TouchableOpacity>
         )}
-      </View>
+      </View> */
 
-      {/* Instruction Banner - Floating Pill */}
+      /* Instruction Banner - Floating Pill
       {showInstruction && (
         <Animated.View style={[styles.instructionPill, { opacity: instructionOpacity }]}>
           <LinearGradient
@@ -994,7 +1237,7 @@ export default function SelectDestinationScreen() {
             </Text>
           </LinearGradient>
         </Animated.View>
-      )}
+      )} */}
 
       {/* Bottom Action Bar */}
       <View style={[styles.bottomBar, { backgroundColor: isDark ? "#111827" : "#fff" }]}>
@@ -1178,7 +1421,7 @@ const styles = StyleSheet.create({
   // Search Bar
   searchContainer: {
     position: "absolute",
-    top: 130, // Below header
+    top: 180, // Below new header
     left: 20,
     right: 20,
     zIndex: 20,
@@ -1234,7 +1477,7 @@ const styles = StyleSheet.create({
   floatingControls: {
     position: "absolute",
     right: 20,
-    bottom: 200,
+    bottom: 250,
     gap: 12,
   },
   floatingButtonWrapper: {
@@ -1255,7 +1498,7 @@ const styles = StyleSheet.create({
   // Instruction Pill
   instructionPill: {
     position: "absolute",
-    top: 200, // Below search
+    top: 250, // Below search
     alignSelf: "center",
     zIndex: 15,
   },
@@ -1363,5 +1606,150 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+
+  // Premium Pin Drop Header Styles
+  pinDropHeaderContainer: {
+    zIndex: 10,
+  },
+  pinDropHeaderGradient: {
+    paddingTop: 50,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    position: "relative",
+    overflow: "hidden",
+  },
+  pinDropDecorCircle1: {
+    position: "absolute",
+    top: -30,
+    right: -30,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  pinDropDecorCircle2: {
+    position: "absolute",
+    top: 50,
+    right: 60,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+  },
+  pinDropHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  headerIconContainer: {
+    marginRight: 14,
+  },
+  headerIconGradient: {
+    width: 50,
+    height: 50,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fullScreenCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinDropInstructionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  pinDropInstructionsHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  pinDropInstructionsHeaderText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  pinDropInstructionsToggle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinDropInstructionsContainer: {
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 12,
+    gap: 12,
+  },
+  pinDropStep: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  pinDropStepNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinDropStepNumberText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  pinDropStepText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "500",
+    color: "rgba(255, 255, 255, 0.95)",
+    lineHeight: 20,
+  },
+  pinDropWarningBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.3)",
+  },
+  pinDropWarningIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(245, 158, 11, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  pinDropWarningText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "500",
+    color: "rgba(255, 255, 255, 0.9)",
+    lineHeight: 19,
+  },
+  pinDropWarningBold: {
+    fontWeight: "700",
+    color: "#fff",
   },
 });

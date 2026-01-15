@@ -35,8 +35,11 @@ const TabBarIcon = ({
   );
 };
 
-export default function CommuterTabs() {
+import { CommuterUIProvider, useCommuterUI } from "@/contexts/CommuterUIContext";
+
+function CommuterTabsContent() {
   const { theme } = useAppTheme();
+  const { isPinDroppingMode } = useCommuterUI();
   const insets = useSafeAreaInsets();
   const hapticTabButton = (props: any) => <HapticTab {...props} />;
 
@@ -47,29 +50,31 @@ export default function CommuterTabs() {
       screenOptions={{
         tabBarActiveTintColor: isDark ? "#60A5FA" : "#2563EB",
         tabBarInactiveTintColor: isDark ? "#6B7280" : "#9CA3AF",
-        tabBarStyle: {
-          position: "absolute",
-          bottom: Platform.OS === "ios" ? 10 + insets.bottom / 2 : 8,
-          left: 15,
-          right: 15,
-          height: 70,
-          borderRadius: 24,
-          backgroundColor: isDark
-            ? "rgba(31, 41, 55, 0.95)"
-            : "rgba(255, 255, 255, 0.98)",
-          borderTopWidth: 0,
-          shadowColor: isDark ? "#000" : "#3B82F6",
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: isDark ? 0.4 : 0.15,
-          shadowRadius: 16,
-          elevation: 4,
-          paddingBottom: 0,
-          paddingTop: 0,
-          borderWidth: 1,
-          borderColor: isDark
-            ? "rgba(59, 130, 246, 0.2)"
-            : "rgba(59, 130, 246, 0.1)",
-        },
+        tabBarStyle: isPinDroppingMode
+          ? { display: "none" }
+          : {
+            position: "absolute",
+            bottom: Platform.OS === "ios" ? 10 + insets.bottom / 2 : 8,
+            left: 15,
+            right: 15,
+            height: 70,
+            borderRadius: 24,
+            backgroundColor: isDark
+              ? "rgba(31, 41, 55, 0.95)"
+              : "rgba(255, 255, 255, 0.98)",
+            borderTopWidth: 0,
+            shadowColor: isDark ? "#000" : "#3B82F6",
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: isDark ? 0.4 : 0.15,
+            shadowRadius: 16,
+            elevation: 4,
+            paddingBottom: 0,
+            paddingTop: 0,
+            borderWidth: 1,
+            borderColor: isDark
+              ? "rgba(59, 130, 246, 0.2)"
+              : "rgba(59, 130, 246, 0.1)",
+          },
         tabBarItemStyle: {
           paddingVertical: 8,
           marginHorizontal: 2,
@@ -81,7 +86,7 @@ export default function CommuterTabs() {
           letterSpacing: 0.2,
         },
         tabBarBackground: () =>
-          isDark ? (
+          isDark && !isPinDroppingMode ? (
             <BlurView
               intensity={40}
               tint="dark"
@@ -151,6 +156,14 @@ export default function CommuterTabs() {
         }}
       />
     </Tabs>
+  );
+}
+
+export default function CommuterTabs() {
+  return (
+    <CommuterUIProvider>
+      <CommuterTabsContent />
+    </CommuterUIProvider>
   );
 }
 

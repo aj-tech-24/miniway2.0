@@ -1,11 +1,11 @@
 import { supabase } from "@/lib/supabase";
 import { Session } from "@supabase/supabase-js";
 import { registerIndieID } from "native-notify";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 
 if (Platform.OS === "android") {
   Notifications.setNotificationChannelAsync("default", {
@@ -35,17 +35,26 @@ async function ensureNotificationPermission() {
   return true;
 }
 
+// Generate a unique session token for this device
+function generateSessionToken(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}-${Platform.OS}-${Device.modelName || 'unknown'}`;
+}
+
 // The context now provides the session directly.
 const AuthContext = createContext<{
   session: Session | null;
   signOut: () => void;
   isLoading: boolean;
   role: string | null;
+  sessionKicked: boolean;
+  clearSessionKicked: () => void;
 }>({
   session: null,
-  signOut: () => {},
+  signOut: () => { },
   isLoading: true,
   role: null,
+  sessionKicked: false,
+  clearSessionKicked: () => { },
 });
 
 export const useAuth = () => {
@@ -56,19 +65,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [role, setRole] = useState<string | null>(null);
+  const [sessionKicked, setSessionKicked] = useState(false);
+
+  // Use refs to avoid stale closures in intervals and callbacks
+  const sessionRef = useRef<Session | null>(null);
+  const currentSessionToken = useRef<string | null>(null);
+  const isValidating = useRef(false);
+
+  // Keep sessionRef in sync with session state
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   // Function to register for push notifications
   const registerForPushNotifications = async (userId: string) => {
     try {
-      // Check if device supports Google Play Services (Huawei devices don't)
       const isHuaweiDevice =
         Device.brand?.toLowerCase().includes("huawei") ||
         Device.manufacturer?.toLowerCase().includes("huawei");
 
       if (isHuaweiDevice) {
-        console.log(
-          "Huawei device detected - skipping Google Play Services dependent notifications"
-        );
+        console.log("Huawei device detected - skipping Google Play Services dependent notifications");
         return false;
       }
 
@@ -85,35 +102,144 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error) {
       console.error("Failed to register for push notifications:", error);
-      // Don't throw error for Huawei devices - just log and continue
       if (
         error instanceof Error &&
         error.message?.includes("MISSING_INSTANCEID_SERVICE")
       ) {
-        console.log(
-          "Google Play Services not available - likely Huawei device"
-        );
+        console.log("Google Play Services not available - likely Huawei device");
         return false;
       }
       return false;
     }
   };
 
+  // Update session token in the database
+  const updateSessionToken = async (userId: string, token: string): Promise<boolean> => {
+    try {
+      console.log("Updating session token for user:", userId, "Token:", token.substring(0, 20) + "...");
+
+      const { error } = await supabase
+        .from("users")
+        .update({
+          active_session_token: token,
+          last_login_at: new Date().toISOString(),
+          last_login_device: `${Device.brand || 'Unknown'} ${Device.modelName || ''} (${Platform.OS})`.trim()
+        })
+        .eq("id", userId);
+
+      if (error) {
+        console.error("Failed to update session token:", error);
+        return false;
+      }
+
+      currentSessionToken.current = token;
+      console.log("Session token updated successfully");
+      return true;
+    } catch (error) {
+      console.error("Error updating session token:", error);
+      return false;
+    }
+  };
+
+  // Validate that the current session token matches the one in the database
+  const validateSessionToken = async (userId: string): Promise<boolean> => {
+    if (isValidating.current) {
+      console.log("Already validating, skipping...");
+      return true;
+    }
+
+    if (!currentSessionToken.current) {
+      console.log("No local session token to validate");
+      return true;
+    }
+
+    isValidating.current = true;
+
+    try {
+      console.log("Validating session token for user:", userId);
+
+      const { data, error } = await supabase
+        .from("users")
+        .select("active_session_token")
+        .eq("id", userId)
+        .single();
+
+      if (error) {
+        console.error("Failed to validate session token:", error);
+        isValidating.current = false;
+        return true; // Allow on error to prevent lockout
+      }
+
+      const dbToken = data?.active_session_token;
+      const localToken = currentSessionToken.current;
+
+      console.log("DB Token:", dbToken?.substring(0, 20) + "...");
+      console.log("Local Token:", localToken?.substring(0, 20) + "...");
+
+      // If we have a local token and DB has a different token, session was kicked
+      if (localToken && dbToken && localToken !== dbToken) {
+        console.log("!!! SESSION KICKED: Token mismatch detected!");
+        isValidating.current = false;
+        return false;
+      }
+
+      console.log("Session token is valid");
+      isValidating.current = false;
+      return true;
+    } catch (error) {
+      console.error("Error validating session token:", error);
+      isValidating.current = false;
+      return true;
+    }
+  };
+
+  // Handle kicking out the user
+  const handleSessionKicked = async () => {
+    console.log("Handling session kicked - signing out user");
+    setSessionKicked(true);
+    currentSessionToken.current = null;
+    await supabase.auth.signOut();
+    setSession(null);
+    setRole(null);
+  };
+
+  // Clear session token on sign out
+  const clearSessionToken = async (userId: string) => {
+    try {
+      await supabase
+        .from("users")
+        .update({ active_session_token: null })
+        .eq("id", userId);
+
+      currentSessionToken.current = null;
+      console.log("Session token cleared");
+    } catch (error) {
+      console.error("Error clearing session token:", error);
+    }
+  };
+
+  // Initial session load and auth state listener
   useEffect(() => {
     const loadSession = async () => {
       setIsLoading(true);
 
       const { data } = await supabase.auth.getSession();
-      setSession(data.session ?? null);
-      setRole(data.session?.user?.user_metadata?.role ?? null);
+      const currentSession = data.session;
 
-      // Always register Indie ID when user is logged in (idempotent)
-      if (data.session?.user?.id) {
+      setSession(currentSession ?? null);
+      sessionRef.current = currentSession ?? null;
+      setRole(currentSession?.user?.user_metadata?.role ?? null);
+
+      // If user has a session, generate and update token
+      if (currentSession?.user?.id) {
+        const newToken = generateSessionToken();
+        await updateSessionToken(currentSession.user.id, newToken);
+
         const granted = await ensureNotificationPermission();
         if (granted) {
-          console.log("Registering IndieID for user:", data.session.user.id);
+          console.log("Registering IndieID for user:", currentSession.user.id);
           await registerIndieID(
-            data.session.user.id,
+            currentSession.user.id,
             32035,
             "C3YxvEGRY2D8OydDIV4Wvf"
           );
@@ -126,39 +252,97 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadSession();
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log("Auth state changed:", event, session?.user?.email);
-        setSession(session);
-        setRole(session?.user?.user_metadata?.role ?? null);
+      async (event, newSession) => {
+        console.log("Auth state changed:", event, newSession?.user?.email);
 
-        // Always register Indie ID on sign-in (idempotent)
-        if (event === "SIGNED_IN" && session?.user?.id) {
+        setSession(newSession);
+        sessionRef.current = newSession;
+        setRole(newSession?.user?.user_metadata?.role ?? null);
+
+        // Handle sign-in event - generate new token
+        if (event === "SIGNED_IN" && newSession?.user?.id) {
+          const newToken = generateSessionToken();
+          await updateSessionToken(newSession.user.id, newToken);
+
           const granted = await ensureNotificationPermission();
           if (granted) {
-            console.log(
-              "Registering IndieID for user (SIGNED_IN):",
-              session.user.id
-            );
+            console.log("Registering IndieID for user (SIGNED_IN):", newSession.user.id);
             await registerIndieID(
-              session.user.id,
+              newSession.user.id,
               32035,
               "C3YxvEGRY2D8OydDIV4Wvf"
             );
           }
         }
+
+        // Handle sign-out event
+        if (event === "SIGNED_OUT") {
+          currentSessionToken.current = null;
+        }
       }
     );
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
-  const signOut = () => {
-    supabase.auth.signOut();
+  // Periodic validation using refs to avoid stale closures
+  useEffect(() => {
+    const validationInterval = setInterval(async () => {
+      const currentSession = sessionRef.current;
+      const token = currentSessionToken.current;
+
+      if (currentSession?.user?.id && token) {
+        console.log("Running periodic session validation...");
+        const isValid = await validateSessionToken(currentSession.user.id);
+        if (!isValid) {
+          await handleSessionKicked();
+        }
+      }
+    }, 15000); // Check every 15 seconds
+
+    return () => {
+      clearInterval(validationInterval);
+    };
+  }, []);
+
+  // Validate on app state change (when app comes to foreground)
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", async (nextAppState) => {
+      if (nextAppState === "active") {
+        const currentSession = sessionRef.current;
+        const token = currentSessionToken.current;
+
+        if (currentSession?.user?.id && token) {
+          console.log("App became active - validating session...");
+          const isValid = await validateSessionToken(currentSession.user.id);
+          if (!isValid) {
+            await handleSessionKicked();
+          }
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  const signOut = async () => {
+    const currentSession = sessionRef.current;
+    if (currentSession?.user?.id) {
+      await clearSessionToken(currentSession.user.id);
+    }
+    await supabase.auth.signOut();
     setSession(null);
     setRole(null);
   };
 
-  // The value now provides the session directly. The user object is inside it.
+  const clearSessionKicked = () => {
+    setSessionKicked(false);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -166,6 +350,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut,
         isLoading,
         role,
+        sessionKicked,
+        clearSessionKicked,
       }}
     >
       {children}
