@@ -214,7 +214,7 @@ export function CommuterHomeScreen() {
           setCompassHeading(Math.round(bearing));
         });
       } catch (error) {
-        console.error('Error setting up heading watch:', error);
+        //console.error('Error setting up heading watch:', error);
         setIsMagnetometerAvailable(false);
       }
     };
@@ -304,7 +304,7 @@ export function CommuterHomeScreen() {
       ...(bestRouteId ? { routeId: bestRouteId } : {}),
     };
 
-    console.log("Navigating to route-details with params:", routeParams);
+    //console.log("Navigating to route-details with params:", routeParams);
     router.push({
       pathname: "/route-details",
       params: routeParams,
@@ -499,7 +499,7 @@ export function CommuterHomeScreen() {
         .limit(1);
 
       if (error) {
-        console.error("Error checking for existing trips:", error);
+        //console.error("Error checking for existing trips:", error);
         setIsCheckingExistingTrip(false);
         return;
       } if (existingTrips && existingTrips.length > 0) {
@@ -531,7 +531,7 @@ export function CommuterHomeScreen() {
 
       }
     } catch (error) {
-      console.error("Error in checkForExistingTrip:", error);
+      //console.error("Error in checkForExistingTrip:", error);
     } finally {
       setIsCheckingExistingTrip(false);
     }
@@ -555,7 +555,7 @@ export function CommuterHomeScreen() {
       }
 
       if (error) {
-        console.error("Error cancelling existing trip:", error);
+        //console.error("Error cancelling existing trip:", error);
         Alert.alert(
           "Error",
           "Could not cancel the existing trip. Please try again."
@@ -564,7 +564,7 @@ export function CommuterHomeScreen() {
 
       }
     } catch (error) {
-      console.error("Error cancelling trip:", error);
+      //console.error("Error cancelling trip:", error);
     }
   };
   // Function to continue existing trip
@@ -606,7 +606,7 @@ export function CommuterHomeScreen() {
         params: tripParams,
       });
     } catch (error) {
-      console.error("Error continuing trip:", error);
+      //console.error("Error continuing trip:", error);
       Alert.alert("Error", "Could not continue the trip. Please try again.");
     }
   }; // Fetch nearby buses on routes
@@ -636,7 +636,7 @@ export function CommuterHomeScreen() {
         .in("status", ["waiting", "ongoing"]);
 
       if (tripsError) {
-        console.error("Error fetching trips:", tripsError);
+        //console.error("Error fetching trips:", tripsError);
         throw tripsError;
       }
 
@@ -666,10 +666,10 @@ export function CommuterHomeScreen() {
             return true;
           })
           .map((trip: TripWithGeoJSON): BusWithLocation => {
-            console.log(
-              `🚌 Bus ${trip.plate_number} - Status: ${trip.status} - Location:`,
-              trip.current_location
-            );
+            //console.log(
+            //  `🚌 Bus ${trip.plate_number} - Status: ${trip.status} - Location:`,
+            //  trip.current_location
+            //);
             return {
               id: trip.bus_id, // Use bus_id as the identifier
               plateNumber: trip.plate_number,
@@ -684,7 +684,7 @@ export function CommuterHomeScreen() {
         .select("id, name, path");
 
       if (routesError) {
-        console.error("Error fetching routes:", routesError);
+        //console.error("Error fetching routes:", routesError);
         throw routesError;
       }
 
@@ -807,7 +807,7 @@ export function CommuterHomeScreen() {
       // Log final bus data for debugging
 
     } catch (error) {
-      console.error("❌ Error in fetchActiveMinibuses:", error);
+      //console.error("❌ Error in fetchActiveMinibuses:", error);
       setBuses([]); // Set empty array on error
 
       // Don't show alert for database errors as they're usually temporary
@@ -857,7 +857,7 @@ export function CommuterHomeScreen() {
 
       // Only update if we have buses, or if we want to show empty state for that route
       // We should be careful not to flicker
-      console.log(`🚌 Real-time update: ${formattedBuses.length} buses on route ${selectedRouteId}`);
+      //console.log(`🚌 Real-time update: ${formattedBuses.length} buses on route ${selectedRouteId}`);
       setBuses(formattedBuses);
     }
   }, [selectedRouteId, contextBuses]);
@@ -891,7 +891,7 @@ export function CommuterHomeScreen() {
             setPredictions(data.predictions);
           }
         } catch (error) {
-          console.error("Error fetching predictions:", error);
+          //console.error("Error fetching predictions:", error);
         } finally {
           setIsSearching(false);
         }
@@ -1041,7 +1041,7 @@ export function CommuterHomeScreen() {
 
   const fetchPredictions = async (query: string) => {
     if (!GOOGLE_MAPS_API_KEY) {
-      console.error("Google Maps API Key is not configured.");
+      //console.error("Google Maps API Key is not configured.");
       Alert.alert(
         "Configuration Error",
         "The search feature is currently unavailable."
@@ -1062,7 +1062,7 @@ export function CommuterHomeScreen() {
         setPredictions(data.predictions);
       }
     } catch (error) {
-      console.error("Failed to fetch predictions:", error);
+      //console.error("Failed to fetch predictions:", error);
     } finally {
       setIsSearching(false);
     }
@@ -1073,7 +1073,7 @@ export function CommuterHomeScreen() {
     setPredictions([]);
     setIsSearching(true);
     if (!GOOGLE_MAPS_API_KEY) {
-      console.error("Google Maps API Key is not configured.");
+      //console.error("Google Maps API Key is not configured.");
       setIsSearching(false);
       return;
     }
@@ -1099,7 +1099,7 @@ export function CommuterHomeScreen() {
         );
       }
     } catch (error) {
-      console.error("Failed to fetch place details:", error);
+      //console.error("Failed to fetch place details:", error);
     } finally {
       setIsSearching(false);
     }
@@ -1184,7 +1184,7 @@ export function CommuterHomeScreen() {
         );
       }
     } catch (error) {
-      console.error("Failed to fetch address:", error);
+      //console.error("Failed to fetch address:", error);
       Alert.alert(
         "Error",
         "Could not determine the address. Please check your connection."
@@ -1239,8 +1239,8 @@ export function CommuterHomeScreen() {
   };
 
   const handleResetRouteSelection = () => {
-    console.log("=== RESET ROUTE SELECTION ===");
-    console.log("Clearing all route selection state");
+    //console.log("=== RESET ROUTE SELECTION ===");
+    //console.log("Clearing all route selection state");
 
     setSelectedRouteId(null);
     setSelectedRouteName(null);
@@ -1383,7 +1383,7 @@ export function CommuterHomeScreen() {
         1000
       );
     } catch (error) {
-      console.error("Failed to track user location:", error);
+      //console.error("Failed to track user location:", error);
       setLocationError(true);
       Alert.alert("Error", "Unable to get your location. Please try again.");
     } finally {
@@ -2683,9 +2683,9 @@ export function CommuterHomeScreen() {
                         .eq("id", pendingRequestData.request.id);
 
                       if (requestError) {
-                        console.error("Error cancelling pickup request:", requestError);
+                        //console.error("Error cancelling pickup request:", requestError);
                       } else {
-                        console.log("✅ Pickup request cancelled successfully");
+                        //console.log("✅ Pickup request cancelled successfully");
                       }
                     }
 
@@ -2697,16 +2697,16 @@ export function CommuterHomeScreen() {
                         .eq("id", pendingRequestData.tpRecordId);
 
                       if (tpError) {
-                        console.error("Error cancelling trip passenger:", tpError);
+                        //console.error("Error cancelling trip passenger:", tpError);
                       } else {
-                        console.log("✅ Trip passenger record cancelled successfully");
+                        //console.log("✅ Trip passenger record cancelled successfully");
                       }
                     }
 
                     setShowPendingRequestModal(false);
                     setPendingRequestData(null);
                   } catch (error) {
-                    console.error("Error during cancellation:", error);
+                    //console.error("Error during cancellation:", error);
                     Alert.alert("Error", "Could not cancel the request. Please try again.");
                   }
                 }}

@@ -196,7 +196,7 @@ export default function AuthForm({
                     style={[
                       styles.inputWrapper,
                       isDark && styles.inputWrapperDark,
-                      focusedField === field.name && styles.inputWrapperFocused,
+                      focusedField === field.name && (isDark ? styles.inputWrapperFocusedDark : styles.inputWrapperFocused),
                       field.error && styles.inputWrapperError,
                     ]}
                     onPress={() => {
@@ -230,7 +230,7 @@ export default function AuthForm({
                       styles.inputWrapper,
                       styles.textAreaWrapper,
                       isDark && styles.inputWrapperDark,
-                      focusedField === field.name && styles.inputWrapperFocused,
+                      focusedField === field.name && (isDark ? styles.inputWrapperFocusedDark : styles.inputWrapperFocused),
                       field.error && styles.inputWrapperError,
                     ]}
                   >
@@ -254,7 +254,7 @@ export default function AuthForm({
                     style={[
                       styles.inputWrapper,
                       isDark && styles.inputWrapperDark,
-                      focusedField === field.name && styles.inputWrapperFocused,
+                      focusedField === field.name && (isDark ? styles.inputWrapperFocusedDark : styles.inputWrapperFocused),
                       field.error && styles.inputWrapperError,
                     ]}
                   >
@@ -293,7 +293,7 @@ export default function AuthForm({
                     style={[
                       styles.inputWrapper,
                       isDark && styles.inputWrapperDark,
-                      focusedField === field.name && styles.inputWrapperFocused,
+                      focusedField === field.name && (isDark ? styles.inputWrapperFocusedDark : styles.inputWrapperFocused),
                       field.error && styles.inputWrapperError,
                     ]}
                   >
@@ -564,6 +564,11 @@ const styles = StyleSheet.create({
     borderColor: "#06B6D4",
     borderWidth: 2,
     backgroundColor: "#fff",
+  },
+  inputWrapperFocusedDark: {
+    borderColor: "#06B6D4",
+    borderWidth: 2,
+    backgroundColor: "#111827",
   },
   inputWrapperError: {
     borderColor: "#EF4444",

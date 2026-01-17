@@ -22,7 +22,6 @@ async function ensureNotificationPermission() {
   if (status !== "granted") {
     const { status: newStatus } = await Notifications.requestPermissionsAsync();
     if (newStatus !== "granted") {
-      console.warn("Push permission not granted");
       return false;
     }
   }
@@ -85,7 +84,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         Device.manufacturer?.toLowerCase().includes("huawei");
 
       if (isHuaweiDevice) {
-        console.log("Huawei device detected - skipping Google Play Services dependent notifications");
         return false;
       }
 
@@ -94,19 +92,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (appId && appToken) {
         await registerIndieID(userId, appId, appToken);
-        console.log("Successfully registered for push notifications");
         return true;
       } else {
-        console.warn("NativeNotify credentials not found in app config");
         return false;
       }
     } catch (error) {
-      console.error("Failed to register for push notifications:", error);
       if (
         error instanceof Error &&
         error.message?.includes("MISSING_INSTANCEID_SERVICE")
       ) {
-        console.log("Google Play Services not available - likely Huawei device");
         return false;
       }
       return false;
@@ -116,7 +110,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Update session token in the database
   const updateSessionToken = async (userId: string, token: string): Promise<boolean> => {
     try {
-      console.log("Updating session token for user:", userId, "Token:", token.substring(0, 20) + "...");
 
       const { error } = await supabase
         .from("users")
@@ -128,15 +121,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq("id", userId);
 
       if (error) {
-        console.error("Failed to update session token:", error);
         return false;
       }
 
       currentSessionToken.current = token;
-      console.log("Session token updated successfully");
       return true;
     } catch (error) {
-      console.error("Error updating session token:", error);
       return false;
     }
   };
@@ -144,19 +134,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Validate that the current session token matches the one in the database
   const validateSessionToken = async (userId: string): Promise<boolean> => {
     if (isValidating.current) {
-      console.log("Already validating, skipping...");
       return true;
     }
 
     if (!currentSessionToken.current) {
-      console.log("No local session token to validate");
       return true;
     }
 
     isValidating.current = true;
 
     try {
-      console.log("Validating session token for user:", userId);
 
       const { data, error } = await supabase
         .from("users")
@@ -165,7 +152,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (error) {
-        console.error("Failed to validate session token:", error);
         isValidating.current = false;
         return true; // Allow on error to prevent lockout
       }
@@ -173,21 +159,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const dbToken = data?.active_session_token;
       const localToken = currentSessionToken.current;
 
-      console.log("DB Token:", dbToken?.substring(0, 20) + "...");
-      console.log("Local Token:", localToken?.substring(0, 20) + "...");
+
 
       // If we have a local token and DB has a different token, session was kicked
       if (localToken && dbToken && localToken !== dbToken) {
-        console.log("!!! SESSION KICKED: Token mismatch detected!");
         isValidating.current = false;
         return false;
       }
 
-      console.log("Session token is valid");
       isValidating.current = false;
       return true;
     } catch (error) {
-      console.error("Error validating session token:", error);
       isValidating.current = false;
       return true;
     }
@@ -195,7 +177,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Handle kicking out the user
   const handleSessionKicked = async () => {
-    console.log("Handling session kicked - signing out user");
     setSessionKicked(true);
     currentSessionToken.current = null;
     await supabase.auth.signOut();
@@ -212,9 +193,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq("id", userId);
 
       currentSessionToken.current = null;
-      console.log("Session token cleared");
     } catch (error) {
-      console.error("Error clearing session token:", error);
     }
   };
 
@@ -237,7 +216,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const granted = await ensureNotificationPermission();
         if (granted) {
-          console.log("Registering IndieID for user:", currentSession.user.id);
           await registerIndieID(
             currentSession.user.id,
             32035,
@@ -253,7 +231,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        console.log("Auth state changed:", event, newSession?.user?.email);
 
         setSession(newSession);
         sessionRef.current = newSession;
@@ -266,7 +243,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           const granted = await ensureNotificationPermission();
           if (granted) {
-            console.log("Registering IndieID for user (SIGNED_IN):", newSession.user.id);
             await registerIndieID(
               newSession.user.id,
               32035,
@@ -294,7 +270,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const token = currentSessionToken.current;
 
       if (currentSession?.user?.id && token) {
-        console.log("Running periodic session validation...");
         const isValid = await validateSessionToken(currentSession.user.id);
         if (!isValid) {
           await handleSessionKicked();
@@ -315,7 +290,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const token = currentSessionToken.current;
 
         if (currentSession?.user?.id && token) {
-          console.log("App became active - validating session...");
           const isValid = await validateSessionToken(currentSession.user.id);
           if (!isValid) {
             await handleSessionKicked();

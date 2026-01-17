@@ -322,7 +322,7 @@ const DrivingModeScreen = () => {
 
             // Simplify polyline if it has too many points for better performance
             if (rawCoords.length > POLYLINE_SIMPLIFICATION_THRESHOLD) {
-                console.log(`📍 Simplifying polyline from ${rawCoords.length} to ~${Math.ceil(rawCoords.length / 3)} points`);
+                //console.log(`📍 Simplifying polyline from ${rawCoords.length} to ~${Math.ceil(rawCoords.length / 3)} points`);
                 return simplifyPolyline(rawCoords, 0.00003); // Adjust tolerance as needed
             }
             return rawCoords;
@@ -555,9 +555,9 @@ const DrivingModeScreen = () => {
                 const errorMsg = pendingError.message || JSON.stringify(pendingError);
                 // Only log if not generic HTML error
                 if (!errorMsg.includes("<!DOCTYPE html") && !errorMsg.includes("500")) {
-                    console.error("Error fetching pending pickup requests:", errorMsg);
+                    //console.error("Error fetching pending pickup requests:", errorMsg);
                 } else {
-                    console.log("Server error fetching requests (500). Will retry shortly.");
+                    //console.log("Server error fetching requests (500). Will retry shortly.");
                 }
                 return;
             }
@@ -591,14 +591,14 @@ const DrivingModeScreen = () => {
             if (acceptedError) {
                 const errorMsg = acceptedError.message || JSON.stringify(acceptedError);
                 if (!errorMsg.includes("<!DOCTYPE html") && !errorMsg.includes("500")) {
-                    console.error("Error fetching accepted pickup requests:", errorMsg);
+                    //console.error("Error fetching accepted pickup requests:", errorMsg);
                 }
                 return;
             }
 
             setAcceptedPickupRequests(acceptedRequests || []);
         } catch (error) {
-            console.error("Error in fetchPickupRequests:", error);
+            //console.error("Error in fetchPickupRequests:", error);
         }
     };
 
@@ -621,7 +621,7 @@ const DrivingModeScreen = () => {
                 }
             });
         } catch (error) {
-            console.log('Error playing sound:', error);
+            //console.log('Error playing sound:', error);
         }
     };
 
@@ -657,10 +657,10 @@ const DrivingModeScreen = () => {
                 longitude: request.pickup_lng,
             };
 
-            console.log(
-                "📍 Focusing camera on new pickup request location:",
-                pickupLocation
-            );
+            // console.log(
+            //     "📍 Focusing camera on new pickup request location:",
+            //     pickupLocation
+            // );
 
             // Animate camera to pickup location with appropriate zoom
             mapRef.current?.animateCamera(
@@ -692,12 +692,12 @@ const DrivingModeScreen = () => {
                 .eq("id", requestId);
 
             if (error) {
-                console.error("Error accepting pickup request:", error);
-                showAlert(
-                    "Accept Failed",
-                    "Unable to accept the pickup request. Please try again.",
-                    "error"
-                );
+                // console.error("Error accepting pickup request:", error);
+                // showAlert(
+                //     "Accept Failed",
+                //     "Unable to accept the pickup request. Please try again.",
+                //     "error"
+                // );
                 return;
             }
 
@@ -718,10 +718,10 @@ const DrivingModeScreen = () => {
                     longitude: acceptedRequest.pickup_lng,
                 };
 
-                console.log(
-                    "📍 Focusing camera on accepted pickup request location:",
-                    pickupLocation
-                );
+                // console.log(
+                //     "📍 Focusing camera on accepted pickup request location:",
+                //     pickupLocation
+                // );
 
                 // Animate camera to accepted pickup location
                 mapRef.current?.animateCamera(
@@ -740,7 +740,7 @@ const DrivingModeScreen = () => {
                 "success"
             );
         } catch (error) {
-            console.error("Error in acceptPickupRequest:", error);
+            //console.error("Error in acceptPickupRequest:", error);
             showAlert(
                 "Unexpected Error",
                 "An unexpected error occurred. Please try again.",
@@ -757,10 +757,10 @@ const DrivingModeScreen = () => {
                 longitude: request.pickup_lng,
             };
 
-            console.log(
-                "📍 Focusing camera on pickup request location:",
-                pickupLocation
-            );
+            // //console.log(
+            //     "📍 Focusing camera on pickup request location:",
+            //     pickupLocation
+            // );
 
             // Animate camera to pickup location
             mapRef.current?.animateCamera(
@@ -786,7 +786,7 @@ const DrivingModeScreen = () => {
                 .eq("id", requestId);
 
             if (error) {
-                console.error("Error declining pickup request:", error);
+                //console.error("Error declining pickup request:", error);
                 showAlert(
                     "Decline Failed",
                     "Unable to decline the pickup request. Please try again.",
@@ -804,7 +804,7 @@ const DrivingModeScreen = () => {
                 "info"
             );
         } catch (error) {
-            console.error("Error in declinePickupRequest:", error);
+            // console.error("Error in declinePickupRequest:", error);
             showAlert(
                 "Unexpected Error",
                 "An unexpected error occurred. Please try again.",
@@ -824,7 +824,7 @@ const DrivingModeScreen = () => {
                 .single();
 
             if (routeError || !currentRoute) {
-                console.error("Error fetching current route:", routeError);
+                //console.error("Error fetching current route:", routeError);
                 return;
             }
 
@@ -863,13 +863,13 @@ const DrivingModeScreen = () => {
                 .eq("trips.status", "ongoing");
 
             if (busesError) {
-                console.error("Error fetching opposite route buses:", busesError);
+                //console.error("Error fetching opposite route buses:", busesError);
                 return;
             }
 
             setOppositeRouteBuses(oppositeBuses || []);
         } catch (error) {
-            console.error("Error in findOppositeRouteBuses:", error);
+            //console.error("Error in findOppositeRouteBuses:", error);
         }
     };
 
@@ -948,12 +948,12 @@ const DrivingModeScreen = () => {
                     .eq("id", tripId);
 
                 if (error) {
-                    console.error("📍 Error syncing location to database:", error);
+                    //console.error("📍 Error syncing location to database:", error);
                 } else {
-                    console.log(`📍 [DB SYNC SUCCESS] Location synced to database: lat=${coords.latitude.toFixed(6)}, lng=${coords.longitude.toFixed(6)}`);
+                    //console.log(`📍 [DB SYNC SUCCESS] Location synced to database: lat=${coords.latitude.toFixed(6)}, lng=${coords.longitude.toFixed(6)}`);
                 }
             } catch (error) {
-                console.error("📍 Error in syncLocationToDatabase:", error);
+                //console.error("📍 Error in syncLocationToDatabase:", error);
             }
         };
 
@@ -961,7 +961,7 @@ const DrivingModeScreen = () => {
             // Prevent multiple calls
             if (endingTripRef.current || !tripId || !busId) return;
 
-            console.log("📍 Arrived at destination. Auto-ending trip...");
+            //console.log("📍 Arrived at destination. Auto-ending trip...");
             setEndingTrip(true);
             try {
                 // 1. Update passengers
@@ -1020,7 +1020,7 @@ const DrivingModeScreen = () => {
                 setShowTripSummary(true);
                 setTripStatus("completed"); // Update locally
             } catch (error) {
-                console.error("Auto-end trip error:", error);
+                //console.error("Auto-end trip error:", error);
             } finally {
                 setEndingTrip(false);
             }
@@ -1078,10 +1078,10 @@ const DrivingModeScreen = () => {
                             location: coords,
                             heading: nextHeading,
                         }).then(() => {
-                            console.log(`📡 [BROADCAST SUCCESS] Location broadcast sent: lat=${coords.latitude.toFixed(6)}, lng=${coords.longitude.toFixed(6)}, heading=${nextHeading.toFixed(1)}°`);
+                            //console.log(`📡 [BROADCAST SUCCESS] Location broadcast sent: lat=${coords.latitude.toFixed(6)}, lng=${coords.longitude.toFixed(6)}, heading=${nextHeading.toFixed(1)}°`);
                         }).catch((err) => {
                             // ignore broadcast errors (DB sync remains the source of truth)
-                            console.warn("⚠️ DEBUG: Broadcast failed:", err);
+                            //console.warn("⚠️ DEBUG: Broadcast failed:", err);
                         });
                     }
 
@@ -1141,7 +1141,7 @@ const DrivingModeScreen = () => {
             setIsMagnetometerAvailable(isAvailable);
 
             if (!isAvailable) {
-                console.log('📧 Magnetometer not available on this device');
+                //console.log('📧 Magnetometer not available on this device');
                 return;
             }
 
@@ -1315,7 +1315,7 @@ const DrivingModeScreen = () => {
                 { duration: 1000 } // Smooth 1 second animation on initial load
             );
 
-            console.log("📍 Camera animated to driver location:", driverLocation, "heading:", headingToEnd);
+            //console.log("📍 Camera animated to driver location:", driverLocation, "heading:", headingToEnd);
         }
     }, [driverLocation, polylineCoords]);
 
@@ -1355,7 +1355,7 @@ const DrivingModeScreen = () => {
                     filter: `bus_id=eq.${busId}`,
                 },
                 (payload) => {
-                    console.log("🔔 New pickup request received:", payload.new);
+                    //console.log("🔔 New pickup request received:", payload.new);
                     handleNewPickupRequest(payload.new);
                     fetchPickupRequests();
                 }
@@ -1369,12 +1369,12 @@ const DrivingModeScreen = () => {
                     filter: `bus_id=eq.${busId}`,
                 },
                 (payload) => {
-                    console.log("🔔 Pickup request updated:", payload.new);
+                    //console.log("🔔 Pickup request updated:", payload.new);
                     fetchPickupRequests();
                 }
             )
             .subscribe((status) => {
-                console.log(`🔔 Subscription status for pickup_requests_${busId}:`, status);
+                //console.log(`🔔 Subscription status for pickup_requests_${busId}:`, status);
             });
 
         return () => {
@@ -1513,9 +1513,9 @@ const DrivingModeScreen = () => {
                     const errorMsg = error.message || JSON.stringify(error);
                     // Only log full error if it's not a generic HTML response
                     if (!errorMsg.includes("<!DOCTYPE html")) {
-                        console.error("Error fetching trip status:", errorMsg);
+                        //console.error("Error fetching trip status:", errorMsg);
                     } else {
-                        console.log("Server returned HTML error (likely Cloudflare/Maintenance). Retrying...");
+                        //console.log("Server returned HTML error (likely Cloudflare/Maintenance). Retrying...");
                     }
 
                     if (retries > 0 && isActive) {
@@ -1547,7 +1547,7 @@ const DrivingModeScreen = () => {
                         .eq("status", "boarded");
 
                 if (passengersError) {
-                    console.error("Error fetching boarded passengers:", passengersError);
+                    //console.error("Error fetching boarded passengers:", passengersError);
                     return;
                 }
 
@@ -1565,9 +1565,9 @@ const DrivingModeScreen = () => {
                     );
                     setPassengerCount(totalPassengers);
 
-                    console.log(
-                        `🔄 Restored ${boardedPassengers.length} boarded passengers (${totalPassengers} total) from database`
-                    );
+                    // //console.log(
+                    //     `🔄 Restored ${boardedPassengers.length} boarded passengers (${totalPassengers} total) from database`
+                    // );
                 }
             } catch (error) {
                 if (isActive) console.error("Error in fetchTripStatus:", error);
@@ -1647,7 +1647,7 @@ const DrivingModeScreen = () => {
                         .single();
 
                     if (createError) {
-                        console.error("Error creating trip:", createError);
+                        //console.error("Error creating trip:", createError);
                         showAlert(
                             "Trip Creation Failed",
                             "Unable to create a new trip for this passenger. Please try again or contact support.",
@@ -1672,13 +1672,13 @@ const DrivingModeScreen = () => {
                 const existingRecord = existingRecords?.[0];
 
                 if (!existingRecord || checkError) {
-                    console.error("No trip_passengers record found for this passenger:", {
-                        busId,
-                        passengerId: payload.commuterId,
-                        tripId,
-                        error: checkError,
-                        recordsFound: existingRecords?.length || 0,
-                    });
+                    // console.error("No trip_passengers record found for this passenger:", {
+                    //     busId,
+                    //     passengerId: payload.commuterId,
+                    //     tripId,
+                    //     error: checkError,
+                    //     recordsFound: existingRecords?.length || 0,
+                    // });
                     showAlert(
                         "Boarding Failed",
                         "No pickup request found for this passenger. Please make sure the passenger has requested a pickup first.",
@@ -1724,7 +1724,7 @@ const DrivingModeScreen = () => {
                     .single();
 
                 if (updateError) {
-                    console.error("Error updating boarding record:", updateError);
+                    //console.error("Error updating boarding record:", updateError);
                     showAlert(
                         "Boarding Failed",
                         "Unable to update passenger boarding record. Please try scanning the QR code again.",
@@ -1743,12 +1743,12 @@ const DrivingModeScreen = () => {
                 try {
                     // Get passenger count from the payload or default to 1
                     const groupSize = payload.passengerCount || 1;
-                    console.log(
-                        "QR Code scanned - Group size:",
-                        groupSize,
-                        "Payload:",
-                        payload
-                    );
+                    // console.log(
+                    //     "QR Code scanned - Group size:",
+                    //     groupSize,
+                    //     "Payload:",
+                    //     payload
+                    // );
 
                     // Update bus passenger count in database
                     const { data: currentBus, error: getBusError } = await supabase
@@ -1758,7 +1758,7 @@ const DrivingModeScreen = () => {
                         .single();
 
                     if (getBusError) {
-                        console.error("Error getting current bus passengers:", getBusError);
+                        //console.error("Error getting current bus passengers:", getBusError);
                         return;
                     }
 
@@ -1788,7 +1788,7 @@ const DrivingModeScreen = () => {
                         "success"
                     );
                 } catch (error) {
-                    console.error("Error updating passenger count:", error);
+                    //console.error("Error updating passenger count:", error);
                     showAlert(
                         "Error",
                         "Failed to update passenger count. Please try again.",
@@ -1807,13 +1807,13 @@ const DrivingModeScreen = () => {
                         .eq("status", "accepted");
 
                     if (pickupReqError) {
-                        console.error("Error updating pickup request status:", pickupReqError);
+                        //console.error("Error updating pickup request status:", pickupReqError);
                     } else {
                         // Refresh requests to remove the marker
                         fetchPickupRequests();
                     }
                 } catch (e) {
-                    console.error("Error processing pickup request completion:", e);
+                    //console.error("Error processing pickup request completion:", e);
                 }
             } else {
                 showAlert(
@@ -1823,7 +1823,7 @@ const DrivingModeScreen = () => {
                 );
             }
         } catch (e) {
-            console.error("Error processing QR code:", e);
+            //console.error("Error processing QR code:", e);
             showAlert(
                 "QR Code Error",
                 "Could not read the QR code data. Please make sure the QR code is clear and try again.",
@@ -1888,7 +1888,7 @@ const DrivingModeScreen = () => {
                         .eq("id", tripId);
 
                     if (tripError) {
-                        console.error("Error updating trip status:", tripError);
+                        //console.error("Error updating trip status:", tripError);
                         showAlert(
                             "Trip Start Failed",
                             "Unable to start the trip. Please check your connection and try again.",
@@ -1905,7 +1905,7 @@ const DrivingModeScreen = () => {
                         "success"
                     );
                 } catch (error) {
-                    console.error("Unexpected error starting trip:", error);
+                    //console.error("Unexpected error starting trip:", error);
                     showAlert(
                         "Unexpected Error",
                         "An unexpected error occurred while starting the trip. Please try again or contact support.",
@@ -1944,10 +1944,10 @@ const DrivingModeScreen = () => {
                         ? "completed"
                         : "cancelled";
 
-                    console.log(
-                        `🚌 Driver ending trip - Updating passenger status to: ${passengerStatus}`
-                    );
-                    console.log(`🚌 Trip ID: ${tripId}, Bus ID: ${busId}`);
+                    //console.log(
+                    //    `🚌 Driver ending trip - Updating passenger status to: ${passengerStatus}`
+                    //);
+                    //console.log(`🚌 Trip ID: ${tripId}, Bus ID: ${busId}`);
 
                     const { data: updateResult, error: passengersError } = await supabase
                         .from("trip_passengers")
@@ -1957,7 +1957,7 @@ const DrivingModeScreen = () => {
                         .select("id, passenger_id, status");
 
                     if (passengersError) {
-                        console.error("Error updating passengers:", passengersError);
+                        //console.error("Error updating passengers:", passengersError);
                         showAlert(
                             "Passenger Update Failed",
                             `Unable to ${isTripOfficiallyStarted ? "complete" : "cancel"
@@ -1968,11 +1968,11 @@ const DrivingModeScreen = () => {
                         return;
                     }
 
-                    console.log(
-                        `Successfully ${isTripOfficiallyStarted ? "completed" : "cancelled"
-                        } ${updateResult?.length || 0} passenger bookings:`,
-                        updateResult
-                    );
+                    //console.log(
+                    //    `Successfully ${isTripOfficiallyStarted ? "completed" : "cancelled"
+                    //    } ${updateResult?.length || 0} passenger bookings:`,
+                    //    updateResult
+                    //);
 
                     // 2. Update trip status
                     const updateData: any = {
@@ -1995,7 +1995,7 @@ const DrivingModeScreen = () => {
                         .eq("id", tripId);
 
                     if (tripError) {
-                        console.error("Error updating trip status:", tripError);
+                        //console.error("Error updating trip status:", tripError);
                         showAlert(
                             "Trip Status Update Failed",
                             "Unable to update trip status. Please try again or contact support.",
@@ -2016,11 +2016,11 @@ const DrivingModeScreen = () => {
                         .select();
 
                     if (!busUpdateResult || busUpdateResult.length === 0) {
-                        console.warn("⚠️ Bus status update returned 0 rows. Driver might not have permission to reset bus (RLS).");
+                        //console.warn("⚠️ Bus status update returned 0 rows. Driver might not have permission to reset bus (RLS).");
                     }
 
                     if (busError) {
-                        console.error("Error updating bus status:", busError);
+                        //console.error("Error updating bus status:", busError);
                         showAlert(
                             "Bus Status Update Failed",
                             "Unable to update bus status. Please try again or contact support.",
@@ -2030,7 +2030,7 @@ const DrivingModeScreen = () => {
                         return;
                     }
 
-                    console.log("Successfully ended trip and reset bus");
+                    //console.log("Successfully ended trip and reset bus");
 
                     // Reset scanned passengers for next trip
                     setScannedPassengers(new Set());
@@ -2071,7 +2071,7 @@ const DrivingModeScreen = () => {
                     // and let RouteContext unsubscribe from route-related channels.
                     setCurrentRoute(null);
                 } catch (error) {
-                    console.error("Unexpected error ending trip:", error);
+                    //console.error("Unexpected error ending trip:", error);
                     showAlert(
                         "Unexpected Error",
                         "An unexpected error occurred while ending the trip. Please try again or contact support.",

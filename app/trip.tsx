@@ -17,6 +17,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
   Modal,
   StyleSheet,
@@ -31,6 +32,7 @@ import Svg, { G, Path } from "react-native-svg";
 type BusLocation = LatLng;
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLEMAPS_API;
+const ROUTE_CLAMP_THRESHOLD = 20; // meters - clamp bus marker to route if within this distance
 
 // --- Constants for Short Distance Testing ---
 // NOTE: Keep these sane to avoid excessive animations / memory pressure while still feeling realtime.
@@ -103,9 +105,6 @@ const getMinDistanceToRoute = (busLocation: LatLng, route: LatLng[]) => {
   return Math.min(...route.map((pt) => haversineMeters(busLocation, pt)));
 };
 
-// Clamp threshold in meters - if bus is within this distance of route, snap to it
-const ROUTE_CLAMP_THRESHOLD = 15;
-
 // Helper: Find the closest point on a line segment to a given point
 const closestPointOnSegment = (
   point: LatLng,
@@ -134,30 +133,67 @@ const closestPointOnSegment = (
 };
 
 // Helper: Find the closest point on the entire route to the bus location
-const getClosestPointOnRoute = (busLocation: LatLng, route: LatLng[]): { point: LatLng; distance: number } => {
+// OPTIMIZED: activeIndex hint limits the search window
+const getClosestPointOnRoute = (
+  busLocation: LatLng,
+  route: LatLng[],
+  startIndex: number = 0
+): { point: LatLng; distance: number; index: number } => {
   if (!busLocation || route.length === 0) {
-    return { point: busLocation, distance: Infinity };
+    return { point: busLocation, distance: Infinity, index: 0 };
   }
 
   if (route.length === 1) {
-    return { point: route[0], distance: haversineMeters(busLocation, route[0]) };
+    return { point: route[0], distance: haversineMeters(busLocation, route[0]), index: 0 };
   }
 
   let closestPoint = route[0];
-  let minDistance = haversineMeters(busLocation, route[0]);
+  let minDistance = Infinity;
+  let bestIndex = 0;
 
-  // Check each segment of the route
-  for (let i = 0; i < route.length - 1; i++) {
+  // Optimization: Only search a window around the last known index
+  // If we get lost (minDistance is huge), we might need a full scan, but for now specific window
+  const SEARCH_WINDOW = 100; // Look 100 points ahead/behind
+  let start = Math.max(0, startIndex - 20); // Check slightly behind too in case of jitter
+  let end = Math.min(route.length - 1, startIndex + SEARCH_WINDOW);
+
+  // Fallback: If we are very far from the "hint", maybe we should scan all?
+  // ideally we scan the window, if minDistance > threshold, we scan all.
+  // For simplicity/performance first pass: just scan window.
+  // If we are at 0 (start), scan a bit more.
+  if (startIndex === 0) end = Math.min(route.length - 1, 500);
+
+  // Local search
+  for (let i = start; i < end; i++) {
     const segmentClosest = closestPointOnSegment(busLocation, route[i], route[i + 1]);
     const segmentDistance = haversineMeters(busLocation, segmentClosest);
 
     if (segmentDistance < minDistance) {
       minDistance = segmentDistance;
       closestPoint = segmentClosest;
+      bestIndex = i;
     }
   }
 
-  return { point: closestPoint, distance: minDistance };
+  // Recovery: If local search failed (too far), do a global scan (only every now and then? or just return result?)
+  // If distance is > 200m, user might have jumped. Global scan.
+  if (minDistance > 200) {
+    for (let i = 0; i < route.length - 1; i++) {
+      // Skip what we already checked
+      if (i >= start && i < end) continue;
+
+      const segmentClosest = closestPointOnSegment(busLocation, route[i], route[i + 1]);
+      const segmentDistance = haversineMeters(busLocation, segmentClosest);
+
+      if (segmentDistance < minDistance) {
+        minDistance = segmentDistance;
+        closestPoint = segmentClosest;
+        bestIndex = i;
+      }
+    }
+  }
+
+  return { point: closestPoint, distance: minDistance, index: bestIndex };
 };
 
 // Sound helper
@@ -180,20 +216,18 @@ const playSound = async (type: 'success' | 'alert') => {
 };
 
 // Helper: Clamp bus location to route if within threshold distance
-const clampToRoute = (busLocation: LatLng, route: LatLng[]): LatLng => {
+const clampToRoute = (busLocation: LatLng, route: LatLng[], lastIndex: number = 0): { location: LatLng, index: number, distance: number } => {
   if (!busLocation || route.length === 0) {
-    return busLocation;
+    return { location: busLocation, index: 0, distance: 0 };
   }
 
-  const { point, distance } = getClosestPointOnRoute(busLocation, route);
-
-  // While we are scanning, we don't clamp? Actually update happens in real-time subscription.
+  const { point, distance, index } = getClosestPointOnRoute(busLocation, route, lastIndex);
 
   if (distance <= ROUTE_CLAMP_THRESHOLD) {
-    return point;
+    return { location: point, index, distance };
   }
 
-  return busLocation;
+  return { location: busLocation, index, distance };
 };
 
 
@@ -205,6 +239,7 @@ export default function TripScreen() {
   const mapRef = useRef<MapView>(null);
   const previousLocationRef = useRef<BusLocation | null>(null);
   const tripFinalizedRef = useRef(false);
+  const lastRouteIndexRef = useRef(0);
 
   const busId = params.busId as string;
   const tripId = params.tripId as string | undefined;
@@ -263,29 +298,37 @@ export default function TripScreen() {
   // State for bus plate number (can be updated if initially unknown)
   const [busPlateNumber, setBusPlateNumber] =
     useState<string>(initialPlateNumber);
-  const pickupCoords: LatLng = {
-    latitude: parseFloat(params.pickupLat as string),
-    longitude: parseFloat(params.pickupLng as string),
-  };
-  const destCoords: LatLng = {
-    latitude: parseFloat(params.destLat as string),
-    longitude: parseFloat(params.destLng as string),
-  };
-  // Parse the complete route path (same approach as DrivingModeScreen)
-  let completeRoutePath: LatLng[] = [];
-  try {
-    const routePathParam = params.routePath as string;
+  const pickupLatRef = useRef(parseFloat(params.pickupLat as string));
+  const pickupLngRef = useRef(parseFloat(params.pickupLng as string));
+  const destLatRef = useRef(parseFloat(params.destLat as string));
+  const destLngRef = useRef(parseFloat(params.destLng as string));
 
-    if (routePathParam && routePathParam !== "[]") {
-      const routePath: [number, number][] = JSON.parse(routePathParam);
-      completeRoutePath = routePath.map(([lng, lat]) => ({
-        latitude: lat,
-        longitude: lng,
-      }));
+  const pickupCoords: LatLng = useMemo(() => ({
+    latitude: pickupLatRef.current,
+    longitude: pickupLngRef.current,
+  }), []);
+
+  const destCoords: LatLng = useMemo(() => ({
+    latitude: destLatRef.current,
+    longitude: destLngRef.current,
+  }), []);
+  // Parse the complete route path (same approach as DrivingModeScreen)
+  // OPTIMIZATION: Memoize parsing to prevent it running on every render
+  const completeRoutePath = useMemo(() => {
+    try {
+      const routePathParam = params.routePath as string;
+      if (routePathParam && routePathParam !== "[]") {
+        const routePath: [number, number][] = JSON.parse(routePathParam);
+        return routePath.map(([lng, lat]) => ({
+          latitude: lat,
+          longitude: lng,
+        }));
+      }
+    } catch (e) {
+      // Fallback
     }
-  } catch (e) {
-    completeRoutePath = [];
-  }
+    return [];
+  }, [params.routePath]);
 
   // Keep the original polylineCoords for backward compatibility
   const polylineCoords = useMemo(() => completeRoutePath, [completeRoutePath]);
@@ -329,6 +372,7 @@ export default function TripScreen() {
 
   useEffect(() => {
     completeRouteRef.current = completeRoute;
+    lastRouteIndexRef.current = 0; // Reset optimization if route changes
   }, [completeRoute]);
 
   // RouteContext: Sync bus location updates to shared context
@@ -344,19 +388,29 @@ export default function TripScreen() {
   useEffect(() => {
     if (!trackedBus?.location || loading) return;
 
+    // Guard: Skip if location hasn't meaningfully changed (prevents infinite loop)
+    const prevLoc = busLocation;
+    if (prevLoc &&
+      Math.abs(prevLoc.latitude - trackedBus.location.latitude) < 0.00001 &&
+      Math.abs(prevLoc.longitude - trackedBus.location.longitude) < 0.00001) {
+      return;
+    }
+
+    // Clamp bus location to route if passenger is boarded and within 20m threshold
+    // Use ref for completeRoute to avoid dependency cycle
+    const locationToUse = tripStatus === 'picked_up'
+      ? clampToRoute(trackedBus.location, completeRouteRef.current, lastRouteIndexRef.current).location
+      : trackedBus.location;
+
     // Always apply context updates so the marker keeps moving.
-    // (Previously this ran only once due to `&& !busLocation` gating.)
-    setBusLocation(trackedBus.location);
+    setBusLocation(locationToUse);
 
     // Ensure the marker is driven by an updated coordinate immediately.
-    // The smoothing effect below will still animate from this new target.
-    setAnimatedBusPosition(trackedBus.location);
+    setAnimatedBusPosition(locationToUse);
 
     // Force marker re-render in case react-native-maps doesn't update reliably.
     setMarkerUpdateSeq((s) => s + 1);
-
-    console.log("📍 RouteContext bus location update:", trackedBus.location);
-  }, [trackedBus?.location, loading]);
+  }, [trackedBus?.location, loading, tripStatus]); // Removed completeRoute - use ref instead
 
   // transient overlay after successful scan
   const [showScanSuccess, setShowScanSuccess] = useState(false);
@@ -368,9 +422,19 @@ export default function TripScreen() {
 
   // added: bottom panel minimize state
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
+  const panelHeight = useRef(new Animated.Value(1)).current; // 1 = expanded, 0 = minimized
 
   // added: track if scan success has been shown
   const scanSuccessShownRef = useRef(false);
+
+  // Animate panel minimize/expand
+  useEffect(() => {
+    Animated.timing(panelHeight, {
+      toValue: isPanelMinimized ? 0 : 1,
+      duration: 300,
+      useNativeDriver: false, // height animation requires layout
+    }).start();
+  }, [isPanelMinimized, panelHeight]);
 
   // added: off-route warning state
   const [offRouteWarning, setOffRouteWarning] = useState(false);
@@ -492,23 +556,42 @@ export default function TripScreen() {
 
   // added: resolve names once and fetch routes
   useEffect(() => {
+    let active = true;
+
     (async () => {
       const [start, end] = await Promise.all([
         reverseGeocode(pickupCoords),
         reverseGeocode(destCoords),
       ]);
-      setPickupName(start);
-      setDestinationName(end);
 
+      if (active) {
+        setPickupName(start);
+        setDestinationName(end);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [pickupCoords, destCoords]); // Depend ONLY on the stable coords
+
+  // added: fetch routes if needed
+  useEffect(() => {
+    let active = true;
+    (async () => {
       // Fetch complete route from database if missing
-      if (completeRoutePath.length === 0) {
+      // Only if we haven't already loaded it into state (completeRoute)
+      if (completeRoutePath.length === 0 && completeRoute.length === 0) {
+        // This function will update state internally
         await fetchCompleteRouteFromDatabase();
       }
 
       // Fetch pickup-to-destination route so user can see the route they'll take
-      await fetchPickupToDestinationRoute(pickupCoords, destCoords);
+      // Only do this once on mount/coord change
+      if (active) {
+        await fetchPickupToDestinationRoute(pickupCoords, destCoords);
+      }
     })();
-  }, []);
+    return () => { active = false; };
+  }, [completeRoutePath.length, pickupCoords, destCoords]); // Removed `completeRoute` (state) from dep array to avoid cycles if possible, relying on length check
 
   // Compass heading using expo-location for better accuracy
   useEffect(() => {
@@ -533,7 +616,7 @@ export default function TripScreen() {
           setCompassHeading(Math.round(bearing));
         });
       } catch (error) {
-        console.error('Error setting up heading watch:', error);
+        //console.error('Error setting up heading watch:', error);
         setIsMagnetometerAvailable(false);
       }
     };
@@ -572,16 +655,22 @@ export default function TripScreen() {
   }, [tripStatus, busLocation, destCoords]);
 
   // Check if bus is off route
-  useEffect(() => {
-    if (!busLocation || !completeRoute.length) return;
-    const minDist = getMinDistanceToRoute(busLocation, completeRoute);
-    setOffRouteWarning(minDist > 100); // 100 meters threshold
-  }, [busLocation, completeRoute]);
+  // Check if bus is off route
+  // OPTIMIZATION: Throttle this check to avoid heavy calculation on every location update
+  // Off-route warning handled in the bus location effect now
+
 
   // Animate bus marker smoothly when location changes
   // Also clamp to route if within threshold distance
   useEffect(() => {
     if (!busLocation) return;
+
+    // Guard: Skip if position hasn't changed (prevents unnecessary work)
+    if (animatedBusPosition &&
+      Math.abs(animatedBusPosition.latitude - busLocation.latitude) < 0.00001 &&
+      Math.abs(animatedBusPosition.longitude - busLocation.longitude) < 0.00001) {
+      return;
+    }
 
     // Cancel any ongoing animation
     if (animationFrameRef.current) {
@@ -589,17 +678,25 @@ export default function TripScreen() {
       animationFrameRef.current = null;
     }
 
-    // Clamp the bus location to the route if within 5 meters
-    const clampedLocation = clampToRoute(busLocation, completeRoute);
+    // Performance optimization: Use the last known index to limit the search space
+    // Also perform off-route check here to avoid duplicate route iterations
+    // Use ref to avoid adding completeRoute as dependency
+    const { location: clampedLocation, index: newIndex, distance: distToRoute } =
+      clampToRoute(busLocation, completeRouteRef.current, lastRouteIndexRef.current);
 
-    // Directly update the marker position (no native interpolation / no animations).
-    // This avoids Android crashes in MapMarker.interpolate when the native side
-    // tries to animate from/to a null coordinate.
+    // Update tracking refs
+    lastRouteIndexRef.current = newIndex;
+
+    // Update UI state based on calculations
+    // 100 meters threshold for off-route
+    setOffRouteWarning(distToRoute > 100);
+
+    // Directly update the marker position
     setAnimatedBusPosition(clampedLocation);
 
     return;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busLocation, completeRoute]);
+  }, [busLocation]); // Removed completeRoute - use ref instead
 
   // QR payload the conductor can scan (adjust fields as backend expects)
   const qrPayload = useMemo(() => {
@@ -611,7 +708,7 @@ export default function TripScreen() {
       pickup: pickupCoords,
       dest: destCoords,
       passengerCount: passengerCount,
-      ts: Date.now(),
+      // Note: Removed Date.now() to prevent QR code regeneration on every render
     };
     return JSON.stringify(payload);
   }, [
@@ -843,7 +940,7 @@ export default function TripScreen() {
 
         if (updateError) {
           // Log but continue if possible, or retry?
-          console.error("Failed to update status in DB:", updateError);
+          //console.error("Failed to update status in DB:", updateError);
         }
 
         // ALSO: Update pickup_requests status so driver no longer sees the pickup marker
@@ -858,7 +955,7 @@ export default function TripScreen() {
           .in("status", ["pending", "accepted"]);
 
         if (pickupRequestError) {
-          console.error("Failed to update pickup_requests status:", pickupRequestError);
+          //console.error("Failed to update pickup_requests status:", pickupRequestError);
         }
 
         // 3. Update travel history
@@ -877,7 +974,7 @@ export default function TripScreen() {
 
         if (historyError) {
           // Don't throw here - trip status is already updated, history is less critical
-          console.log("Error saving travel history:", historyError);
+          //console.log("Error saving travel history:", historyError);
         }
 
         // Navigate directly to history without showing additional alerts
@@ -963,7 +1060,9 @@ export default function TripScreen() {
         }
 
         if (initialLocation) {
-          const clampedInitial = clampToRoute(initialLocation, completeRouteRef.current);
+          // Reset index for initial load
+          lastRouteIndexRef.current = 0;
+          const { location: clampedInitial } = clampToRoute(initialLocation, completeRouteRef.current, 0);
           setBusLocation(clampedInitial);
           setAnimatedBusPosition(clampedInitial);
           previousLocationRef.current = clampedInitial;
@@ -1094,10 +1193,10 @@ export default function TripScreen() {
             // Only mark pickup request as resolved
             pickupRequestResolved.current = true;
           } else if (newStatus === "cancelled") {
-            Alert.alert(
-              "Trip Cancelled",
-              "The driver has cancelled your trip. You will be redirected to the home screen."
-            );
+            // Alert.alert(
+            //   "Trip Cancelled",
+            //   "The driver has cancelled your trip. You will be redirected to the home screen."
+            // );
             await finalizeTrip("cancelled");
           } else if (newStatus === "completed") {
             // Unsubscribe from passenger channel since trip is now complete
@@ -1336,7 +1435,7 @@ export default function TripScreen() {
           if (newLocation) {
 
             // Clamp bus location to route
-            const clampedLocation = clampToRoute(newLocation, completeRouteRef.current);
+            const { location: clampedLocation } = clampToRoute(newLocation, completeRouteRef.current, lastRouteIndexRef.current);
 
             // IMPORTANT: update both positions from the realtime event.
             // If you only update busLocation and rely on the animation effect,
@@ -1414,6 +1513,79 @@ export default function TripScreen() {
     };
   }, [busId, session?.user?.id, tripId]);
 
+  // OPTIMIZATION: Memoize static map elements to prevent re-renders when bus moves
+  const routePolyline = useMemo(() => (
+    completeRoute.length > 0 ? (
+      <Polyline
+        coordinates={completeRoute}
+        strokeColor="#007AFF"
+        strokeWidth={4}
+        lineCap="round"
+        lineJoin="round"
+      />
+    ) : null
+  ), [completeRoute]);
+
+  const p2dPolyline = useMemo(() => (
+    pickupToDestinationRoute.length > 0 ? (
+      <Polyline
+        coordinates={pickupToDestinationRoute}
+        strokeColor={tripStatus === "picked_up" ? "#28a745" : "#FF9500"}
+        strokeWidth={tripStatus === "picked_up" ? 6 : 4}
+        lineDashPattern={tripStatus === "picked_up" ? [8, 4] : [5, 5]}
+        lineCap="round"
+        lineJoin="round"
+      />
+    ) : null
+  ), [pickupToDestinationRoute, tripStatus]);
+
+  const fallbackPolyline = useMemo(() => (
+    completeRoute.length === 0 ? (
+      <Polyline
+        coordinates={[pickupCoords, destCoords]}
+        strokeColor="#6c757d"
+        strokeWidth={3}
+        lineDashPattern={[10, 10]}
+        lineCap="round"
+        lineJoin="round"
+      />
+    ) : null
+  ), [completeRoute.length, pickupCoords, destCoords]);
+
+  const pickupMarker = useMemo(() => (
+    tripStatus === "waiting" ? (
+      <Marker
+        coordinate={pickupCoords}
+        title="Pickup Location"
+        anchor={{ x: 0.5, y: 1 }}
+        tracksViewChanges={false}
+      >
+        <View style={styles.pickupMarkerContainer}>
+          <View style={styles.pickupMarkerLabel}>
+            <Text style={styles.pickupMarkerLabelText}>Your Pickup</Text>
+          </View>
+          <CustomMapMarker size={44} color="#007AFF" />
+        </View>
+      </Marker>
+    ) : null
+  ), [tripStatus, pickupCoords]);
+
+  const destMarker = useMemo(() => (
+    <Marker
+      coordinate={destCoords}
+      title="Your Destination"
+      anchor={{ x: 0.5, y: 1 }}
+      tracksViewChanges={false}
+    >
+      <View style={styles.destinationMarkerContainer}>
+        <View style={styles.destinationMarkerLabel}>
+          <Text style={styles.destinationMarkerLabelText}>Destination</Text>
+        </View>
+        <CustomMapMarker size={44} color="#dc3545" />
+      </View>
+    </Marker>
+  ), [destCoords]);
+
   // Loading state remains the same
   if (loading) {
     return (
@@ -1477,72 +1649,19 @@ export default function TripScreen() {
         followsUserLocation={false}
       >
         {/* Show complete route from start to end (same as DrivingModeScreen) */}
-        {completeRoute.length > 0 && (
-          <Polyline
-            coordinates={completeRoute}
-            strokeColor="#007AFF"
-            strokeWidth={4}
-            lineCap="round"
-            lineJoin="round"
-          />
-        )}
+        {routePolyline}
 
         {/* Show pickup to destination route */}
-        {pickupToDestinationRoute.length > 0 && (
-          <Polyline
-            coordinates={pickupToDestinationRoute}
-            strokeColor={tripStatus === "picked_up" ? "#28a745" : "#FF9500"}
-            strokeWidth={tripStatus === "picked_up" ? 6 : 4}
-            lineDashPattern={tripStatus === "picked_up" ? [8, 4] : [5, 5]}
-            lineCap="round"
-            lineJoin="round"
-          />
-        )}
+        {p2dPolyline}
 
         {/* Fallback: Show direct line from pickup to destination if no routes available */}
-        {completeRoute.length === 0 && (
-          <Polyline
-            coordinates={[pickupCoords, destCoords]}
-            strokeColor="#6c757d"
-            strokeWidth={3}
-            lineDashPattern={[10, 10]}
-            lineCap="round"
-            lineJoin="round"
-          />
-        )}
+        {fallbackPolyline}
 
         {/* Pickup point marker - Enhanced */}
-        {/* Pickup point marker - Enhanced. Hide when picked up */}
-        {tripStatus === "waiting" && (
-          <Marker
-            coordinate={pickupCoords}
-            title="Pickup Location"
-            anchor={{ x: 0.5, y: 1 }}
-            tracksViewChanges={false}
-          >
-            <View style={styles.pickupMarkerContainer}>
-              <View style={styles.pickupMarkerLabel}>
-                <Text style={styles.pickupMarkerLabelText}>Your Pickup</Text>
-              </View>
-              <CustomMapMarker size={44} color="#007AFF" />
-            </View>
-          </Marker>
-        )}
+        {pickupMarker}
 
         {/* Destination marker - Enhanced */}
-        <Marker
-          coordinate={destCoords}
-          title="Your Destination"
-          anchor={{ x: 0.5, y: 1 }}
-          tracksViewChanges={false}
-        >
-          <View style={styles.destinationMarkerContainer}>
-            <View style={styles.destinationMarkerLabel}>
-              <Text style={styles.destinationMarkerLabelText}>Destination</Text>
-            </View>
-            <CustomMapMarker size={44} color="#dc3545" />
-          </View>
-        </Marker>
+        {destMarker}
 
         {/* Bus marker with enhanced styling (no native animation) */}
         {animatedBusPosition && (
@@ -1623,44 +1742,17 @@ export default function TripScreen() {
           />
         </TouchableOpacity>
 
-        {!isPanelMinimized && (
-          <>
-            <View style={styles.etaContainer}>
-              <View style={styles.statusIndicator}>
-                <View
-                  style={[
-                    styles.statusDot,
-                    {
-                      backgroundColor:
-                        tripStatus === "waiting" ? "#FF9500" : "#28a745",
-                    },
-                  ]}
-                />
-                <Text style={styles.statusText}>
-                  {tripStatus === "waiting"
-                    ? "Waiting for Boarding"
-                    : "On Board"}
-                </Text>
-              </View>
-              <Text style={styles.etaLabel}>
-                {tripStatus === "waiting"
-                  ? "Bus arriving in"
-                  : "Arriving at destination in"}
-              </Text>
-              <Text style={styles.etaText}>{eta}</Text>
-              {routeLoading && tripStatus === "picked_up" && (
-                <View style={styles.routeLoadingIndicator}>
-                  <ActivityIndicator size="small" color="#28a745" />
-                  <Text style={styles.routeLoadingText}>Loading route...</Text>
-                </View>
-              )}
-            </View>
-          </>
-        )}
-
-        {/* Minimized view - show only essential info */}
-        {isPanelMinimized && (
-          <View style={styles.minimizedContent}>
+        <Animated.View
+          style={{
+            opacity: panelHeight,
+            maxHeight: panelHeight.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 500], // Adjust max height as needed
+            }),
+            overflow: 'hidden',
+          }}
+        >
+          <View style={styles.etaContainer}>
             <View style={styles.statusIndicator}>
               <View
                 style={[
@@ -1672,72 +1764,122 @@ export default function TripScreen() {
                 ]}
               />
               <Text style={styles.statusText}>
-                {tripStatus === "waiting" ? "Waiting for Boarding" : "On Board"}
+                {tripStatus === "waiting"
+                  ? "Waiting for Boarding"
+                  : "On Board"}
               </Text>
             </View>
-            <Text style={styles.etaTextMinimized}>{eta}</Text>
+            <Text style={styles.etaLabel}>
+              {tripStatus === "waiting"
+                ? "Bus arriving in"
+                : "Arriving at destination in"}
+            </Text>
+            <Text style={styles.etaText}>{eta}</Text>
+            {routeLoading && tripStatus === "picked_up" && (
+              <View style={styles.routeLoadingIndicator}>
+                <ActivityIndicator size="small" color="#28a745" />
+                <Text style={styles.routeLoadingText}>Loading route...</Text>
+              </View>
+            )}
+          </View>
+        </Animated.View>
+
+        {/* Minimized view - show only essential info */}
+        {isPanelMinimized && (
+          <View style={styles.minimizedContent}>
+            <View style={[styles.statusIndicator, { flexShrink: 1, maxWidth: '40%' }]}>
+              <View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor:
+                      tripStatus === "waiting" ? "#FF9500" : "#28a745",
+                  },
+                ]}
+              />
+              <Text
+                style={styles.statusText}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {tripStatus === "waiting" ? "Waiting" : "On Board"}
+              </Text>
+            </View>
+            <Text
+              style={[styles.etaTextMinimized, { flex: 1, textAlign: 'center' }]}
+              numberOfLines={1}
+            >
+              {eta}
+            </Text>
             {/* Empty space to push minimize button to the right */}
             <View style={styles.minimizeButtonSpacer} />
           </View>
         )}
 
-        {!isPanelMinimized && (
-          <>
-            {/* QR section - show only while waiting for boarding */}
-            {showQRCode && tripStatus === "waiting" && (
-              <>
-                <View style={styles.divider} />
-                <View style={styles.qrContainer}>
-                  <Text style={styles.qrTitle}>Boarding QR Code</Text>
-                  <QRCode value={qrPayload} size={160} />
-                  <Text style={styles.qrHelpText}>
-                    Show this QR code to the conductor for boarding
+        <Animated.View
+          style={{
+            opacity: panelHeight,
+            maxHeight: panelHeight.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 600], // Adjust max height as needed
+            }),
+            overflow: 'hidden',
+          }}
+        >
+          {/* QR section - show only while waiting for boarding */}
+          {showQRCode && tripStatus === "waiting" && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.qrContainer}>
+                <Text style={styles.qrTitle}>Boarding QR Code</Text>
+                <QRCode value={qrPayload} size={160} />
+                <Text style={styles.qrHelpText}>
+                  Show this QR code to the conductor for boarding
+                </Text>
+                <Text style={styles.qrSubText}>
+                  The QR code will disappear once you&apos;re boarded
+                </Text>
+                {/* Fallback: Show payload as text if QR doesn't work
+                <View style={styles.fallbackContainer}>
+                  <Text style={styles.fallbackText}>
+                    If QR doesn't work, show this to conductor:
                   </Text>
-                  <Text style={styles.qrSubText}>
-                    The QR code will disappear once you&apos;re boarded
-                  </Text>
-                  {/* Fallback: Show payload as text if QR doesn't work
-                  <View style={styles.fallbackContainer}>
-                    <Text style={styles.fallbackText}>
-                      If QR doesn't work, show this to conductor:
-                    </Text>
-                    <Text style={styles.fallbackPayload}>{qrPayload}</Text>
-                  </View> */}
-                </View>
-              </>
-            )}
+                  <Text style={styles.fallbackPayload}>{qrPayload}</Text>
+                </View> */}
+              </View>
+            </>
+          )}
 
-            {/* Show boarding confirmation when QR is scanned */}
-            {tripStatus === "picked_up" && (
-              <>
-                <View style={styles.divider} />
-                <View style={styles.boardingContainer}>
-                  <Ionicons name="checkmark-circle" size={48} color="#28a745" />
-                  <Text style={styles.boardingTitle}>
-                    Successfully Boarded! ✅
-                  </Text>
-                  <Text style={styles.boardingText}>
-                    You have been boarded on the bus. Enjoy your ride!
-                  </Text>
-                </View>
-              </>
-            )}
+          {/* Show boarding confirmation when QR is scanned */}
+          {tripStatus === "picked_up" && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.boardingContainer}>
+                <Ionicons name="checkmark-circle" size={48} color="#28a745" />
+                <Text style={styles.boardingTitle}>
+                  Successfully Boarded! ✅
+                </Text>
+                <Text style={styles.boardingText}>
+                  You have been boarded on the bus. Enjoy your ride!
+                </Text>
+              </View>
+            </>
+          )}
 
-            <View style={styles.tripInfoContainer}>
-              <FontAwesome5 name="bus-alt" size={20} color="#333" />
-              <Text style={styles.dots}>········</Text>
-              <Ionicons name="location-sharp" size={20} color="#007AFF" />
-              <Text style={styles.dots}>········</Text>
-              <FontAwesome5 name="flag-checkered" size={20} color="#28a745" />
-            </View>
-            <Text style={styles.destinationText}>
-              Bus {busPlateNumber}
-              {tripStatus === "waiting"
-                ? " to your pickup"
-                : " to your destination"}
-            </Text>
-          </>
-        )}
+          <View style={styles.tripInfoContainer}>
+            <FontAwesome5 name="bus-alt" size={20} color="#333" />
+            <Text style={styles.dots}>········</Text>
+            <Ionicons name="location-sharp" size={20} color="#007AFF" />
+            <Text style={styles.dots}>········</Text>
+            <FontAwesome5 name="flag-checkered" size={20} color="#28a745" />
+          </View>
+          <Text style={styles.destinationText}>
+            Bus {busPlateNumber}
+            {tripStatus === "waiting"
+              ? " to your pickup"
+              : " to your destination"}
+          </Text>
+        </Animated.View>
       </View>
 
       {/* Drop off / Cancel Trip Button - Centered below bottom panel */}

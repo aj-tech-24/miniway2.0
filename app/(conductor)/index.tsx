@@ -456,24 +456,26 @@ export function ConductorScreen() {
           boarded_at: p.boarded_at,
           passenger_count: p.passenger_count,
           users: Array.isArray(p.users) ? p.users[0] : p.users,
-        })),      };      // Calculate data before state updates to batch them
+        })),
+      };      // Calculate data before state updates to batch them
       const boardedPassengers = transformedTrip.trip_passengers.filter(
         (p: Passenger) => p.status === "boarded"
       );
-      
+
       // Find the guest passenger record from the database (if exists)
+      // Guest passengers have null passenger_id in the database
       const guestPassengerFromDB = transformedTrip.trip_passengers.find(
-        (p: Passenger) => p.passenger_id === GUEST_PASSENGER_ID
+        (p: Passenger) => !p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID
       );
-      
-      // Calculate registered passengers (excluding guest entry)
+
+      // Calculate registered passengers (excluding guest entry - null or GUEST_PASSENGER_ID)
       const registeredBoardedCount = boardedPassengers
-        .filter((p: Passenger) => p.passenger_id !== GUEST_PASSENGER_ID)
+        .filter((p: Passenger) => p.passenger_id && p.passenger_id !== GUEST_PASSENGER_ID)
         .reduce((sum: number, p: Passenger) => sum + (p.passenger_count || 1), 0);
-      
+
       const passengerIds = new Set(
         boardedPassengers
-          .filter((p: Passenger) => p.passenger_id !== GUEST_PASSENGER_ID)
+          .filter((p: Passenger) => p.passenger_id && p.passenger_id !== GUEST_PASSENGER_ID)
           .map((p: Passenger) => p.passenger_id)
       );
 
@@ -1209,40 +1211,46 @@ export function ConductorScreen() {
       console.log("Bus passenger count updated to:", newPassengerCount);
 
       // Check if guest passenger entry already exists for this trip
+      // Guest passengers have: null passenger_id (from DB), GUEST_PASSENGER_ID constant, or guest- prefix (local)
+      // Note: passengers array is already scoped to current trip from trip_passengers
       const existingGuestPassenger = passengers.find(
-        (p) => p.id === GUEST_PASSENGER_ID || p.passenger_id === GUEST_PASSENGER_ID
+        (p) => !p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID || p.id.startsWith("guest-")
       );
 
       if (existingGuestPassenger) {
         // Update existing guest passenger record - increment the count
         const newGuestCount = (existingGuestPassenger.passenger_count || 0) + guestCount;
-        
-        // Update in database
+
+        // Update in database (guest passengers have null passenger_id)
+        // Also reset status to 'boarded' in case it was 'completed'
         const { error: updateError } = await supabase
           .from("trip_passengers")
-          .update({ 
+          .update({
             passenger_count: newGuestCount,
+            status: "boarded", // Reset to boarded when adding more guests
             boarded_at: new Date().toISOString() // Update timestamp
           })
           .eq("trip_id", currentTrip.id)
-          .eq("passenger_id", GUEST_PASSENGER_ID);
+          .is("passenger_id", null);
 
         if (updateError) {
           console.error("Error updating guest passenger count:", updateError);
           throw updateError;
         }
 
-        // Update local state
+        // Update local state - check for null passenger_id or guest markers
+        // Also reset status to 'boarded' so it renders in the list
         setPassengers((prev) =>
           prev.map((p) =>
-            p.id === GUEST_PASSENGER_ID || p.passenger_id === GUEST_PASSENGER_ID
-              ? { ...p, passenger_count: newGuestCount, boarded_at: new Date().toISOString() }
+            (!p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID || p.id.startsWith("guest-"))
+              ? { ...p, passenger_count: newGuestCount, status: "boarded", boarded_at: new Date().toISOString() }
               : p
           )
         );
         setGuestPassengerCount(newGuestCount);
 
-        console.log(`Guest passenger count updated to: ${newGuestCount}`);      } else {
+        console.log(`Guest passenger count updated to: ${newGuestCount}`);
+      } else {
         // Create new guest passenger record in database
         // Use dummy coordinates (0,0) for guests since they don't have pickup/destination
         const { data: insertedGuest, error: insertError } = await supabase
@@ -1250,7 +1258,7 @@ export function ConductorScreen() {
           .insert({
             trip_id: currentTrip.id,
             bus_id: currentTrip.buses.id,
-            passenger_id: GUEST_PASSENGER_ID, // Special ID for guest passengers
+            passenger_id: null, // null for guest passengers (no user account)
             pickup_lat: 0, // Dummy coordinate for guest passengers
             pickup_lng: 0, // Dummy coordinate for guest passengers
             dest_lat: 0, // Dummy coordinate for guest passengers
@@ -1362,14 +1370,19 @@ export function ConductorScreen() {
                 .from("trip_passengers")
                 .update({ status: "completed" })
                 .eq("trip_id", currentTrip.id)
-                .eq("passenger_id", GUEST_PASSENGER_ID);
+                .is("passenger_id", null);
 
               if (updateError) {
                 console.error("Error updating guest passenger:", updateError);
               }
-              
-              // Remove from local list
-              setPassengers((prev) => prev.filter((p) => p.passenger_id !== GUEST_PASSENGER_ID && p.id !== passenger.id));
+
+              // Remove from local list - check for guest markers
+              setPassengers((prev) => prev.filter((p) =>
+                p.passenger_id !== GUEST_PASSENGER_ID &&
+                p.passenger_id !== null &&
+                !p.id.startsWith("guest-") &&
+                p.id !== passenger.id
+              ));
               setGuestPassengerCount(0);
             } else {
               // Registered: update database status
@@ -1390,7 +1403,8 @@ export function ConductorScreen() {
 
               // Remove from local list
               setPassengers((prev) => prev.filter((p) => p.id !== passenger.id));
-            }          } else {
+            }
+          } else {
             // Partial drop-off - reduce the passenger_count
             if (isGuest) {
               // Guest: update database with reduced count
@@ -1398,16 +1412,16 @@ export function ConductorScreen() {
                 .from("trip_passengers")
                 .update({ passenger_count: remainingCount })
                 .eq("trip_id", currentTrip.id)
-                .eq("passenger_id", GUEST_PASSENGER_ID);
+                .is("passenger_id", null);
 
               if (updateError) {
                 console.error("Error updating guest passenger count:", updateError);
               }
 
-              // Update local state
+              // Update local state - check for guest markers including null passenger_id
               setPassengers((prev) =>
                 prev.map((p) =>
-                  p.passenger_id === GUEST_PASSENGER_ID || p.id === passenger.id
+                  (!p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID || p.id.startsWith("guest-") || p.id === passenger.id)
                     ? { ...p, passenger_count: remainingCount }
                     : p
                 )

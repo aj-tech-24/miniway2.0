@@ -196,7 +196,7 @@ export default function SelectDestinationScreen() {
         });
         updateLocationWithDebounce(location);
       } catch (error) {
-        console.error("Error getting location:", error);
+        //console.error("Error getting location:", error);
         Alert.alert("Error", "Failed to get your current location.");
       } finally {
         setLocationLoading(false);
@@ -306,7 +306,7 @@ export default function SelectDestinationScreen() {
           setCompassHeading(Math.round(bearing));
         });
       } catch (error) {
-        console.error('Error setting up heading watch:', error);
+        //console.error('Error setting up heading watch:', error);
         setIsMagnetometerAvailable(false);
       }
     };
@@ -346,12 +346,12 @@ export default function SelectDestinationScreen() {
         );
 
         if (routeError) {
-          console.error("Route fetch error:", routeError);
+          //console.error("Route fetch error:", routeError);
           throw routeError;
         }
 
         if (!routeData || routeData.length === 0) {
-          console.error("Route not found with ID:", selectedRouteId);
+          //console.error("Route not found with ID:", selectedRouteId);
           setRouteData(null);
           return;
         }
@@ -381,7 +381,7 @@ export default function SelectDestinationScreen() {
 
         setRouteData(fetchedRoute);
       } catch (error) {
-        console.error("Error fetching route data:", error);
+        //console.error("Error fetching route data:", error);
         setRouteData(null);
       } finally {
         setRouteLoading(false);
@@ -406,7 +406,7 @@ export default function SelectDestinationScreen() {
 
   const fetchPredictions = async (query: string) => {
     if (!GOOGLE_MAPS_API_KEY) {
-      console.error("Google Maps API Key is not configured.");
+      //console.error("Google Maps API Key is not configured.");
       setIsSearching(false);
       return;
     }
@@ -425,7 +425,7 @@ export default function SelectDestinationScreen() {
         setPredictions(data.predictions);
       }
     } catch (error) {
-      console.error("Failed to fetch predictions:", error);
+      //console.error("Failed to fetch predictions:", error);
     } finally {
       setIsSearching(false);
     }
@@ -438,7 +438,7 @@ export default function SelectDestinationScreen() {
     setIsSearching(true);
 
     if (!GOOGLE_MAPS_API_KEY) {
-      console.error("Google Maps API Key is not configured.");
+      //console.error("Google Maps API Key is not configured.");
       setIsSearching(false);
       return;
     }
@@ -503,7 +503,7 @@ export default function SelectDestinationScreen() {
         });
       }
     } catch (error) {
-      console.error("Failed to fetch place details:", error);
+      //console.error("Failed to fetch place details:", error);
     } finally {
       setIsSearching(false);
     }
@@ -590,7 +590,7 @@ export default function SelectDestinationScreen() {
         );
       }
     } catch (error) {
-      console.error("Failed to fetch address:", error);
+      //console.error("Failed to fetch address:", error);
       Alert.alert(
         "Error",
         "Could not determine the address. Please check your connection."

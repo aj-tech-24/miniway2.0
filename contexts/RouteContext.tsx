@@ -99,7 +99,7 @@ export interface RouteContextState {
     unsubscribeFromAllBusesExcept: (keepBusId: string) => void;
     subscribeToRoute: (routeId: string) => void;
     unsubscribeFromRoute: () => void;
-    refreshBusesOnRoute: () => Promise<void>;
+    refreshBusesOnRoute: (routeId?: string) => Promise<void>;
     refreshPickupRequests: (busId: string) => Promise<void>;
 
     // Realtime Broadcast (optional: ephemeral updates)
@@ -173,7 +173,7 @@ const parseGeoJSONLineString = (geoJson: any): LatLng[] => {
             }));
         }
     } catch (error) {
-        console.error("Failed to parse GeoJSON LineString:", error);
+        // Failed to parse GeoJSON LineString
     }
 
     return [];
@@ -224,8 +224,9 @@ export function RouteProvider({ children }: { children: ReactNode }) {
     /**
      * Refresh all buses on the current route
      */
-    const refreshBusesOnRoute = useCallback(async () => {
-        if (!currentRouteId) return;
+    const refreshBusesOnRoute = useCallback(async (routeId?: string) => {
+        const idToUse = routeId || currentRouteId;
+        if (!idToUse) return;
 
         try {
             // Fetch active buses for this route
@@ -244,7 +245,7 @@ export function RouteProvider({ children }: { children: ReactNode }) {
             fullName
           )
         `)
-                .eq("route_id", currentRouteId)
+                .eq("route_id", idToUse)
                 .in("status", ["active", "waiting"]);
 
             if (busesError) throw busesError;
@@ -304,7 +305,7 @@ export function RouteProvider({ children }: { children: ReactNode }) {
                 });
             }
         } catch (err) {
-            console.error("Error refreshing buses on route:", err);
+            // Error refreshing buses on route
         }
     }, [currentRouteId]);
 
@@ -390,11 +391,7 @@ export function RouteProvider({ children }: { children: ReactNode }) {
                     );
                 }
             )
-            .subscribe((status) => {
-                if (status === "SUBSCRIBED") {
-                    console.log(`📍 Subscribed to bus ${busId} location updates`);
-                }
-            });
+            .subscribe();
 
         busChannelsRef.current.set(busId, channel);
     }, [updateBusLocation]);
@@ -407,7 +404,6 @@ export function RouteProvider({ children }: { children: ReactNode }) {
         if (channel) {
             supabase.removeChannel(channel);
             busChannelsRef.current.delete(busId);
-            console.log(`📍 Unsubscribed from bus ${busId} location updates`);
         }
     }, []);
 
@@ -471,7 +467,6 @@ export function RouteProvider({ children }: { children: ReactNode }) {
                 .subscribe((status) => {
                     if (status === "SUBSCRIBED") {
                         setIsConnected(true);
-                        console.log(`🚌 Connected to route ${routeId} real-time updates`);
                     }
                 });
 
@@ -492,22 +487,16 @@ export function RouteProvider({ children }: { children: ReactNode }) {
 
             // Check if we know this bus
             if (!busesOnRouteRef.current.has(p.busId)) {
-                console.log(`🆕 [DISCOVERY] Bus ${p.busId} discovered via broadcast. Refreshing buses...`);
                 // We found a new bus! It might have just come online or we missed it.
                 // Trigger a refresh to get its full details (plate, driver, etc).
                 await refreshBusesOnRoute();
             }
 
             const loc = p.location as LatLng;
-            console.log(`📡 [BROADCAST RECEIVED] Driver location received for bus ${p.busId}: lat=${loc.latitude.toFixed(6)}, lng=${loc.longitude.toFixed(6)}, heading=${p.heading?.toFixed(1) ?? 'N/A'}°`);
             updateBusLocation(p.busId, loc, typeof p.heading === "number" ? p.heading : 0);
         });
 
-        routeBroadcastChannel.subscribe((status) => {
-            if (status === "SUBSCRIBED") {
-                console.log(`📡 Connected to route ${routeId} broadcast updates`);
-            }
-        });
+        routeBroadcastChannel.subscribe();
 
         routeBroadcastChannelRef.current = routeBroadcastChannel;
 
@@ -610,7 +599,6 @@ export function RouteProvider({ children }: { children: ReactNode }) {
 
         setIsConnected(false);
         isUnsubscribedRef.current = true;
-        console.log("📍 Unsubscribed from all route updates");
 
         // Important: allow future unsubscribes when we later resubscribe to a new route.
         // The subscribeToRoute flow should set this back to false when establishing new subscriptions.
@@ -681,13 +669,12 @@ export function RouteProvider({ children }: { children: ReactNode }) {
             }
 
             // Fetch buses on this route
-            await refreshBusesOnRoute();
+            await refreshBusesOnRoute(routeId);
 
             // Subscribe to real-time updates
             subscribeToRoute(routeId);
 
         } catch (err) {
-            console.error("Error setting route:", err);
             setError("Failed to load route information");
         } finally {
             setIsLoading(false);
@@ -730,7 +717,6 @@ export function RouteProvider({ children }: { children: ReactNode }) {
 
         const ch = payload?.routeId ? ensureRouteBroadcastChannel(payload.routeId) : null;
         if (!ch) {
-            console.warn("⚠️ DEBUG: Route broadcast channel not available for publishing!");
             return;
         }
 

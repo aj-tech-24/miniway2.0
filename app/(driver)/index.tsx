@@ -548,23 +548,7 @@ const DriverScreen = () => {
       .order("started_at", { ascending: false })
       .limit(10);
 
-    console.log("🔍 DEBUG: All trips for driver");
-    console.log("All trips query result:", allTrips);
-    console.log("All trips query error:", allTripsError);
-    if (allTrips && allTrips.length > 0) {
-      console.log("📊 All trips found:");
-      allTrips.forEach((trip, index) => {
-        console.log(`  Trip ${index + 1}:`, {
-          id: trip.id,
-          bus_id: trip.bus_id,
-          status: trip.status,
-          started_at: trip.started_at,
-          has_location: !!trip.current_location,
-        });
-      });
-    } else {
-      console.log("❌ No trips found for this driver at all");
-    }
+
 
     // Now, try to get any existing trip for this driver (including waiting status)
     const { data: existingTrips, error: existingTripsError } = await supabase
@@ -575,26 +559,7 @@ const DriverScreen = () => {
       .order("started_at", { ascending: false })
       .limit(1);
 
-    // Debug logging
-    console.log("🔍 DEBUG: Trip Detection Results");
-    console.log("Driver ID:", currentUserId);
-    console.log("Existing trips query result:", existingTrips);
-    console.log("Query error:", existingTripsError);
-    console.log("Number of trips found:", existingTrips?.length || 0);
 
-    if (existingTrips && existingTrips.length > 0) {
-      console.log("✅ Found existing trip(s):");
-      existingTrips.forEach((trip, index) => {
-        console.log(`  Trip ${index + 1}:`, {
-          id: trip.id,
-          bus_id: trip.bus_id,
-          status: trip.status,
-          has_location: !!trip.current_location,
-        });
-      });
-    } else {
-      console.log("❌ No existing trips found");
-    }
 
     const activeTripData =
       existingTrips && existingTrips.length > 0 ? existingTrips[0] : null;
@@ -771,10 +736,7 @@ const DriverScreen = () => {
 
     // Handle existing trip
     if (activeTripData) {
-      console.log("🎯 DEBUG: Using existing trip");
-      console.log("Trip ID:", activeTripData.id);
-      console.log("Bus ID:", activeTripData.bus_id);
-      console.log("Status:", activeTripData.status);
+
 
       // Existing trip found, use its data
       tripId = activeTripData.id;
@@ -782,9 +744,7 @@ const DriverScreen = () => {
 
       // Show appropriate message based on trip status
       if (activeTripData.status === "waiting") {
-        console.log(
-          "📋 DEBUG: Showing 'Resuming Trip' alert for waiting status"
-        );
+
         showAlert(
           "Resuming Trip",
           `You have an existing trip with "waiting" status. Continuing with that trip.`,
@@ -796,7 +756,7 @@ const DriverScreen = () => {
           "Continue"
         );
       } else {
-        console.log("🚀 DEBUG: Continuing directly with ongoing trip");
+
         // Trip is ongoing, continue directly
         await continueWithExistingTrip(activeTripData);
       }
@@ -805,9 +765,7 @@ const DriverScreen = () => {
 
     // Check if we need to create a new trip
     if (activeTripError || !activeTripData) {
-      console.log("🆕 DEBUG: No existing trip found, creating new one");
-      console.log("Active trip error:", activeTripError);
-      console.log("Active trip data:", activeTripData);
+
 
       // No existing trip found, create a new one
       showAlert(

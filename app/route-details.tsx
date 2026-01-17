@@ -24,6 +24,7 @@ import {
   Text,
   TouchableOpacity,
   UIManager,
+  Vibration,
   View
 } from "react-native";
 import MapView, { Camera, LatLng, Marker, Polyline } from "react-native-maps";
@@ -156,7 +157,7 @@ const getCurrentLocation = async (
     };
     setCurrentLocation(currentLatLng);
   } catch (error) {
-    console.error("Error getting location:", error);
+    //console.error("Error getting location:", error);
     Alert.alert(
       "Location Error",
       "Unable to get your current location. Please try again or select a location on the map.",
@@ -284,7 +285,7 @@ export default function RouteDetailsScreen() {
           setCompassHeading(Math.round(bearing));
         });
       } catch (error) {
-        console.error('Error setting up heading watch:', error);
+        //console.error('Error setting up heading watch:', error);
         setIsMagnetometerAvailable(false);
       }
     };
@@ -296,6 +297,36 @@ export default function RouteDetailsScreen() {
       }
     };
   }, []);
+
+  // Handle broadcast bus location updates with smooth animation
+  useEffect(() => {
+    if (!contextBuses || contextBuses.length === 0) return;
+
+    // Update animated positions for smooth marker transitions
+    contextBuses.forEach((bus: any) => {
+      if (bus.location) {
+        const newPosition: LatLng = {
+          latitude: bus.location.latitude,
+          longitude: bus.location.longitude,
+        };
+
+        // Animate marker on Android using native method
+        if (Platform.OS === 'android') {
+          const markerRef = busMarkerRefs.current.get(bus.id);
+          if (markerRef) {
+            markerRef.animateMarkerToCoordinate(newPosition, MARKER_ANIMATION_DURATION);
+          }
+        }
+
+        // Update state for all platforms
+        setAnimatedBusPositions((prev) => {
+          const updated = new Map(prev);
+          updated.set(bus.id, newPosition);
+          return updated;
+        });
+      }
+    });
+  }, [contextBuses]);
 
 
   const originCoords: LatLng = {
@@ -318,7 +349,7 @@ export default function RouteDetailsScreen() {
       try {
         // If we have a specific route ID, fetch it directly from the routes table
         if (routeId) {
-          console.log("Fetching route directly by ID:", routeId);
+          //console.log("Fetching route directly by ID:", routeId);
 
           // Fetch the route directly by ID with its actual path data using the existing function
           const { data: routeData, error: routeError } = await supabase.rpc(
@@ -327,12 +358,12 @@ export default function RouteDetailsScreen() {
           );
 
           if (routeError) {
-            console.error("Route fetch error:", routeError);
+            //console.error("Route fetch error:", routeError);
             throw routeError;
           }
 
           if (!routeData) {
-            console.error("Route not found with ID:", routeId);
+            //console.error("Route not found with ID:", routeId);
             Alert.alert(
               "Route Not Found",
               `The selected route (ID: ${routeId}) could not be found. Please try selecting a different route.`,
@@ -349,13 +380,13 @@ export default function RouteDetailsScreen() {
 
           if (rawRoute && rawRoute.geojson) {
             // Use the actual stored route path from the database
-            console.log("Using stored route geojson from database");
+            //console.log("Using stored route geojson from database");
             routePath = rawRoute.geojson;
           } else {
             // Fallback to direct line if no geojson data
-            console.log(
-              "No stored route geojson, using direct line from origin to destination"
-            );
+            // //console.log(
+            //   "No stored route geojson, using direct line from origin to destination"
+            // );
             routePath = {
               type: "LineString",
               coordinates: [
@@ -493,9 +524,9 @@ export default function RouteDetailsScreen() {
           const rawRoute = routeData[0];
           if (typeof rawRoute.path === "string") {
             // Use origin and destination coordinates for best route
-            console.log(
-              "Using origin and destination coordinates for best route path"
-            );
+            //console.log(
+            //  "Using origin and destination coordinates for best route path"
+            //);
             // Use origin and destination since coordinate columns don't exist
             routePath = {
               type: "LineString",
@@ -608,7 +639,7 @@ export default function RouteDetailsScreen() {
           setBuses(formattedBuses);
         }
       } catch (err) {
-        console.error("Error fetching data:", err);
+        //console.error("Error fetching data:", err);
         setError(
           "Failed to load route information. Please check your connection and try again."
         );
@@ -628,7 +659,7 @@ export default function RouteDetailsScreen() {
         try {
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status !== "granted") {
-            console.log("Location permission denied");
+            //console.log("Location permission denied");
             return;
           }
 
@@ -643,14 +674,14 @@ export default function RouteDetailsScreen() {
               setUserLocation(location);
 
               // Log location update for debugging
-              console.log("📍 Commuter location updated (focused):", {
-                latitude: location.coords.latitude,
-                longitude: location.coords.longitude,
-              });
+              // console.log("📍 Commuter location updated (focused):", {
+              //   latitude: location.coords.latitude,
+              //   longitude: location.coords.longitude,
+              // });
             }
           );
         } catch (error) {
-          console.error("Error starting location updates:", error);
+          //console.error("Error starting location updates:", error);
         }
       };
 
@@ -772,7 +803,7 @@ export default function RouteDetailsScreen() {
         }
       }
     } catch (err) {
-      console.error("Error refreshing data:", err);
+      //console.error("Error refreshing data:", err);
       setError("Failed to refresh data. Please try again.");
     } finally {
       setRefreshing(false);
@@ -807,7 +838,7 @@ export default function RouteDetailsScreen() {
   useEffect(() => {
     if (!selectedBus?.id) return;
 
-    console.log("Subscribing to selected bus:", selectedBus.id);
+    //console.log("Subscribing to selected bus:", selectedBus.id);
 
     // Switch into live-follow mode.
     setIsLiveTrackingSelectedBus(true);
@@ -818,7 +849,7 @@ export default function RouteDetailsScreen() {
     unsubscribeFromRoute();
 
     return () => {
-      console.log("Unsubscribing from selected bus:", selectedBus.id);
+      //console.log("Unsubscribing from selected bus:", selectedBus.id);
       unsubscribeFromBus(selectedBus.id);
     };
   }, [selectedBus?.id, subscribeToBus, unsubscribeFromBus, unsubscribeFromAllBusesExcept, unsubscribeFromRoute]);
@@ -876,7 +907,7 @@ export default function RouteDetailsScreen() {
   useEffect(() => {
     const restoreState = async () => {
       if (params.restorePickupRequestId && nearestRoute) {
-        console.log("Restoring pickup request state:", params.restorePickupRequestId);
+        //console.log("Restoring pickup request state:", params.restorePickupRequestId);
         try {
           const { data: request, error } = await supabase
             .from("pickup_requests")
@@ -895,12 +926,12 @@ export default function RouteDetailsScreen() {
             .single();
 
           if (error || !request) {
-            console.error("Error fetching restored request:", error);
+            //console.error("Error fetching restored request:", error);
             return;
           }
 
           if (request.status !== 'pending') {
-            console.log("Restored request is not pending:", request.status);
+            //console.log("Restored request is not pending:", request.status);
             return;
           }
 
@@ -933,7 +964,7 @@ export default function RouteDetailsScreen() {
           );
 
         } catch (e) {
-          console.error("Error restoring state:", e);
+          //console.error("Error restoring state:", e);
         }
       }
     };
@@ -947,6 +978,7 @@ export default function RouteDetailsScreen() {
       Alert.alert("Bus Inactive", "This bus is not currently active.");
       return;
     }
+
     setSelectedBus(bus);
     setShowPickupSelection(true);
     setPickupLocation(null);
@@ -954,11 +986,8 @@ export default function RouteDetailsScreen() {
 
     // Focus camera on the selected bus
     setTimeout(() => {
-      console.log("MapRef current:", mapRef.current);
-
       if (bus.location) {
         // If bus has live location, focus on it
-        console.log("Focusing on bus location:", bus.location); // Use animateCamera for better control over zoom and pitch
         if (mapRef.current) {
           mapRef.current.animateCamera(
             {
@@ -983,7 +1012,7 @@ export default function RouteDetailsScreen() {
           latitude: startCoord[1],
           longitude: startCoord[0],
         };
-        console.log("Focusing on fallback location:", fallbackLocation);
+        //console.log("Focusing on fallback location:", fallbackLocation);
         if (mapRef.current) {
           mapRef.current.animateCamera(
             {
@@ -1058,7 +1087,7 @@ export default function RouteDetailsScreen() {
         .single();
 
       if (profileError) {
-        console.error("Error fetching user profile:", profileError);
+        //console.error("Error fetching user profile:", profileError);
         setError("Could not fetch your profile information. Please try again.");
         return;
       }
@@ -1099,7 +1128,7 @@ export default function RouteDetailsScreen() {
           .single();
 
         if (createError) {
-          console.error("Error creating trip:", createError);
+          //console.error("Error creating trip:", createError);
           setError(
             "Unable to create a trip for this bus. Please try again or contact support."
           );
@@ -1120,13 +1149,13 @@ export default function RouteDetailsScreen() {
         .limit(1)
         .maybeSingle();
 
-      console.log("Existing trip_passengers record check:", {
-        existingRecord: existingTripPassenger,
-        error: checkError,
-        busId: selectedBus.id,
-        passengerId: session.user.id,
-        tripId: tripId,
-      });
+      // console.log("Existing trip_passengers record check:", {
+      //   existingRecord: existingTripPassenger,
+      //   error: checkError,
+      //   busId: selectedBus.id,
+      //   passengerId: session.user.id,
+      //   tripId: tripId,
+      // });
 
       let tripPassengerId;
       if (existingTripPassenger && !checkError) {
@@ -1146,7 +1175,7 @@ export default function RouteDetailsScreen() {
           .eq("id", tripPassengerId);
 
         if (updateError) {
-          console.error("Error updating trip_passengers record:", updateError);
+          //console.error("Error updating trip_passengers record:", updateError);
           setError("Failed to update passenger record. Please try again.");
           return;
         }
@@ -1171,10 +1200,10 @@ export default function RouteDetailsScreen() {
             .single();
 
         if (tripPassengerError) {
-          console.error(
-            "Error creating trip_passengers record:",
-            tripPassengerError
-          );
+          // console.error(
+          //   "Error creating trip_passengers record:",
+          //   tripPassengerError
+          // );
           setError("Failed to create passenger record. Please try again.");
           return;
         }
@@ -1206,12 +1235,12 @@ export default function RouteDetailsScreen() {
         .single();
 
       if (pickupError) {
-        console.error("Error creating pickup request:", pickupError);
+        //console.error("Error creating pickup request:", pickupError);
         setError("Failed to create pickup request. Please try again.");
         return;
       }
 
-      console.log("Pickup request created successfully:", pickupRequest);
+      //console.log("Pickup request created successfully:", pickupRequest);
 
       // Show waiting modal instead of alert
       setWaitingPickupRequest({
@@ -1242,7 +1271,7 @@ export default function RouteDetailsScreen() {
       setSelectedBus(null);
       setPickupLocation(null);
     } catch (error) {
-      console.error("Error in handleConfirmPickup:", error);
+      //console.error("Error in handleConfirmPickup:", error);
       setError("Something went wrong. Please try again.");
     } finally {
       setIsSubmittingPickup(false);
@@ -1264,10 +1293,10 @@ export default function RouteDetailsScreen() {
     nearestRoute: Route,
     passengerId: string
   ) => {
-    console.log(
-      "Starting to listen for pickup request response:",
-      pickupRequestId
-    );
+    // console.log(
+    //   "Starting to listen for pickup request response:",
+    //   pickupRequestId
+    // );
 
     // Define channels first
     const pickupChannel = supabase
@@ -1281,23 +1310,26 @@ export default function RouteDetailsScreen() {
           filter: `id=eq.${pickupRequestId}`,
         },
         async (payload) => {
-          console.log("Pickup request status updated:", payload);
+          //console.log("Pickup request status updated:", payload);
           const newStatus = payload.new.status;
 
           if (newStatus === "accepted") {
-            console.log(
-              "Pickup request accepted! Navigating to trip screen..."
-            );
+            // console.log(
+            //   "Pickup request accepted! Navigating to trip screen..."
+            // );
+
+            // Vibrate to notify user
+            Vibration.vibrate();
 
             // Close waiting modal
             setShowWaitingModal(false);
             setWaitingPickupRequest(null);
 
             // Navigate directly to trip screen
-            console.log(
-              "Navigating to trip with passenger count:",
-              passengerCount
-            );
+            // console.log(
+            //   "Navigating to trip with passenger count:",
+            //   passengerCount
+            // );
             router.push({
               pathname: "/trip",
               params: {
@@ -1317,7 +1349,7 @@ export default function RouteDetailsScreen() {
             safeRemove(pickupChannel);
             safeRemove(tripPassengerChannel);
           } else if (newStatus === "declined") {
-            console.log("Pickup request declined by driver");
+            //console.log("Pickup request declined by driver");
 
             // Close waiting modal
             setShowWaitingModal(false);
@@ -1352,11 +1384,11 @@ export default function RouteDetailsScreen() {
           filter: `passenger_id=eq.${passengerId} AND bus_id=eq.${busId}`,
         },
         async (payload) => {
-          console.log("Trip passenger status updated:", payload);
+          //console.log("Trip passenger status updated:", payload);
           const newStatus = payload.new.status;
 
           if (newStatus === "boarded") {
-            console.log("Passenger boarded! Navigating to trip screen...");
+            //console.log("Passenger boarded! Navigating to trip screen...");
 
             // Navigate to trip screen
             router.push({
@@ -1378,7 +1410,7 @@ export default function RouteDetailsScreen() {
             safeRemove(pickupChannel);
             safeRemove(tripPassengerChannel);
           } else if (newStatus === "cancelled") {
-            console.log("Trip cancelled by driver");
+            //console.log("Trip cancelled by driver");
             Alert.alert(
               "Trip Cancelled",
               "The driver has cancelled your trip. Please try selecting another bus.",
@@ -1398,27 +1430,27 @@ export default function RouteDetailsScreen() {
 
     // Subscribe to both channels
     pickupChannel.subscribe((status) => {
-      console.log("Pickup request channel subscription status:", status);
+      //console.log("Pickup request channel subscription status:", status);
       if (status === "SUBSCRIBED") {
-        console.log("✅ Successfully subscribed to pickup request updates");
+        //console.log("✅ Successfully subscribed to pickup request updates");
       } else if (status === "CHANNEL_ERROR") {
-        console.error("❌ Failed to subscribe to pickup request updates");
+        //console.error("❌ Failed to subscribe to pickup request updates");
       }
     });
 
     tripPassengerChannel.subscribe((status) => {
-      console.log("Trip passenger channel subscription status:", status);
+      //console.log("Trip passenger channel subscription status:", status);
       if (status === "SUBSCRIBED") {
-        console.log("✅ Successfully subscribed to trip passenger updates");
+        //console.log("✅ Successfully subscribed to trip passenger updates");
       } else if (status === "CHANNEL_ERROR") {
-        console.error("❌ Failed to subscribe to trip passenger updates");
+        //console.error("❌ Failed to subscribe to trip passenger updates");
       }
     });
 
     // Fallback: Poll for pickup request status every 3 seconds as backup
     const pollInterval = setInterval(async () => {
       try {
-        console.log("Polling for pickup request status...");
+        //console.log("Polling for pickup request status...");
         const { data: requestData, error } = await supabase
           .from("pickup_requests")
           .select("status")
@@ -1426,28 +1458,31 @@ export default function RouteDetailsScreen() {
           .single();
 
         if (error) {
-          console.error("Error polling pickup request:", error);
+          //console.error("Error polling pickup request:", error);
           return;
         }
 
         if (requestData) {
-          console.log("Polled pickup request status:", requestData.status);
+          //console.log("Polled pickup request status:", requestData.status);
 
           if (requestData.status === "accepted") {
-            console.log(
-              "Pickup request accepted via polling! Navigating to trip screen..."
-            );
+            //console.log(
+            //  "Pickup request accepted via polling! Navigating to trip screen..."
+            //);
             clearInterval(pollInterval);
+
+            // Vibrate to notify user
+            Vibration.vibrate();
 
             // Close waiting modal
             setShowWaitingModal(false);
             setWaitingPickupRequest(null);
 
             // Navigate directly to trip screen
-            console.log(
-              "Navigating to trip with passenger count:",
-              passengerCount
-            );
+            //console.log(
+            //  "Navigating to trip with passenger count:",
+            //  passengerCount
+            //);
             router.push({
               pathname: "/trip",
               params: {
@@ -1467,7 +1502,7 @@ export default function RouteDetailsScreen() {
             safeRemove(pickupChannel);
             safeRemove(tripPassengerChannel);
           } else if (requestData.status === "declined") {
-            console.log("Pickup request declined via polling");
+            //console.log("Pickup request declined via polling");
             clearInterval(pollInterval);
 
             // Close waiting modal
@@ -1491,7 +1526,7 @@ export default function RouteDetailsScreen() {
           }
         }
       } catch (error) {
-        console.error("Error in polling interval:", error);
+        //console.error("Error in polling interval:", error);
       }
     }, 3000); // Poll every 3 seconds
 
@@ -2494,6 +2529,8 @@ export default function RouteDetailsScreen() {
           </View>
         </View>
       </Modal>
+
+
 
       {/* Location Permission Alert */}
       <Modal
