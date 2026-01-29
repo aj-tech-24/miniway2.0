@@ -998,7 +998,7 @@ export default function SelectDestinationScreen() {
               longitude: lng,
             }))}
             strokeColor={isDark ? "#22d3ee" : "#0891b2"}
-            strokeWidth={4}
+            strokeWidth={8}
           />
         )}
 

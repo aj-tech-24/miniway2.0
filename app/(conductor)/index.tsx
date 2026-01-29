@@ -1,4 +1,5 @@
 import { useAppTheme } from "@/contexts/ThemeContext";
+import { logQrScan } from "@/lib/logging";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { Camera, CameraView } from "expo-camera";
@@ -27,6 +28,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 interface Passenger {
   id: string;
   passenger_id: string;
+  trip_id?: string;
   status: "waiting" | "boarded" | "completed" | "cancelled";
   boarded_at: string;
   passenger_count: number;
@@ -118,6 +120,7 @@ const getRouteEfficiencyColor = (distance: number): string => {
 export function ConductorScreen() {
   const { theme } = useAppTheme();
   const [loading, setLoading] = useState(true);
+  const [refreshingPassengers, setRefreshingPassengers] = useState(false); // For passengers-only refresh
   const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [passengerCount, setPassengerCount] = useState(0);
@@ -305,7 +308,7 @@ export function ConductorScreen() {
         return;
       }
 
-      console.log("👤 Current User ID:", user.id);
+      ////console.log("👤 Current User ID:", user.id);
 
       // Find current trip for this conductor (assuming conductor is assigned to a bus)
       // Use limit(1) instead of single() to handle case where conductor is assigned to multiple buses
@@ -331,10 +334,10 @@ export function ConductorScreen() {
 
       const busData = busResults && busResults.length > 0 ? busResults[0] : null;
 
-      console.log("🚌 Bus Query Result:", { busData, busError, totalBuses: busResults?.length || 0 });
+      //console.log("🚌 Bus Query Result:", { busData, busError, totalBuses: busResults?.length || 0 });
 
       if (busError || !busData) {
-        console.error("❌ Bus Error:", busError);
+        //console.error("❌ Bus Error:", busError);
         showAlert(
           "No Bus Assignment",
           "You haven't been assigned to a bus yet. Please contact your administrator.",
@@ -345,7 +348,7 @@ export function ConductorScreen() {
 
       // Find active trip for this bus
       // Use maybeSingle() instead of single() to avoid throwing error on 0 results
-      console.log("🔍 Searching for trips with bus_id:", busData.id);
+      //console.log("🔍 Searching for trips with bus_id:", busData.id);
 
       const { data: tripData, error: tripError } = await supabase
         .from("trips")
@@ -386,14 +389,14 @@ export function ConductorScreen() {
         .limit(1)
         .maybeSingle();
 
-      console.log("📋 Trip Query Result:", { tripData, tripError });
+      //console.log("📋 Trip Query Result:", { tripData, tripError });
 
       if (tripError) {
-        console.error("❌ Critical Trip Query Error:", tripError.message, tripError.details, tripError.hint);
+        //console.error("❌ Critical Trip Query Error:", tripError.message, tripError.details, tripError.hint);
       }
 
       if (!tripData) {
-        console.log("⚠️ No active trip found in DB for Bus ID:", busData.id);
+        //console.log("⚠️ No active trip found in DB for Bus ID:", busData.id);
 
         // Let's also check if ANY trips exist for this bus (regardless of status)
         const { data: allTrips, error: allTripsError } = await supabase
@@ -403,9 +406,9 @@ export function ConductorScreen() {
           .order("updated_at", { ascending: false })
           .limit(5);
 
-        console.log("📊 All trips for this bus:", allTrips);
+        //console.log("📊 All trips for this bus:", allTrips);
         if (allTripsError) {
-          console.error("❌ Error fetching all trips:", allTripsError);
+          //console.error("❌ Error fetching all trips:", allTripsError);
         }
 
         // Save the assigned bus information
@@ -452,6 +455,7 @@ export function ConductorScreen() {
         trip_passengers: (tripData.trip_passengers || []).map((p: any) => ({
           id: p.id,
           passenger_id: p.passenger_id,
+          trip_id: p.trip_id,
           status: p.status,
           boarded_at: p.boarded_at,
           passenger_count: p.passenger_count,
@@ -468,7 +472,7 @@ export function ConductorScreen() {
         (p: Passenger) => !p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID
       );
 
-      // Calculate registered passengers (excluding guest entry - null or GUEST_PASSENGER_ID)
+      // Calculate registered passengers (excluding guest entry)
       const registeredBoardedCount = boardedPassengers
         .filter((p: Passenger) => p.passenger_id && p.passenger_id !== GUEST_PASSENGER_ID)
         .reduce((sum: number, p: Passenger) => sum + (p.passenger_count || 1), 0);
@@ -483,7 +487,7 @@ export function ConductorScreen() {
       const guestCount = guestPassengerFromDB?.passenger_count || 0;
       const busPassengerCount = busInfo.passengers || 0;
 
-      console.log(`📊 Passenger calculation: Bus=${busPassengerCount}, Registered=${registeredBoardedCount}, Guests=${guestCount}`);
+      //console.log(`📊 Passenger calculation: Bus=${busPassengerCount}, Registered=${registeredBoardedCount}, Guests=${guestCount}`);
 
       // Batch all state updates together to prevent multiple re-renders
       setCurrentTrip(transformedTrip);
@@ -501,15 +505,154 @@ export function ConductorScreen() {
           (sum: number, p: Passenger) => sum + (p.passenger_count || 1),
           0
         );
-        console.log(`⚠️ ${waitingPassengers.length} passenger(s) waiting to board (${waitingCount} total)`);
+        //console.log(`⚠️ ${waitingPassengers.length} passenger(s) waiting to board (${waitingCount} total)`);
       }
     } catch (error) {
-      console.error("Error fetching current trip:", error);
+      //console.error("Error fetching current trip:", error);
       showAlert("Error", "Failed to load trip data", "error");
     } finally {
       setLoading(false);
     }
   }, [showAlert]);
+
+  // Refresh only the passengers list (lighter refresh)
+  const refreshPassengersList = useCallback(async () => {
+    if (!currentTrip?.id) return;
+
+    setRefreshingPassengers(true);
+
+    try {
+      // Fetch trip_passengers data - don't use inner join for users since guests have null passenger_id
+      const { data: passengersData, error: passengersError } = await supabase
+        .from("trip_passengers")
+        .select(`
+          id,
+          passenger_id,
+          trip_id,
+          status,
+          boarded_at,
+          passenger_count
+        `)
+        .eq("trip_id", currentTrip.id)
+        .neq("status", "cancelled");
+
+      if (passengersError) throw passengersError;
+
+      // Fetch user details separately for passengers that have a passenger_id
+      const passengerIds = (passengersData || [])
+        .filter((p: any) => p.passenger_id)
+        .map((p: any) => p.passenger_id);
+
+      let usersMap: Record<string, { fullName: string; contact_number: string }> = {};
+
+      if (passengerIds.length > 0) {
+        const { data: usersData } = await supabase
+          .from("users")
+          .select("id, fullName, contact_number")
+          .in("id", passengerIds);
+
+        if (usersData) {
+          usersMap = usersData.reduce((acc: Record<string, any>, user: any) => {
+            acc[user.id] = { fullName: user.fullName, contact_number: user.contact_number };
+            return acc;
+          }, {});
+        }
+      }
+
+      // Also fetch updated bus passenger count
+      const { data: busData, error: busError } = await supabase
+        .from("buses")
+        .select("passengers")
+        .eq("id", currentTrip.buses.id)
+        .single();
+
+      if (busError) throw busError;
+
+      // Transform passengers data
+      const transformedPassengers: Passenger[] = [];
+      const guestRecords: any[] = [];
+
+      (passengersData || []).forEach((p: any) => {
+        if (!p.passenger_id) {
+          guestRecords.push(p);
+        } else {
+          transformedPassengers.push({
+            id: p.id,
+            passenger_id: p.passenger_id,
+            trip_id: p.trip_id,
+            status: p.status,
+            boarded_at: p.boarded_at,
+            passenger_count: p.passenger_count,
+            users: usersMap[p.passenger_id],
+          });
+        }
+      });
+
+      // Consolidate guest records if any exist
+      if (guestRecords.length > 0) {
+        // Calculate total guest count
+        const totalGuestCount = guestRecords.reduce((sum, g) => sum + (g.passenger_count || 0), 0);
+
+        // Use the first record as the primary ID, or generate a stable one
+        // Ideally we should use a real DB ID if we plan to update it later matches by ID? 
+        // But our update logic uses query by trip_id + null passenger_id, so ID here is mostly for React keys.
+        const primaryGuest = guestRecords[0];
+
+        // Self-healing: If multiple records exist, we should ideally merge them in DB, 
+        // but for now, we aggregate them visually.
+        // To prevent "exponential growth" bug in addGuestPassenger, we must ensure DB is clean.
+        // We will perform an async cleanup if multiple rows are found.
+        if (guestRecords.length > 1) {
+          // We will consolidate in DB asynchronously to not block UI
+          (async () => {
+            try {
+              // Update first record with total
+              await supabase.from("trip_passengers").update({ passenger_count: totalGuestCount }).eq("id", primaryGuest.id);
+              // Delete others
+              const idsToDelete = guestRecords.slice(1).map(g => g.id);
+              await supabase.from("trip_passengers").delete().in("id", idsToDelete);
+            } catch (e) {
+              // Silent fail on cleanup
+            }
+          })();
+        }
+
+        transformedPassengers.push({
+          id: primaryGuest.id,
+          passenger_id: GUEST_PASSENGER_ID, // Use constant for local ID
+          trip_id: primaryGuest.trip_id,
+          status: "boarded", // Guests are always "boarded" if visible here
+          boarded_at: primaryGuest.boarded_at,
+          passenger_count: totalGuestCount,
+          users: undefined,
+        });
+      }
+
+      // Update the passengers list and count
+      setPassengers(transformedPassengers);
+      setPassengerCount(busData.passengers || 0);
+
+      // Update guest count
+      const guestPassenger = transformedPassengers.find(
+        (p) => (!p.passenger_id && p.trip_id === currentTrip.id) || p.passenger_id === GUEST_PASSENGER_ID
+      );
+      setGuestPassengerCount(guestPassenger?.passenger_count || 0);
+
+      // Update scanned passengers set
+      const boardedIds = new Set(
+        transformedPassengers
+          .filter((p) => p.status === "boarded" && p.passenger_id && p.passenger_id !== GUEST_PASSENGER_ID)
+          .map((p) => p.passenger_id)
+      );
+      setScannedPassengers(boardedIds);
+
+    } catch (error) {
+      //console.error("Error refreshing passengers list:", error);
+      // Silently fail - the user can try again
+    } finally {
+      setRefreshingPassengers(false);
+    }
+  }, [currentTrip, GUEST_PASSENGER_ID]);
 
   // Keep the ref in sync with the current trip state
   useEffect(() => {
@@ -533,7 +676,7 @@ export function ConductorScreen() {
           table: "trip_passengers",
           filter: `trip_id=eq.${currentTrip.id}`,
         }, (payload) => {
-          console.log("New passenger boarded:", payload.new);
+          //console.log("New passenger boarded:", payload.new);
 
           // Use InteractionManager to schedule updates after interactions complete
           InteractionManager.runAfterInteractions(async () => {
@@ -589,7 +732,7 @@ export function ConductorScreen() {
           table: "trip_passengers",
           filter: `trip_id=eq.${currentTrip.id}`,
         }, (payload) => {
-          console.log("Passenger updated:", payload.new);
+          //console.log("Passenger updated:", payload.new);
 
           // Use InteractionManager to schedule updates after interactions complete
           InteractionManager.runAfterInteractions(async () => {
@@ -618,7 +761,7 @@ export function ConductorScreen() {
                 );
 
                 // Batch state updates
-                setNotificationData({ name, count });
+                setNotificationData({ name: "Trip in progress", count: 0 });
                 setShowNotification(true);
 
                 // Animate notification
@@ -655,7 +798,7 @@ export function ConductorScreen() {
   useEffect(() => {
     const busId = currentTrip?.buses?.id || assignedBus?.id;
     if (!busId) {
-      console.log("No bus ID available for subscription.");
+      //console.log("No bus ID available for subscription.");
       return;
     }
 
@@ -669,7 +812,7 @@ export function ConductorScreen() {
           table: "pickup_requests",
           filter: `bus_id=eq.${busId}`,
         }, (payload) => {
-          console.log("New pickup request received:", payload.new);
+          //console.log("New pickup request received:", payload.new);
 
           // Immediate haptic feedback for new pickup request
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -691,7 +834,7 @@ export function ConductorScreen() {
 
           setPendingPickups((prev) => {
             const updatedPickups = [...prev, newPickup];
-            console.log("Updated _pendingPickups state:", updatedPickups);
+            //console.log("Updated _pendingPickups state:", updatedPickups);
             return updatedPickups;
           });
         }
@@ -704,7 +847,7 @@ export function ConductorScreen() {
           table: "pickup_requests",
           filter: `bus_id=eq.${busId}`,
         }, (payload) => {
-          console.log("Pickup request updated:", payload.new);
+          //console.log("Pickup request updated:", payload.new);
 
           // If status changed to accepted or declined, remove from pending list
           if (payload.new.status === "accepted" || payload.new.status === "declined") {
@@ -719,10 +862,10 @@ export function ConductorScreen() {
       )
       .subscribe();
 
-    console.log("Subscribed to pickup_requests for bus ID:", busId);
+    //console.log("Subscribed to pickup_requests for bus ID:", busId);
 
     return () => {
-      console.log("Unsubscribing from pickup_requests for bus ID:", busId);
+      //console.log("Unsubscribing from pickup_requests for bus ID:", busId);
       pickupSubscription.unsubscribe();
     };
   }, [currentTrip?.buses?.id, assignedBus?.id]);
@@ -732,11 +875,13 @@ export function ConductorScreen() {
   useEffect(() => {
     const busId = assignedBus?.id;
     if (!busId) {
-      console.log("No assigned bus ID available for trip detection subscription.");
+      //console.log("No assigned bus ID available for trip detection subscription.");
       return;
     }
 
-    console.log("🚌 Setting up trip detection subscription for bus ID:", busId); const tripSubscription = supabase
+    //console.log("🚌 Setting up trip detection subscription for bus ID:", busId);
+
+    const tripSubscription = supabase
       .channel(`trips_bus_${busId}`)
       .on(
         "postgres_changes",
@@ -746,12 +891,12 @@ export function ConductorScreen() {
           table: "trips",
           filter: `bus_id=eq.${busId}`,
         }, (payload) => {
-          console.log("🆕 New trip detected for bus:", payload.new);
+          //console.log("🆕 New trip detected for bus:", payload.new);
 
           // Only refresh if there's no active trip currently
           // This prevents unnecessary refreshes when we already have a trip
           if (currentTripRef.current) {
-            console.log("⏭️ Skipping refresh - already have an active trip");
+            //console.log("⏭️ Skipping refresh - already have an active trip");
             return;
           }
 
@@ -795,18 +940,18 @@ export function ConductorScreen() {
           filter: `bus_id=eq.${busId}`,
         },
         (payload) => {
-          console.log("🔄 Trip updated for bus:", payload.new);
+          //console.log("🔄 Trip updated for bus:", payload.new);
 
           const newStatus = payload.new.status;
           const oldStatus = payload.old?.status;
 
           // Only process if status actually changed (not just location updates)
           if (newStatus === oldStatus) {
-            console.log("⏭️ Skipping - no status change");
+            //console.log("⏭️ Skipping - no status change");
             return;
           }
 
-          console.log(`Trip status changed: ${oldStatus} -> ${newStatus}`);          // Only refresh if:
+          //console.log(`Trip status changed: ${oldStatus} -> ${newStatus}`);          // Only refresh if:
           // 1. There's no active trip AND driver started a new trip (ongoing/waiting)
           // 2. OR the current trip ended (completed/cancelled) and we need to clear it
           const isNewTripStarting = !currentTripRef.current &&
@@ -818,7 +963,7 @@ export function ConductorScreen() {
               newStatus === "Completed" || newStatus === "Cancelled");
 
           if (!isNewTripStarting && !isCurrentTripEnding) {
-            console.log("⏭️ Skipping refresh - not relevant status change");
+            //console.log("⏭️ Skipping refresh - not relevant status change");
             return;
           }
 
@@ -855,16 +1000,16 @@ export function ConductorScreen() {
         }
       )
       .subscribe((status) => {
-        console.log("🚌 Trip detection subscription status:", status);
+        //console.log("🚌 Trip detection subscription status:", status);
         if (status === "SUBSCRIBED") {
-          console.log("✅ Successfully subscribed to trip updates for bus:", busId);
+          //console.log("✅ Successfully subscribed to trip updates for bus:", busId);
         } else if (status === "CHANNEL_ERROR") {
-          console.error("❌ Failed to subscribe to trip updates");
+          //console.error("❌ Failed to subscribe to trip updates");
         }
       });
 
     return () => {
-      console.log("🔌 Unsubscribing from trip detection for bus ID:", busId);
+      //console.log("🔌 Unsubscribing from trip detection for bus ID:", busId);
       tripSubscription.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -909,7 +1054,7 @@ export function ConductorScreen() {
         .eq("status", "waiting"); // Only update records that are still waiting
 
       if (updateTripPassengerError) {
-        console.error("Error updating trip_passengers record:", updateTripPassengerError);
+        //console.error("Error updating trip_passengers record:", updateTripPassengerError);
         // If no existing record found, create a new one as fallback
         const { error: insertError } = await supabase
           .from("trip_passengers")
@@ -941,7 +1086,7 @@ export function ConductorScreen() {
       // Refresh trip data to show the new waiting passenger
       fetchCurrentTrip();
     } catch (error) {
-      console.error("Error accepting pickup request:", error);
+      //console.error("Error accepting pickup request:", error);
       showAlert("Error", "Failed to accept the pickup request. Please try again.", "error");
     }
   }; const handleDeclinePickup = async (pickupId: string) => {
@@ -968,7 +1113,7 @@ export function ConductorScreen() {
           .eq("status", "waiting"); // Only update waiting records
 
         if (tripPassengerError) {
-          console.error("Error updating trip_passengers on decline:", tripPassengerError);
+          //console.error("Error updating trip_passengers on decline:", tripPassengerError);
           // Don't fail the whole operation for this
         }
       }
@@ -984,7 +1129,7 @@ export function ConductorScreen() {
       // Refresh trip data to reflect changes
       fetchCurrentTrip();
     } catch (error) {
-      console.error("Error declining pickup request:", error);
+      //console.error("Error declining pickup request:", error);
       showAlert("Error", "Failed to decline the pickup request. Please try again.", "error");
     }
   };
@@ -1132,7 +1277,7 @@ export function ConductorScreen() {
         .eq("id", currentTrip?.buses.id);
 
       if (busError) {
-        console.error("Error updating bus passenger count:", busError);
+        //console.error("Error updating bus passenger count:", busError);
       }
 
       // Update local state
@@ -1163,8 +1308,9 @@ export function ConductorScreen() {
         } has been successfully boarded. ${passengerText} added.`,
         "success"
       );
+      logQrScan(true, data, { passenger_id: passenger.id, trip_id: currentTrip?.id });
     } catch (error) {
-      console.error("Error processing QR scan:", error);
+      //console.error("Error processing QR scan:", error);
       showAlert(
         "Scan Error",
         "Failed to process QR code. Please try again.",
@@ -1204,54 +1350,53 @@ export function ConductorScreen() {
         .eq("id", currentTrip.buses.id);
 
       if (busError) {
-        console.error("Error updating bus passenger count:", busError);
+        //console.error("Error updating bus passenger count:", busError);
         throw busError;
       }
 
-      console.log("Bus passenger count updated to:", newPassengerCount);
+      //console.log("Bus passenger count updated to:", newPassengerCount);
 
       // Check if guest passenger entry already exists for this trip
-      // Guest passengers have: null passenger_id (from DB), GUEST_PASSENGER_ID constant, or guest- prefix (local)
-      // Note: passengers array is already scoped to current trip from trip_passengers
+      // Guest passengers have null passenger_id in DB, or GUEST_PASSENGER_ID in local state
+      // IMPORTANT: Ensure we match by trip_id to avoid picking up guests from other trips
       const existingGuestPassenger = passengers.find(
-        (p) => !p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID || p.id.startsWith("guest-")
+        (p) => (!p.passenger_id && p.trip_id === currentTrip.id) || p.passenger_id === GUEST_PASSENGER_ID
       );
 
       if (existingGuestPassenger) {
         // Update existing guest passenger record - increment the count
         const newGuestCount = (existingGuestPassenger.passenger_count || 0) + guestCount;
 
-        // Update in database (guest passengers have null passenger_id)
-        // Also reset status to 'boarded' in case it was 'completed'
+        // Update in database (guest passengers have null passenger_id) and match by trip_id
         const { error: updateError } = await supabase
           .from("trip_passengers")
           .update({
             passenger_count: newGuestCount,
-            status: "boarded", // Reset to boarded when adding more guests
-            boarded_at: new Date().toISOString() // Update timestamp
+            status: "boarded", // Reset status to boarded
+            boarded_at: new Date().toISOString(),
           })
           .eq("trip_id", currentTrip.id)
           .is("passenger_id", null);
 
         if (updateError) {
-          console.error("Error updating guest passenger count:", updateError);
+          //console.error("Error updating guest passenger count:", updateError);
           throw updateError;
         }
 
-        // Update local state - check for null passenger_id or guest markers
-        // Also reset status to 'boarded' so it renders in the list
+        // Update local state - also update status and ensure trip_id matches
         setPassengers((prev) =>
           prev.map((p) =>
-            (!p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID || p.id.startsWith("guest-"))
+            (!p.passenger_id && p.trip_id === currentTrip.id)
               ? { ...p, passenger_count: newGuestCount, status: "boarded", boarded_at: new Date().toISOString() }
               : p
           )
         );
         setGuestPassengerCount(newGuestCount);
 
-        console.log(`Guest passenger count updated to: ${newGuestCount}`);
+        //console.log(`Guest passenger count updated to: ${newGuestCount}`);
       } else {
         // Create new guest passenger record in database
+        // Use null for passenger_id since guests don't have user accounts
         // Use dummy coordinates (0,0) for guests since they don't have pickup/destination
         const { data: insertedGuest, error: insertError } = await supabase
           .from("trip_passengers")
@@ -1271,16 +1416,17 @@ export function ConductorScreen() {
           .single();
 
         if (insertError) {
-          console.error("Error creating guest passenger record:", insertError);
+          //console.error("Error creating guest passenger record:", insertError);
           throw insertError;
         }
 
-        console.log("Created guest passenger record:", insertedGuest);
+        //console.log("Created guest passenger record:", insertedGuest);
 
         // Create local guest passenger entry for display
         const guestPassenger: Passenger = {
-          id: insertedGuest?.id || GUEST_PASSENGER_ID,
-          passenger_id: GUEST_PASSENGER_ID,
+          id: `guest-${currentTrip.id}-${Date.now()}`,
+          passenger_id: GUEST_PASSENGER_ID, // Use constant for local identification
+          trip_id: currentTrip.id,
           status: "boarded",
           boarded_at: new Date().toISOString(),
           passenger_count: guestCount,
@@ -1307,7 +1453,7 @@ export function ConductorScreen() {
       setShowGuestModal(false);
       setGuestCount(1);
     } catch (error) {
-      console.error("Error adding guest passengers:", error);
+      //console.error("Error adding guest passengers:", error);
       showAlert(
         "Error",
         "Failed to add guests. Please try again.",
@@ -1349,7 +1495,8 @@ export function ConductorScreen() {
       "warning",
       async () => {
         try {
-          // Update bus passenger count
+          // Update bus passenger count first
+          // This ensures the bus capacity reflects the drop-off immediately
           const newBusPassengerCount = Math.max(0, passengerCount - countToDropOff);
           const { error: busError } = await supabase
             .from("buses")
@@ -1357,6 +1504,7 @@ export function ConductorScreen() {
             .eq("id", currentTrip.buses.id);
 
           if (busError) {
+            //console.error("Error updating bus passenger count:", busError);
             throw busError;
           }
 
@@ -1370,19 +1518,14 @@ export function ConductorScreen() {
                 .from("trip_passengers")
                 .update({ status: "completed" })
                 .eq("trip_id", currentTrip.id)
-                .is("passenger_id", null);
+                .is("passenger_id", null); // Guest passengers have null passenger_id
 
               if (updateError) {
-                console.error("Error updating guest passenger:", updateError);
+                //console.error("Error updating guest passenger:", updateError);
               }
 
-              // Remove from local list - check for guest markers
-              setPassengers((prev) => prev.filter((p) =>
-                p.passenger_id !== GUEST_PASSENGER_ID &&
-                p.passenger_id !== null &&
-                !p.id.startsWith("guest-") &&
-                p.id !== passenger.id
-              ));
+              // Remove from local list
+              setPassengers((prev) => prev.filter((p) => p.passenger_id !== GUEST_PASSENGER_ID && p.id !== passenger.id));
               setGuestPassengerCount(0);
             } else {
               // Registered: update database status
@@ -1412,16 +1555,16 @@ export function ConductorScreen() {
                 .from("trip_passengers")
                 .update({ passenger_count: remainingCount })
                 .eq("trip_id", currentTrip.id)
-                .is("passenger_id", null);
+                .is("passenger_id", null); // Guest passengers have null passenger_id
 
               if (updateError) {
-                console.error("Error updating guest passenger count:", updateError);
+                //console.error("Error updating guest passenger count:", updateError);
               }
 
-              // Update local state - check for guest markers including null passenger_id
+              // Update local state
               setPassengers((prev) =>
                 prev.map((p) =>
-                  (!p.passenger_id || p.passenger_id === GUEST_PASSENGER_ID || p.id.startsWith("guest-") || p.id === passenger.id)
+                  p.passenger_id === GUEST_PASSENGER_ID || p.id === passenger.id
                     ? { ...p, passenger_count: remainingCount }
                     : p
                 )
@@ -1460,7 +1603,7 @@ export function ConductorScreen() {
           setShowDropOffModal(false);
           setSelectedPassengerForDropOff(null);
         } catch (error) {
-          console.error("Error removing passenger:", error);
+          //console.error("Error removing passenger:", error);
           showAlert(
             "Error",
             "Failed to drop off passenger. Please try again.",
@@ -1478,8 +1621,8 @@ export function ConductorScreen() {
     // Don't show passenger if status is cancelled or completed
     if (item.status === "cancelled" || item.status === "completed") return null;
 
-    // Detect guest: check for GUEST_PASSENGER_ID or empty passenger_id
-    const isGuest = item.passenger_id === GUEST_PASSENGER_ID || !item.passenger_id || item.id.startsWith("guest-");
+    // Detect guest: check for GUEST_PASSENGER_ID, empty passenger_id, or local guest id, and ensure it belongs to the current trip
+    const isGuest = (!item.passenger_id && item.trip_id === currentTrip?.id) || item.id.startsWith("guest-");
     const passengerName = item.users?.fullName ||
       (isGuest ? `Guest Passengers` : `Passenger #${item.id.substring(0, 8)}`);
 
@@ -2058,11 +2201,11 @@ export function ConductorScreen() {
   const fetchPendingRequests = async () => {
     const busId = currentTrip?.buses?.id || assignedBus?.id;
     if (!busId) {
-      console.log("No bus ID available for fetching pending requests.");
+      //console.log("No bus ID available for fetching pending requests.");
       return;
     }
 
-    console.log("Fetching pending requests for bus ID:", busId);
+    //console.log("Fetching pending requests for bus ID:", busId);
 
     try {
       const { data, error } = await supabase
@@ -2072,14 +2215,14 @@ export function ConductorScreen() {
         .eq("status", "pending");
 
       if (error) {
-        console.error("Error fetching pending requests:", error);
+        //console.error("Error fetching pending requests:", error);
         return;
       }
 
-      console.log("Fetched pending requests data:", data);
+      //console.log("Fetched pending requests data:", data);
       setPendingPickups(data || []);
     } catch (err) {
-      console.error("Unexpected error fetching pending requests:", err);
+      //console.error("Unexpected error fetching pending requests:", err);
     }
   };
 
@@ -2150,106 +2293,107 @@ export function ConductorScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="light" />
-
-        {/* Premium Gradient Header - Enhanced for No Active Trip */}
-        <LinearGradient
-          colors={["#0891B2", "#06B6D4", "#22D3EE"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.header}
-        >
-          <View style={styles.headerTop}>
-            <View style={styles.headerContent}>
-              <View style={styles.headerIconBg}>
-                <Ionicons name="bus" size={24} color="#0891B2" />
-              </View>
-              <View style={styles.headerTextContainer}>
-                <Text style={styles.headerTitle}>Conductor Dashboard</Text>
-                <Text style={styles.headerSubtitle}>
-                  {assignedBus
-                    ? `${assignedBus.plate_number} • ${assignedBus.routes?.name || "No Route Assigned"}`
-                    : "Not Assigned • Offline"
-                  }
-                </Text>
-              </View>
-            </View>
-            <View style={styles.tripStatusBadge}>
-              <View style={[styles.statusPulse, { backgroundColor: "#FFB000" }]} />
-              <Text style={styles.tripStatusText}>Standby</Text>
-            </View>
-          </View>
-        </LinearGradient>
-
-        {/* Show assigned bus info card */}
-        {assignedBus && (
-          <View style={styles.assignedBusCard}>
-            <View style={styles.assignedBusHeader}>
-              <View style={styles.assignedBusIconContainer}>
-                <Ionicons name="bus" size={24} color="#007AFF" />
-              </View>
-              <View style={styles.assignedBusInfo}>
-                <Text style={styles.assignedBusTitle}>Your Assigned Bus</Text>
-                <Text style={styles.assignedBusPlate}>{assignedBus.plate_number}</Text>
-              </View>
-              <View style={styles.capacityBadge}>
-                <Ionicons name="people" size={14} color="#8e8e93" />
-                <Text style={styles.capacityBadgeText}>{assignedBus.capacity} seats</Text>
-              </View>
-            </View>
-            {assignedBus.routes && (
-              <View style={styles.assignedBusRoute}>
-                <View style={styles.routeInfoRow}>
-                  <View style={styles.routeInfoIconBg}>
-                    <Ionicons name="navigate" size={16} color="#007AFF" />
-                  </View>
-                  <View style={styles.routeInfoDetails}>
-                    <Text style={styles.routeInfoLabel}>Route</Text>
-                    <Text style={styles.routeInfoName}>{assignedBus.routes.name}</Text>
-                  </View>
-                </View>
-                <View style={styles.routeStops}>
-                  <View style={styles.routeStopItem}>
-                    <View style={[styles.routeStopDot, { backgroundColor: "#34C759" }]} />
-                    <Text style={styles.routeStopText} numberOfLines={2}>
-                      {assignedBus.routes.start_address}
-                    </Text>
-                  </View>
-                  <View style={styles.routeConnector} />
-                  <View style={styles.routeStopItem}>
-                    <View style={[styles.routeStopDot, { backgroundColor: "#FF3B30" }]} />
-                    <Text style={styles.routeStopText} numberOfLines={2}>
-                      {assignedBus.routes.end_address}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            )}
-          </View>
-        )}
-
-        <View style={styles.emptyState}>
-          <View style={styles.emptyStateIcon}>
-            <Ionicons name="time-outline" size={64} color="#FF9500" />
-          </View>
-          <Text style={styles.emptyTitle}>No Active Trip</Text>
-          <Text style={styles.emptySubtitle}>
-            {assignedBus
-              ? "Your bus doesn't have an active trip. Wait for the driver to start a trip."
-              : "You don't have any active trips at the moment. Check back later or contact your driver."
-            }
-          </Text>
-          <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              fetchCurrentTrip();
-            }}
-            activeOpacity={0.8}
+        <ScrollView contentContainerStyle={{ flexGrow: 1, paddingBottom: 20 }} showsVerticalScrollIndicator={false}>
+          {/* Premium Gradient Header - Enhanced for No Active Trip */}
+          <LinearGradient
+            colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.header}
           >
-            <Ionicons name="refresh" size={20} color="#007AFF" />
-            <Text style={styles.refreshButtonText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
+            <View style={styles.headerTop}>
+              <View style={styles.headerContent}>
+                <View style={styles.headerIconBg}>
+                  <Ionicons name="bus" size={24} color="#0891B2" />
+                </View>
+                <View style={styles.headerTextContainer}>
+                  <Text style={styles.headerTitle}>Conductor Dashboard</Text>
+                  <Text style={styles.headerSubtitle}>
+                    {assignedBus
+                      ? `${assignedBus.plate_number} • ${assignedBus.routes?.name || "No Route Assigned"}`
+                      : "Not Assigned • Offline"
+                    }
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.tripStatusBadge}>
+                <View style={[styles.statusPulse, { backgroundColor: "#FFB000" }]} />
+                <Text style={styles.tripStatusText}>Standby</Text>
+              </View>
+            </View>
+          </LinearGradient>
+
+          {/* Show assigned bus info card */}
+          {assignedBus && (
+            <View style={styles.assignedBusCard}>
+              <View style={styles.assignedBusHeader}>
+                <View style={styles.assignedBusIconContainer}>
+                  <Ionicons name="bus" size={24} color="#007AFF" />
+                </View>
+                <View style={styles.assignedBusInfo}>
+                  <Text style={styles.assignedBusTitle}>Your Assigned Bus</Text>
+                  <Text style={styles.assignedBusPlate}>{assignedBus.plate_number}</Text>
+                </View>
+                <View style={styles.capacityBadge}>
+                  <Ionicons name="people" size={14} color="#8e8e93" />
+                  <Text style={styles.capacityBadgeText}>{assignedBus.capacity} seats</Text>
+                </View>
+              </View>
+              {assignedBus.routes && (
+                <View style={styles.assignedBusRoute}>
+                  <View style={styles.routeInfoRow}>
+                    <View style={styles.routeInfoIconBg}>
+                      <Ionicons name="navigate" size={16} color="#007AFF" />
+                    </View>
+                    <View style={styles.routeInfoDetails}>
+                      <Text style={styles.routeInfoLabel}>Route</Text>
+                      <Text style={styles.routeInfoName}>{assignedBus.routes.name}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.routeStops}>
+                    <View style={styles.routeStopItem}>
+                      <View style={[styles.routeStopDot, { backgroundColor: "#34C759" }]} />
+                      <Text style={styles.routeStopText} numberOfLines={2}>
+                        {assignedBus.routes.start_address}
+                      </Text>
+                    </View>
+                    <View style={styles.routeConnector} />
+                    <View style={styles.routeStopItem}>
+                      <View style={[styles.routeStopDot, { backgroundColor: "#FF3B30" }]} />
+                      <Text style={styles.routeStopText} numberOfLines={2}>
+                        {assignedBus.routes.end_address}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+
+          <View style={styles.emptyState}>
+            <View style={styles.emptyStateIcon}>
+              <Ionicons name="time-outline" size={64} color="#FF9500" />
+            </View>
+            <Text style={styles.emptyTitle}>No Active Trip</Text>
+            <Text style={styles.emptySubtitle}>
+              {assignedBus
+                ? "Your bus doesn't have an active trip. Wait for the driver to start a trip."
+                : "You don't have any active trips at the moment. Check back later or contact your driver."
+              }
+            </Text>
+            <TouchableOpacity
+              style={styles.refreshButton}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                fetchCurrentTrip();
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="refresh" size={20} color="#007AFF" />
+              <Text style={styles.refreshButtonText}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -2505,33 +2649,82 @@ export function ConductorScreen() {
           </View>
         </View>
 
-        {/* Passengers List */}
+        {/* Passengers List - Premium Design */}
         <View style={styles.passengersSection}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>
-              All Passengers ({passengers.filter((p) => p.status !== "cancelled" && p.status !== "completed").length})
-            </Text>
+          {/* Premium Section Header */}
+          <LinearGradient
+            colors={["#0891B2", "#06B6D4", "#22D3EE"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.passengersSectionHeader}
+          >
+            <View style={styles.passengersSectionHeaderLeft}>
+              <View style={styles.passengersSectionIconBg}>
+                <Ionicons name="people" size={20} color="#0891B2" />
+              </View>
+              <View>
+                <Text style={styles.passengersSectionTitle}>All Passengers</Text>
+                <Text style={styles.passengersSectionSubtitle}>
+                  {passengers.filter((p) => p.status !== "cancelled" && p.status !== "completed").length} active
+                </Text>
+              </View>
+            </View>
             <TouchableOpacity
-              style={styles.reloadButton}
-              onPress={fetchCurrentTrip}
-              disabled={loading}
+              style={[
+                styles.passengersSectionReloadBtn,
+                refreshingPassengers && styles.passengersSectionReloadBtnActive
+              ]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                refreshPassengersList();
+              }}
+              disabled={refreshingPassengers}
+              activeOpacity={0.7}
             >
-              <Ionicons
-                name="refresh"
-                size={20}
-                color={loading ? "#8e8e93" : "#007AFF"}
-              />
+              {refreshingPassengers ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons
+                  name="refresh"
+                  size={18}
+                  color="#fff"
+                />
+              )}
             </TouchableOpacity>
-          </View>
-          <ScrollView style={styles.passengersList} showsVerticalScrollIndicator={true}>
-            {passengers
-              .filter((p) => p.status !== "cancelled" && p.status !== "completed")
-              .map((item) => (
-                <View key={item.id}>
-                  {renderPassengerItem({ item })}
+          </LinearGradient>
+
+          {/* Passengers List Content */}
+          <View style={styles.passengersListContainer}>
+            {/* Loading Overlay */}
+            {refreshingPassengers && passengers.filter((p) => p.status !== "cancelled" && p.status !== "completed").length > 0 && (
+              <View style={styles.passengersRefreshOverlay}>
+                <ActivityIndicator size="small" color="#0891B2" />
+                <Text style={styles.passengersRefreshText}>Updating...</Text>
+              </View>
+            )}
+
+            {passengers.filter((p) => p.status !== "cancelled" && p.status !== "completed").length === 0 ? (
+              <View style={styles.emptyPassengersState}>
+                <View style={styles.emptyPassengersIcon}>
+                  <Ionicons name="people-outline" size={48} color="#C7D2FE" />
                 </View>
-              ))}
-          </ScrollView>
+                <Text style={styles.emptyPassengersTitle}>No Passengers Yet</Text>
+                <Text style={styles.emptyPassengersText}>
+                  Scan QR codes or add guests to see them here
+                </Text>
+              </View>
+            ) : (
+              <ScrollView style={styles.passengersList} showsVerticalScrollIndicator={true}>
+                {passengers
+                  .filter((p) => p.status !== "cancelled" && p.status !== "completed")
+                  .map((item, index) => (
+                    <View key={item.id}>
+                      {renderPassengerItem({ item })}
+                    </View>
+                  ))}
+              </ScrollView>
+            )}
+          </View>
         </View>
       </ScrollView>
 
@@ -3636,9 +3829,119 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     marginLeft: 8,
-  }, passengersSection: {
-    flex: 1,
+  },
+  // Enhanced Passengers Section Styles
+  passengersSection: {
     marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  passengersSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  passengersSectionHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  passengersSectionIconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  passengersSectionTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: 0.2,
+  },
+  passengersSectionSubtitle: {
+    fontSize: 13,
+    color: "rgba(255, 255, 255, 0.85)",
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  passengersSectionReloadBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  passengersSectionReloadBtnActive: {
+    backgroundColor: "rgba(255, 255, 255, 0.35)",
+  },
+  passengersListContainer: {
+    backgroundColor: "#F8FAFC",
+    minHeight: 120,
+    position: "relative",
+  },
+  passengersRefreshOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(248, 250, 252, 0.95)",
+    paddingVertical: 8,
+    gap: 8,
+    zIndex: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  passengersRefreshText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0891B2",
+  },
+  emptyPassengersState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  emptyPassengersIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#EEF2FF",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  emptyPassengersTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1c1c1e",
+    marginBottom: 6,
+  },
+  emptyPassengersText: {
+    fontSize: 14,
+    color: "#8e8e93",
+    textAlign: "center",
+    lineHeight: 20,
   },
   sectionHeader: {
     flexDirection: "row",
@@ -3666,21 +3969,24 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   passengersList: {
-    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
   passengerItem: {
     backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowColor: "#0891B2",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "#E8F5F9",
   },
   passengerInfo: {
     flex: 1,
@@ -3706,15 +4012,15 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   passengerAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#F0F8FF",
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "#E0F2FE",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
+    marginRight: 14,
     borderWidth: 2,
-    borderColor: "#E3F2FD",
+    borderColor: "#BAE6FD",
   },
   passengerDetailsContainer: {
     flex: 1,
@@ -3722,27 +4028,28 @@ const styles = StyleSheet.create({
   passengerHeader: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "flex-start",
     marginBottom: 6,
+    gap: 8,
   },
   groupBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#007AFF",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-    gap: 2,
+    backgroundColor: "#0891B2",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 3,
   },
   groupCount: {
-    fontSize: 10,
-    fontWeight: "600",
+    fontSize: 11,
+    fontWeight: "700",
     color: "#fff",
   },
   passengerMeta: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 14,
   },
   metaItem: {
     flexDirection: "row",

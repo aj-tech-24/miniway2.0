@@ -1,3 +1,4 @@
+import { checkAccountLockout, recordFailedAttempt, resetFailedAttempts } from "@/lib/accountLockout";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
@@ -33,6 +34,14 @@ export default function LoginScreen() {
     setIsLoading(true);
 
     try {
+      // Check if account is locked before attempting login
+      const lockoutStatus = await checkAccountLockout(email);
+      if (lockoutStatus.isLocked) {
+        setMessage({ type: "error", text: lockoutStatus.message || "Account is temporarily locked." });
+        setIsLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password: password,
@@ -54,6 +63,17 @@ export default function LoginScreen() {
           return;
         }
 
+        // Record failed attempt for invalid credentials
+        if (
+          error.message.includes("Invalid login credentials") ||
+          error.message.includes("invalid_credentials")
+        ) {
+          const failedStatus = await recordFailedAttempt(email);
+          setMessage({ type: "error", text: failedStatus.message || error.message });
+          setIsLoading(false);
+          return;
+        }
+
         // Handle other login errors
         setMessage({ type: "error", text: error.message });
         setIsLoading(false);
@@ -70,6 +90,9 @@ export default function LoginScreen() {
         setIsLoading(false);
         return;
       }
+
+      // Login successful - reset failed attempts
+      await resetFailedAttempts(email);
 
       // On success, the onAuthStateChange listener will handle the redirect
       // We don't set isLoading to false here, so the spinner keeps showing until redirect.

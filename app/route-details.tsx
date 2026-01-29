@@ -174,6 +174,103 @@ const AvailableSeatsColor = (seats: number) => {
   return "#FF5252";
 };
 
+// --- Clamp to Route Constants and Helpers ---
+// Clamp threshold in meters - if bus is within this distance of route, snap to it
+const ROUTE_CLAMP_THRESHOLD = 20; // 20 meters
+
+// Helper: Calculate distance between two LatLng points (Haversine formula)
+const getDistance = (a: LatLng, b: LatLng): number => {
+  const R = 6371000; // Earth's radius in meters
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLon = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const lat1 = (a.latitude * Math.PI) / 180;
+  const lat2 = (b.latitude * Math.PI) / 180;
+
+  const x = dLat / 2;
+  const y = dLon / 2;
+  const aVal =
+    Math.sin(x) * Math.sin(x) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(y) * Math.sin(y);
+  const c = 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1 - aVal));
+  return R * c;
+};
+
+// Helper: Find the closest point on a line segment to a given point
+const closestPointOnSegment = (
+  point: LatLng,
+  segmentStart: LatLng,
+  segmentEnd: LatLng
+): LatLng => {
+  const dx = segmentEnd.longitude - segmentStart.longitude;
+  const dy = segmentEnd.latitude - segmentStart.latitude;
+
+  // If segment is a point (start == end), return the start point
+  if (dx === 0 && dy === 0) {
+    return segmentStart;
+  }
+
+  // Calculate the projection of the point onto the line segment
+  // t is a value between 0 and 1 representing where on the segment the closest point lies
+  const t = Math.max(0, Math.min(1, (
+    (point.longitude - segmentStart.longitude) * dx +
+    (point.latitude - segmentStart.latitude) * dy
+  ) / (dx * dx + dy * dy)));
+
+  return {
+    latitude: segmentStart.latitude + t * dy,
+    longitude: segmentStart.longitude + t * dx,
+  };
+};
+
+// Helper: Find the closest point on a route polyline
+const getClosestPointOnRoute = (
+  location: LatLng,
+  route: LatLng[]
+): { point: LatLng; distance: number } => {
+  if (!location || route.length === 0) {
+    return { point: location, distance: Infinity };
+  }
+
+  if (route.length === 1) {
+    return { point: route[0], distance: getDistance(location, route[0]) };
+  }
+
+  let closestPoint = route[0];
+  let minDistance = Infinity;
+
+  for (let i = 0; i < route.length - 1; i++) {
+    const segmentClosest = closestPointOnSegment(location, route[i], route[i + 1]);
+    const segmentDistance = getDistance(location, segmentClosest);
+
+    if (segmentDistance < minDistance) {
+      minDistance = segmentDistance;
+      closestPoint = segmentClosest;
+    }
+  }
+
+  return { point: closestPoint, distance: minDistance };
+};
+
+// Helper: Clamp bus location to route if within threshold distance
+const clampToRoute = (
+  busLocation: LatLng,
+  route: LatLng[]
+): LatLng => {
+  if (!busLocation || route.length === 0) {
+    return busLocation;
+  }
+
+  const { point, distance } = getClosestPointOnRoute(busLocation, route);
+
+  // If within threshold, snap to the route
+  if (distance <= ROUTE_CLAMP_THRESHOLD) {
+    return point;
+  }
+
+  // Otherwise, return the original location
+  return busLocation;
+};
+
 export default function RouteDetailsScreen() {
   const { theme } = useAppTheme();
   const { session } = useAuth();
@@ -298,17 +395,31 @@ export default function RouteDetailsScreen() {
     };
   }, []);
 
-  // Handle broadcast bus location updates with smooth animation
+  // Memoized route coordinates for clamp-to-route functionality
+  const routeCoordinates = React.useMemo(() => {
+    if (!nearestRoute?.path?.coordinates) return [];
+    return nearestRoute.path.coordinates.map(([lng, lat]) => ({
+      latitude: lat,
+      longitude: lng,
+    }));
+  }, [nearestRoute?.path?.coordinates]);
+
+  // Handle broadcast bus location updates with smooth animation and clamp-to-route
   useEffect(() => {
     if (!contextBuses || contextBuses.length === 0) return;
 
     // Update animated positions for smooth marker transitions
     contextBuses.forEach((bus: any) => {
       if (bus.location) {
-        const newPosition: LatLng = {
+        let newPosition: LatLng = {
           latitude: bus.location.latitude,
           longitude: bus.location.longitude,
         };
+
+        // Clamp bus position to route if within 20m threshold
+        if (routeCoordinates.length > 0) {
+          newPosition = clampToRoute(newPosition, routeCoordinates);
+        }
 
         // Animate marker on Android using native method
         if (Platform.OS === 'android') {
@@ -326,7 +437,7 @@ export default function RouteDetailsScreen() {
         });
       }
     });
-  }, [contextBuses]);
+  }, [contextBuses, routeCoordinates]);
 
 
   const originCoords: LatLng = {
@@ -1639,7 +1750,7 @@ export default function RouteDetailsScreen() {
         <Polyline
           coordinates={polylineCoords}
           strokeColor="#007AFF"
-          strokeWidth={6}
+          strokeWidth={8}
         />
 
         {/* Route Start Marker */}

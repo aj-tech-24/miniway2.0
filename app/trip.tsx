@@ -1519,7 +1519,7 @@ export default function TripScreen() {
       <Polyline
         coordinates={completeRoute}
         strokeColor="#007AFF"
-        strokeWidth={4}
+        strokeWidth={8}
         lineCap="round"
         lineJoin="round"
       />
@@ -1544,7 +1544,7 @@ export default function TripScreen() {
       <Polyline
         coordinates={[pickupCoords, destCoords]}
         strokeColor="#6c757d"
-        strokeWidth={3}
+        strokeWidth={8}
         lineDashPattern={[10, 10]}
         lineCap="round"
         lineJoin="round"

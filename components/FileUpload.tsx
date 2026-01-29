@@ -23,13 +23,37 @@ export default function FileUpload({
   const [selectedFile, setSelectedFile] =
     useState<DocumentPicker.DocumentPickerAsset | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  // Convert file extensions to MIME types
+  const getMimeTypes = (extensions: string[]): string[] => {
+    const mimeMap: { [key: string]: string } = {
+      ".pdf": "application/pdf",
+      ".doc": "application/msword",
+      ".docx":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".txt": "text/plain",
+    };
+
+    const mimeTypes = extensions
+      .map((ext) => mimeMap[ext.toLowerCase()])
+      .filter(Boolean);
+
+    // If no valid MIME types found, allow all types
+    return mimeTypes.length > 0 ? mimeTypes : ["*/*"];
+  };
 
   const handleFileSelection = async () => {
     try {
       setIsUploading(true);
 
+      const mimeTypes = getMimeTypes(acceptedTypes);
+
       const result = await DocumentPicker.getDocumentAsync({
-        type: acceptedTypes,
+        type: mimeTypes,
         copyToCacheDirectory: true,
         multiple: false,
       });

@@ -2336,7 +2336,7 @@ const DrivingModeScreen = () => {
                         <Polyline
                             coordinates={displayPolylineCoords}
                             strokeColor="#007AFF"
-                            strokeWidth={6}
+                            strokeWidth={8}
                         />
                     )}
                     {animatedMarkerPosition && (

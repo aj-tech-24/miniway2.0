@@ -61,39 +61,38 @@ export default function RoleRequestScreen() {
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  };
-
-  const uploadResumeToStorage = async (
+  };  const uploadResumeToStorage = async (
     file: DocumentPicker.DocumentPickerAsset
   ) => {
     try {
       // Create a unique filename
       const fileExtension = file.name.split(".").pop();
-      const fileName = `resumes/${Date.now()}-${Math.random()
+      const fileName = `${Date.now()}-${Math.random()
         .toString(36)
         .substring(7)}.${fileExtension}`;
 
-      // Upload file to Supabase storage
+      // Use FormData for React Native file upload (same approach as avatar upload)
+      const formData = new FormData();
+      formData.append("file", {
+        uri: file.uri,
+        name: fileName,
+        type: file.mimeType || "application/pdf",
+      } as any);
+
+      // Upload file to Supabase storage bucket 'resumes'
       const { data, error } = await supabase.storage
-        .from("role-requests")
-        .upload(
-          fileName,
-          {
-            uri: file.uri,
-            type: file.mimeType || "application/pdf",
-            name: file.name,
-          } as any,
-          {
-            contentType: file.mimeType || "application/pdf",
-            upsert: false,
-          }
-        );
+        .from("resumes")
+        .upload(fileName, formData, {
+          contentType: file.mimeType || "application/pdf",
+          upsert: false,
+        });
 
       if (error) {
-        console.error("Error uploading resume:", error);
-        throw new Error("Failed to upload resume file");
+        console.error("Error uploading resume:", error.message, error);
+        throw new Error(`Failed to upload resume: ${error.message}`);
       }
 
+      console.log("Resume uploaded successfully:", data.path);
       return data.path;
     } catch (error) {
       console.error("Resume upload error:", error);

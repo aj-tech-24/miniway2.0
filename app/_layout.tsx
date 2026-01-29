@@ -13,6 +13,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Ionicons } from "@expo/vector-icons";
 import { useNetInfo } from "@react-native-community/netinfo";
 import * as Notifications from "expo-notifications";
@@ -252,13 +253,15 @@ function RootLayoutNav() {
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <RouteProvider>
-          <ThemeProvider>
-            <RootLayoutNav />
-          </ThemeProvider>
-        </RouteProvider>
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <RouteProvider>
+            <ThemeProvider>
+              <RootLayoutNav />
+            </ThemeProvider>
+          </RouteProvider>
+        </AuthProvider>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }
