@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+ import { supabase } from "@/lib/supabase";
 import { Session } from "@supabase/supabase-js";
 import { registerIndieID } from "native-notify";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";

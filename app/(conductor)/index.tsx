@@ -1,4 +1,5 @@
 import { useAppTheme } from "@/contexts/ThemeContext";
+import { calculateFare, formatFare, formatDistance as formatFareDistance, getDistanceKm, type LatLng } from "@/lib/fareCalculation";
 import { logQrScan } from "@/lib/logging";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
@@ -144,6 +145,13 @@ export function ConductorScreen() {
   // This is a reserved UUID that won't conflict with real user IDs
   const GUEST_PASSENGER_ID = "00000000-0000-0000-0000-000000000000";
   const [guestPassengerCount, setGuestPassengerCount] = useState(0);
+
+  // Guest drop-off location and fare state
+  const [guestDropOffLocation, setGuestDropOffLocation] = useState<LatLng | null>(null);
+  const [guestFare, setGuestFare] = useState(0);
+  const [guestTripDistance, setGuestTripDistance] = useState(0);
+  const [showDropOffPicker, setShowDropOffPicker] = useState(false);
+  const [routeCoordinates, setRouteCoordinates] = useState<LatLng[]>([]);
 
   const currentTripRef = useRef<Trip | null>(null);
 
@@ -514,6 +522,50 @@ export function ConductorScreen() {
       setLoading(false);
     }
   }, [showAlert]);
+
+  // Fetch route coordinates when trip loads
+  useEffect(() => {
+    const fetchRouteCoordinates = async () => {
+      const routeId = currentTrip?.buses?.routes?.id || assignedBus?.routes?.id;
+      if (!routeId) return;
+
+      try {
+        const { data: routeData, error } = await supabase.rpc(
+          "get_route_geojson",
+          { route_id: routeId }
+        );
+
+        if (error || !routeData || routeData.length === 0) return;
+
+        const rawRoute = routeData[0];
+        if (rawRoute?.geojson?.coordinates) {
+          const coords: LatLng[] = rawRoute.geojson.coordinates.map(
+            ([lng, lat]: [number, number]) => ({
+              latitude: lat,
+              longitude: lng,
+            })
+          );
+          setRouteCoordinates(coords);
+        }
+      } catch (e) {
+        // Silent fail - route coordinates are optional for fare calc
+      }
+    };
+
+    fetchRouteCoordinates();
+  }, [currentTrip?.buses?.routes?.id, assignedBus?.routes?.id]);
+
+  // Calculate guest fare when drop-off location is selected
+  useEffect(() => {
+    if (guestDropOffLocation && busLocation) {
+      const distance = getDistanceKm(busLocation, guestDropOffLocation);
+      setGuestTripDistance(distance);
+      setGuestFare(calculateFare(distance));
+    } else {
+      setGuestTripDistance(0);
+      setGuestFare(0);
+    }
+  }, [guestDropOffLocation, busLocation]);
 
   // Refresh only the passengers list (lighter refresh)
   const refreshPassengersList = useCallback(async () => {
@@ -1396,18 +1448,17 @@ export function ConductorScreen() {
         //console.log(`Guest passenger count updated to: ${newGuestCount}`);
       } else {
         // Create new guest passenger record in database
-        // Use null for passenger_id since guests don't have user accounts
-        // Use dummy coordinates (0,0) for guests since they don't have pickup/destination
+        // Use busLocation for pickup and guestDropOffLocation for destination
         const { data: insertedGuest, error: insertError } = await supabase
           .from("trip_passengers")
           .insert({
             trip_id: currentTrip.id,
             bus_id: currentTrip.buses.id,
             passenger_id: null, // null for guest passengers (no user account)
-            pickup_lat: 0, // Dummy coordinate for guest passengers
-            pickup_lng: 0, // Dummy coordinate for guest passengers
-            dest_lat: 0, // Dummy coordinate for guest passengers
-            dest_lng: 0, // Dummy coordinate for guest passengers
+            pickup_lat: busLocation?.latitude || 0,
+            pickup_lng: busLocation?.longitude || 0,
+            dest_lat: guestDropOffLocation?.latitude || 0,
+            dest_lng: guestDropOffLocation?.longitude || 0,
             status: "boarded",
             passenger_count: guestCount,
             boarded_at: new Date().toISOString(),
@@ -1444,14 +1495,19 @@ export function ConductorScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       const guestText = guestCount > 1 ? `${guestCount} guests` : "1 guest";
+      const fareText = guestFare > 0 ? ` (Fare: ${formatFare(guestFare)})` : "";
       showAlert(
         "Guests Added! ✅",
-        `${guestText} added successfully.`,
+        `${guestText} added successfully.${fareText}`,
         "success"
       );
 
       setShowGuestModal(false);
       setGuestCount(1);
+      // Reset drop-off location and fare state
+      setGuestDropOffLocation(null);
+      setGuestFare(0);
+      setGuestTripDistance(0);
     } catch (error) {
       //console.error("Error adding guest passengers:", error);
       showAlert(
@@ -2909,6 +2965,47 @@ export function ConductorScreen() {
                   />
                 </View>
               </View>
+
+              {/* Drop-off Location Section */}
+              <View style={styles.guestDropOffSection}>
+                <View style={styles.guestDropOffHeader}>
+                  <Ionicons name="location" size={18} color="#059669" />
+                  <Text style={styles.guestDropOffLabel}>Drop-off Location</Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.guestDropOffButton,
+                    guestDropOffLocation && styles.guestDropOffButtonSelected
+                  ]}
+                  onPress={() => setShowDropOffPicker(true)}
+                >
+                  {guestDropOffLocation ? (
+                    <View style={styles.guestDropOffSelectedContent}>
+                      <Ionicons name="checkmark-circle" size={20} color="#059669" />
+                      <Text style={styles.guestDropOffSelectedText}>Drop-off selected</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.guestDropOffSelectContent}>
+                      <Ionicons name="map-outline" size={20} color="#6B7280" />
+                      <Text style={styles.guestDropOffSelectText}>Tap to select on map</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+
+                {/* Fare Display */}
+                {guestFare > 0 && (
+                  <View style={styles.guestFareDisplay}>
+                    <View style={styles.guestFareRow}>
+                      <Ionicons name="cash-outline" size={20} color="#059669" />
+                      <Text style={styles.guestFareLabel}>Estimated Fare:</Text>
+                      <Text style={styles.guestFareAmount}>{formatFare(guestFare)}</Text>
+                    </View>
+                    <Text style={styles.guestFareDistance}>
+                      ({formatFareDistance(guestTripDistance)} from current location)
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
 
             {/* Modal Actions */}
@@ -2919,6 +3016,9 @@ export function ConductorScreen() {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setShowGuestModal(false);
                   setGuestCount(1);
+                  setGuestDropOffLocation(null);
+                  setGuestFare(0);
+                  setGuestTripDistance(0);
                 }}
               >
                 <Text style={styles.guestCancelText}>Cancel</Text>
@@ -2943,6 +3043,85 @@ export function ConductorScreen() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Guest Drop-off Location Picker Modal */}
+      <Modal
+        visible={showDropOffPicker}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setShowDropOffPicker(false)}
+      >
+        <SafeAreaView style={styles.dropOffPickerContainer}>
+          <View style={styles.dropOffPickerHeader}>
+            <TouchableOpacity
+              style={styles.dropOffPickerCloseBtn}
+              onPress={() => setShowDropOffPicker(false)}
+            >
+              <Ionicons name="close" size={24} color="#1F2937" />
+            </TouchableOpacity>
+            <Text style={styles.dropOffPickerTitle}>Select Drop-off Location</Text>
+            <TouchableOpacity
+              style={[
+                styles.dropOffPickerConfirmBtn,
+                !guestDropOffLocation && styles.dropOffPickerConfirmBtnDisabled
+              ]}
+              onPress={() => {
+                if (guestDropOffLocation) {
+                  setShowDropOffPicker(false);
+                }
+              }}
+              disabled={!guestDropOffLocation}
+            >
+              <Text style={[
+                styles.dropOffPickerConfirmText,
+                !guestDropOffLocation && styles.dropOffPickerConfirmTextDisabled
+              ]}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.dropOffPickerHint}>
+            Tap on the route to select where the guest will drop off
+          </Text>
+          <MapView
+            style={styles.dropOffPickerMap}
+            initialRegion={mapRegion}
+            onPress={(e) => {
+              setGuestDropOffLocation(e.nativeEvent.coordinate);
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            }}
+          >
+            {/* Route polyline */}
+            {routeCoordinates.length > 0 && (
+              <Polyline
+                coordinates={routeCoordinates}
+                strokeColor="#0891B2"
+                strokeWidth={4}
+              />
+            )}
+            {/* Bus location marker */}
+            {busLocation && (
+              <Marker
+                coordinate={busLocation}
+                title="Bus Location"
+              >
+                <View style={styles.busMarkerCircle}>
+                  <Ionicons name="bus" size={14} color="#fff" />
+                </View>
+              </Marker>
+            )}
+            {/* Selected drop-off marker */}
+            {guestDropOffLocation && (
+              <Marker
+                coordinate={guestDropOffLocation}
+                title="Drop-off"
+              >
+                <View style={styles.dropOffMarker}>
+                  <Ionicons name="location" size={24} color="#059669" />
+                </View>
+              </Marker>
+            )}
+          </MapView>
+        </SafeAreaView>
       </Modal>
 
       {/* Drop-Off Modal for partial group drop-offs */}
@@ -5558,6 +5737,144 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: "#FF3B30",
+  },
+
+  // Guest Drop-off Location Styles
+  guestDropOffSection: {
+    marginTop: 16,
+    padding: 14,
+    backgroundColor: "#F0FDF4",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+  },
+  guestDropOffHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  guestDropOffLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#166534",
+  },
+  guestDropOffButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderStyle: "dashed",
+  },
+  guestDropOffButtonSelected: {
+    backgroundColor: "#DCFCE7",
+    borderColor: "#86EFAC",
+    borderStyle: "solid",
+  },
+  guestDropOffSelectedContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  guestDropOffSelectedText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#059669",
+  },
+  guestDropOffSelectContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  guestDropOffSelectText: {
+    fontSize: 14,
+    color: "#6B7280",
+  },
+  guestFareDisplay: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#BBF7D0",
+  },
+  guestFareRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  guestFareLabel: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#166534",
+  },
+  guestFareAmount: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#059669",
+    marginLeft: "auto",
+  },
+  guestFareDistance: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 4,
+    textAlign: "right",
+  },
+
+  // Drop-off Picker Modal Styles
+  dropOffPickerContainer: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
+  dropOffPickerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  dropOffPickerCloseBtn: {
+    padding: 8,
+  },
+  dropOffPickerTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#1F2937",
+  },
+  dropOffPickerConfirmBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: "#059669",
+    borderRadius: 8,
+  },
+  dropOffPickerConfirmBtnDisabled: {
+    backgroundColor: "#E5E7EB",
+  },
+  dropOffPickerConfirmText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  dropOffPickerConfirmTextDisabled: {
+    color: "#9CA3AF",
+  },
+  dropOffPickerHint: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: "center",
+    paddingVertical: 12,
+    backgroundColor: "#F9FAFB",
+  },
+  dropOffPickerMap: {
+    flex: 1,
+  },
+  dropOffMarker: {
+    alignItems: "center",
+    justifyContent: "center",
   },
 });
 

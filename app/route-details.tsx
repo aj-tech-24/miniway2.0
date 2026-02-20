@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useBusesOnRoute, useCurrentRoute, useRoute } from "@/contexts/RouteContext";
 import { useAppTheme } from "@/contexts/ThemeContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
+import { calculateTripFare, formatDistance, formatFare } from "@/lib/fareCalculation";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -335,6 +336,7 @@ export default function RouteDetailsScreen() {
   const [showWaitingModal, setShowWaitingModal] = useState(false);
   const [waitingPickupRequest, setWaitingPickupRequest] = useState<any>(null);
   const [passengerCount, setPassengerCount] = useState(1);
+  const [estimatedFare, setEstimatedFare] = useState<{ distanceKm: number; fare: number } | null>(null);
   const [showInstructions, setShowInstructions] = useState(true);
   const [showBusList, setShowBusList] = useState(true);
   const [showDropoffInstructions, setShowDropoffInstructions] = useState(true);
@@ -448,6 +450,17 @@ export default function RouteDetailsScreen() {
     latitude: parseFloat((params.destLat as string) || "0"),
     longitude: parseFloat((params.destLng as string) || "0"),
   };
+
+  // Calculate estimated fare when pickup location is set
+  useEffect(() => {
+    if (pickupLocation && destCoords.latitude !== 0 && destCoords.longitude !== 0 && routeCoordinates.length > 0) {
+      const result = calculateTripFare(pickupLocation, destCoords, routeCoordinates);
+      setEstimatedFare(result);
+    } else {
+      setEstimatedFare(null);
+    }
+  }, [pickupLocation, destCoords.latitude, destCoords.longitude, routeCoordinates]);
+
 
   // --- Data Fetching ---
   useEffect(() => {
@@ -2235,6 +2248,25 @@ export default function RouteDetailsScreen() {
                         </Text>
                       </View>
                     )}
+
+                    {/* Estimated Fare Display */}
+                    {estimatedFare && estimatedFare.fare > 0 && (
+                      <View style={styles.fareDisplayContainer}>
+                        <View style={styles.fareDisplayHeader}>
+                          <Ionicons name="cash-outline" size={20} color="#10B981" />
+                          <Text style={styles.fareDisplayLabel}>Estimated Fare</Text>
+                        </View>
+                        <View style={styles.fareDisplayContent}>
+                          <Text style={styles.fareDisplayAmount}>{formatFare(estimatedFare.fare)}</Text>
+                          <Text style={styles.fareDisplayDistance}>
+                            ({formatDistance(estimatedFare.distanceKm)} trip)
+                          </Text>
+                        </View>
+                        <Text style={styles.fareDisplayNote}>
+                          Base fare: ₱15.00 for first 4 km + ₱1.80/km after
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 )}
 
@@ -3619,5 +3651,48 @@ const styles = StyleSheet.create({
     height: 80,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+
+  // Fare Display Styles
+  fareDisplayContainer: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  fareDisplayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  fareDisplayLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#166534',
+  },
+  fareDisplayContent: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    marginBottom: 4,
+  },
+  fareDisplayAmount: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  fareDisplayDistance: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  fareDisplayNote: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    fontStyle: 'italic',
+    marginTop: 4,
   },
 });
